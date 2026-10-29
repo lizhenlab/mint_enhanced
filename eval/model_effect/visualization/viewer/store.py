@@ -193,10 +193,10 @@ class Store:
                  ckpt_path: str | None = None,
                  default_fps: float = 30.0, default_hand_frame: str = "camera",
                  init_config: str | None = None, model: str = "lingbotmap",
-                 inference_devices="auto", inference_compile_mode=None,
+                 inference_devices="shared", inference_compile_mode=None,
                  inference_fp8_mode=None, batch_workers: int = 2):
         self.model = model                            # 经 inference.registry 取对应模型引擎（后台懒加载时用）
-        self.inference_devices = inference_devices    # auto=加载模型时使用所有可见 GPU
+        self.inference_devices = inference_devices    # idle=持续监测并按需使用空闲卡
         self.inference_compile_mode = inference_compile_mode
         self.inference_fp8_mode = inference_fp8_mode
         self.batch_workers = max(1, int(batch_workers))
@@ -331,6 +331,10 @@ class Store:
             status["log"] = list(self._batch.get("log", ())[-80:])
         total = int(status.get("total") or 0)
         status["progress"] = (float(status.get("done") or 0) / total) if total else 0.0
+        scheduler = getattr(self.predictor, "gpu_scheduler_status", {})
+        if scheduler.get("policy") in {"idle", "shared"}:
+            status["gpu_scheduler"] = scheduler
+            status["devices"] = scheduler["eligible_devices"]
         return status
 
     def _batch_set(self, **values) -> None:
@@ -1670,6 +1674,8 @@ class Store:
                         new_pred = base
                 else:
                     from inference.registry import get_predictor
+                    if base is not None and hasattr(base, "close"):
+                        base.close()
                     print(f"[model] 后台加载模型：model={self.model} cfg={boot_cfg} ckpt={ckpt}", flush=True)
                     new_pred = get_predictor(
                         self.model, config=boot_cfg, ckpt=ckpt, window=window,
@@ -1701,6 +1707,8 @@ class Store:
                     return
                 stale = new_pred if new_pred is not base else None   # reload 就地改了 base 无需丢
             if stale is not None:                     # rebuild 出的模型已过时：释放显存
+                if hasattr(stale, "close"):
+                    stale.close()
                 del stale
                 try:
                     import torch

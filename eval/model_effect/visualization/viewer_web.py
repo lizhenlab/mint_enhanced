@@ -70,11 +70,11 @@ def main() -> int:
                    help="分窗前向窗口大小（帧）；默认自动=该 ckpt 训练 clip_len，保证与训练前向一致")
     p.add_argument(
         "--full-max-frames", type=int, default=None,
-        help="exact full 安全上限/最大分窗窗长；须为训练窗整数倍。默认按所选 GPU 最小显存取 1/2/3 倍",
+        help="exact full 安全上限/最大分窗窗长；须为训练窗整数倍。动态调度默认训练窗长，固定设备按最小显存选取",
     )
     p.add_argument(
-        "--devices", default="auto",
-        help="交互推理设备：auto=加载模型时使用全部可见 GPU（默认）；也可指定 0,1 或 cpu",
+        "--devices", default="shared",
+        help="shared=保守共享最多 8 张 GPU（默认）；idle=仅空闲卡；auto=固定加载所有可见 GPU；也可指定 0,1 或 cpu",
     )
     p.add_argument(
         "--compile-mode",
@@ -103,6 +103,8 @@ def main() -> int:
     p.add_argument("--no-open", dest="open_browser", action="store_false",
                    help="启动后不自动弹出浏览器（默认自动打开）")
     args = p.parse_args()
+    if args.devices in {'idle', 'shared'}:
+        os.environ.setdefault('MINT_MANO_DEVICE', 'cpu')
 
     # config 模板优先级：命令行 --config > 该模型适配器默认（default_config）。二者皆无（如 vggt 占位）
     # 则为 None，后续 ckpts 调用安全降级，模型真正构建时由适配器抛清晰的「需 --config」错误。

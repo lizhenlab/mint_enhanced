@@ -639,9 +639,14 @@ def create_app(store) -> Flask:
         # 前端在按钮旁显示「未加载/加载中/就绪」（默认不加载；须手动点[加载模型]才载入；加载中禁止推理）。
         return jsonify(ready=store.predictor_ready(), loading=store.loader_active(),
                        devices=store.predictor_devices(),
+                       gpu_scheduler=getattr(getattr(store, "predictor", None), "gpu_scheduler_status", {"policy": "unloaded"}),
                        full_max_frames=getattr(
                            store, "predictor_full_max_frames", lambda: None
                        )())
+
+    @app.get("/api/gpu/status")
+    def api_gpu_status():
+        return jsonify(getattr(getattr(store, "predictor", None), "gpu_scheduler_status", {"policy": "unloaded"}))
 
     @app.post("/api/model/load")        # 「加载模型」：显式启动后台加载当前选中 ckpt（幂等、立即返回）
     def api_model_load():

@@ -18,5 +18,8 @@
     "local_repaired_wheel_sha256": "45e5fe8dbcda8da111424fa6357f0f7dc20862e8e52e6f9030f839c3c581ceae",
     "repair": "Corrected WHEEL compatibility tag and regenerated RECORD; executable payload unchanged.",
     "wheel_included": false
-  }
+  },
+  "runtime_enhancements": [
+    "Dynamic idle/shared scheduling of up to 8 visible CUDA GPUs with cooperative leases, memory budgets and load-aware yielding"
+  ]
 }

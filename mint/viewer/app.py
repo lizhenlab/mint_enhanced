@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 import time
 import uuid
@@ -89,8 +90,8 @@ class ViewerService:
         devices: str,
         max_frames: int,
         target_fps: float,
-        compile_mode: str = "auto",
-        fp8_mode: str = "auto",
+        compile_mode: str = "off",
+        fp8_mode: str = "off",
         window_batch_size: int | None = None,
         warmup_passes: int = 2,
     ) -> None:
@@ -372,13 +373,13 @@ def viewer_main(argv: list[str] | None = None) -> int:
         help="MINT checkpoint file or directory (default: checkpoints/model.safetensors)",
     )
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
-    parser.add_argument("--devices", default="auto")
+    parser.add_argument("--devices", default="shared")
     parser.add_argument(
-        "--compile-mode", choices=("off", *COMPILE_MODES), default="auto",
+        "--compile-mode", choices=("off", *COMPILE_MODES), default="off",
         help="Acceleration defaults to reduce-overhead on CUDA; use off to disable",
     )
     parser.add_argument(
-        "--fp8-mode", choices=("off", *FP8_MODES), default="auto",
+        "--fp8-mode", choices=("off", *FP8_MODES), default="off",
         help="Auto enables dynamic FP8 on CUDA capability >= 8.9",
     )
     parser.add_argument(
@@ -395,6 +396,8 @@ def viewer_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--open", action="store_true", dest="open_browser")
     args = parser.parse_args(argv)
+    if args.devices in {'idle', 'shared'}:
+        os.environ.setdefault('MINT_MANO_DEVICE', 'cpu')
 
     checkpoint = Path(args.checkpoint).expanduser()
     if not checkpoint.exists():

@@ -3,14 +3,14 @@ artifacts: artifacts/viewer
 model:
   config: configs/training/mint_step2.yaml
   checkpoint: checkpoints/model.safetensors
-  devices: auto
+  devices: shared
 inference:
   max_frames: 160
   target_fps: 15.0
   camera_mode: chunked
   hand_mode: smooth
-  compile_mode: auto
-  fp8_mode: auto
+  compile_mode: off
+  fp8_mode: off
   warmup_passes: 2
   window_batch_size: null
 viewer:

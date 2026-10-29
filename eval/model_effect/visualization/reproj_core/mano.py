@@ -10,6 +10,7 @@ J0_canon 抵消），使 eval 验证不依赖 tools/viewer。GT(lerobot 预算�
 """
 from __future__ import annotations
 
+import os
 import pickle
 import threading
 import warnings
@@ -102,7 +103,8 @@ def _get_device():
         import torch
         with _CACHE_LOCK:
             if _DEVICE is None:
-                _DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                _DEVICE = torch.device(os.environ.get('MINT_MANO_DEVICE') or
+                                       ('cuda' if torch.cuda.is_available() else 'cpu'))
                 print(f'[mano] MANO 前向设备: {_DEVICE}')
     return _DEVICE
 

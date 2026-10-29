@@ -11,6 +11,8 @@ tests/
 tests/*
 !tests/__init__.py
 !tests/test_inference_acceleration.py
+!tests/test_gpu_scheduler.py
+!tests/test_idle_engine.py
 !eval/model_effect/benchmark/tests/
 !eval/model_effect/benchmark/tests/**
 !eval/model_effect/benchmark/dist/aliyun/tests/

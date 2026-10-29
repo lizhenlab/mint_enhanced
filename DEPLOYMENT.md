@@ -2,8 +2,9 @@
 
 本仓库基于 [wuji-technology/wuji-ego-mint](https://github.com/wuji-technology/wuji-ego-mint) 的
 `1bd21e4edd6d5d2d59789ce64ee5450de24a7c2b`，保留上游 Git 历史、MIT 许可证和第三方声明。
-2026-10-29 核对时，已部署服务器的全部 3315 个受 Git 管理文件与该提交一致。
-本次整理补入已有启动脚本、依赖版本记录和操作说明；核心推理、训练和 Viewer 代码保持该官方版本。
+2026-10-29 最初导入时，已部署服务器的全部 3315 个受 Git 管理文件与该提交一致。
+本仓库保留已有启动脚本、依赖版本记录和操作说明，并在推理运行时增加了[动态 GPU 共享调度](docs/gpu-scheduling.md)。
+模型结构、权重和窗口拼接逻辑沿用该官方版本。
 
 ## 已有服务器环境运行
 
@@ -14,7 +15,7 @@
 
 ```bash
 ./run_mint.sh viewer --host 127.0.0.1 --port 8011 \
-  --devices 0 --no-open --max-frames 450
+  --devices shared --no-open --max-frames 450 --full-max-frames 32
 ```
 
 在页面中选择 `checkpoints/model.safetensors` 并点击加载模型，再在右侧浏览服务器视频、点击开始推理。
@@ -25,7 +26,7 @@
 ```bash
 ./run_mint.sh infer --input /absolute/path/short_video.mp4 \
   --checkpoint checkpoints/model.safetensors \
-  --output artifacts/my_video --devices cuda:0 --max-frames 64
+  --output artifacts/my_video --devices shared --max-frames 64
 ```
 
 Mac 建立 SSH 隧道并保持连接：
@@ -55,7 +56,7 @@ bash scripts/download_assets.sh
 
 ```bash
 python -m mint viewer --host 127.0.0.1 --port 8011 \
-  --devices 0 --no-open --max-frames 450
+  --devices shared --no-open --max-frames 450 --full-max-frames 32
 ```
 
 渲染手部网格和骨架还需要自行准备已授权的 MANO 文件：

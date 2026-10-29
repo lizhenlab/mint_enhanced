@@ -31,6 +31,7 @@ from .acceleration import (
     prepare_allocator_for_compile,
 )
 from .base import FullSequenceTooLong, InferenceCancelled  # noqa: F401
+from mint.inference.idle_engine import IdleGpuMixin
 
 # Viewer 通常在本模块之后才首次初始化 CUDA；可扩展 segment 能减少长序列不同尺寸临时张量造成的碎片。
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -239,8 +240,10 @@ def _clip_len_from_ckpt(ckpt: str) -> int | None:
         return None
 
 
-class StudentEngine:
+class StudentEngine(IdleGpuMixin):
     """加载训练 ckpt，对帧序列分窗前向，产出与 GT 同 schema 的双手 + 相机预测。"""
+
+    _inference_cancelled = InferenceCancelled
 
     def __init__(self, config_path: str, ckpt: str | None = None,
                  device: str | None = None, window: int | None = None,
@@ -296,8 +299,13 @@ class StudentEngine:
         elif mcfg.get("pretrained"):
             mcfg["pretrained"] = _abs(mcfg["pretrained"])
 
-        requested_devices = _resolve_devices(device=device, devices=devices)
+        idle_requested = device is None and devices in {"idle", "shared"}
+        requested_devices = _resolve_devices(
+            device=device, devices="auto" if idle_requested else devices
+        )
         resolved_devices = [torch.device(item) for item in requested_devices]
+        if idle_requested and any(item.type != "cuda" for item in resolved_devices):
+            raise RuntimeError("Idle scheduling requires CUDA; use --devices cpu for CPU inference")
         self.device = resolved_devices[0]
         cuda_memories = [
             torch.cuda.get_device_properties(item).total_memory
@@ -306,7 +314,8 @@ class StudentEngine:
         ]
         limiting_memory = min(cuda_memories) if cuda_memories else None
         if full_max_frames is None:
-            self.full_max_frames = _auto_full_max_frames(self.window, limiting_memory)
+            self.full_max_frames = (self.window if idle_requested else
+                                    _auto_full_max_frames(self.window, limiting_memory))
             full_limit_source = "按所选 GPU 最小显存自动"
         else:
             self.full_max_frames = int(full_max_frames)
@@ -333,6 +342,9 @@ class StudentEngine:
                 print("[predictor] ckpt 不含 hand_presence_head 权重，已禁用随机置信度输出")
             print(f"[predictor] 载入 ckpt {os.path.basename(wf)}: "
                   f"{len(sd)} tensors | missing={len(missing)} unexpected={len(unexpected)}")
+        if idle_requested:
+            self._initialize_idle_scheduler(model.eval(), resolved_devices, policy=devices)
+            return
         self.model = model.to(self.device).eval()
         self.models = [self.model]
         self.devices = [self.device]
@@ -428,15 +440,22 @@ class StudentEngine:
 
     @property
     def parallel_device_count(self) -> int:
+        scheduler = getattr(self, "_gpu_scheduler", None)
+        if scheduler is not None:
+            return len(scheduler.devices)
         return len(getattr(self, "models", [self.model]))
 
     @property
     def parallel_device_names(self) -> list[str]:
+        scheduler = getattr(self, "_gpu_scheduler", None)
+        if scheduler is not None:
+            return scheduler.status()["eligible_devices"]
         return [str(item) for item in getattr(self, "devices", [self.device])]
 
     @property
     def supports_weight_reload(self) -> bool:
-        return self.fp8_mode is None and self.compile_mode is None
+        return (getattr(self, "_gpu_scheduler", None) is None
+                and self.fp8_mode is None and self.compile_mode is None)
 
     @property
     def acceleration_metadata(self) -> dict:
@@ -531,6 +550,8 @@ class StudentEngine:
         disable_persistent_kv_cache: bool = False,
     ) -> tuple[dict, float]:
         """Run equal-length windows across persistent replicas and restore batch order."""
+        if getattr(self, "_gpu_scheduler", None) is not None:
+            return self._idle_forward_window_batch(x, bounds, disable_persistent_kv_cache)
         import time
         import torch
 
@@ -632,7 +653,7 @@ class StudentEngine:
                 ordered[key] = np.stack(values)
         return ordered, elapsed
 
-    def predict(self, frames_uint8: np.ndarray, on_step=None, cancel_check=None,
+    def _predict(self, frames_uint8: np.ndarray, on_step=None, cancel_check=None,
                 cam_mode: str = "chunked", window_batch_size: int | None = None,
                 hand_mode: str = DEFAULT_HAND_WINDOW_MODE,
                 preprocessed: bool = False) -> dict:

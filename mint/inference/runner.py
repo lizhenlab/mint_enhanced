@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -23,7 +24,7 @@ def inference_main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--config", default="configs/training/mint_step2.yaml"
     )
-    parser.add_argument("--devices", default="auto", help="auto, cpu, a CUDA device, or a comma-separated list")
+    parser.add_argument("--devices", default="shared", help="shared: conservatively share up to 8 GPUs; idle: idle GPUs only; auto: fixed replicas on all visible GPUs; or cpu / 0,1")
     parser.add_argument("--max-frames", type=int, default=160)
     parser.add_argument("--target-fps", type=float, default=15.0)
     parser.add_argument("--window", type=int, default=None)
@@ -48,6 +49,8 @@ def inference_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--render-mode", choices=("mesh", "skeleton", "mesh_skel"), default="mesh_skel")
     parser.add_argument("--no-render", action="store_true")
     args = parser.parse_args(argv)
+    if args.devices in {'idle', 'shared'}:
+        os.environ.setdefault('MINT_MANO_DEVICE', 'cpu')
 
     source = Path(args.input).expanduser().resolve()
     output = Path(args.output).expanduser().resolve()
@@ -79,6 +82,7 @@ def inference_main(argv: list[str] | None = None) -> int:
         window_batch_size=args.window_batch_size,
         hand_mode=args.hand_mode,
     )
+    engine.close()
     inference_seconds = time.perf_counter() - inference_started
     elapsed = time.perf_counter() - started
 

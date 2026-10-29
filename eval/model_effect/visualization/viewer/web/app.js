@@ -189,22 +189,45 @@ function updateLoadBtn(){
   document.querySelectorAll('#handModeSeg button').forEach(el=>{ el.disabled=state.loading; });
   if(typeof renderBatch === 'function') renderBatch();
 }
-// 轮询模型状态：区分 未加载/加载中/就绪 更新按钮态与提示。就绪即停（点加载 / 换 ckpt 会重启轮询）。
+let modelReadyTimer = null;
+let modelReadyPolling = false;
+// 动态调度模式在模型就绪后仍持续刷新 GPU 占用和队列状态。
 async function pollModelReady(){
-  try{ const {ready, loading, devices, full_max_frames} = await getJSON('/api/model_ready');
+  if(modelReadyPolling) return;
+  modelReadyPolling = true;
+  clearTimeout(modelReadyTimer);
+  let delay = 1500;
+  try{ const {ready, loading, devices, full_max_frames, gpu_scheduler} = await getJSON('/api/model_ready');
     state.modelDevices = Array.isArray(devices) ? devices : [];
+    state.gpuScheduler = gpu_scheduler;
+    const gpuStatus = $('#gpuSchedulerStatus');
+    if(gpuStatus){
+      const dynamic = gpu_scheduler && ['idle','shared'].includes(gpu_scheduler.policy);
+      gpuStatus.style.display = dynamic ? '' : 'none';
+      if(dynamic){
+        const available = (gpu_scheduler.eligible_devices || []).length;
+        const running = (gpu_scheduler.running_devices || []).length;
+        gpuStatus.textContent = `${gpu_scheduler.policy === 'shared' ? 'GPU 共享' : 'GPU 空闲'} ${available}/${gpu_scheduler.max_workers} · 工作 ${running} · 排队 ${gpu_scheduler.queued}`
+          + (!available ? ' · 等待显存/负载余量' : '');
+        gpuStatus.title = gpu_scheduler.probe_error || (gpu_scheduler.gpus || []).map(g=>
+          `${g.device}: ${g.reason || '可用'}${g.foreign_pids.length ? ' PID '+g.foreign_pids.join(',') : ''}`).join('\n');
+      }
+    }
     syncFullLimit(full_max_frames);
     state.modelReady = !!ready; state.modelLoading = !ready && !!loading; updateLoadBtn();
     if(ready){ if(!state.loading){
       const gpu = state.modelDevices.length ? ` · ${state.modelDevices.length}卡 ${state.modelDevices.join(',')}` : '';
       setStep('✓ 模型就绪'+gpu,'ok'); hideProg();
-    } return; }
-    if(!state.loading){
+    } if(gpu_scheduler && ['idle','shared'].includes(gpu_scheduler.policy)) delay = 5000;
+      else delay = null;
+    }
+    else if(!state.loading){
       if(loading){ setStep('⏳ 模型加载中…','warn'); setProg({stage:'model'}); }
       else { setStep('○ 模型未加载（点 [⬇ 加载模型] 载入）',''); hideProg(); }
     }
   }catch(e){}
-  setTimeout(pollModelReady, 1500);
+  finally { modelReadyPolling = false; }
+  if(delay !== null) modelReadyTimer = setTimeout(pollModelReady, delay);
 }
 
 const _rel = (base, name) => base ? base + '/' + name : name;
@@ -2899,7 +2922,8 @@ function renderBatch(){
   document.querySelectorAll('#batchWrap .batch-form input, #batchWrap .batch-form select, #batchUseCurrent, #batchBrowseInput')
     .forEach(el=>{ el.disabled=running; });
   const dirPicker=$('#batchDirPicker'); if(dirPicker && running) dirPicker.hidden=true;
-  const activeDevices=(b.devices&&b.devices.length)?b.devices:state.modelDevices;
+  const activeDevices=state.gpuScheduler && ['idle','shared'].includes(state.gpuScheduler.policy)
+    ? state.modelDevices : ((b.devices&&b.devices.length)?b.devices:state.modelDevices);
   if(devices) devices.textContent=activeDevices&&activeDevices.length
     ? `设备 ${activeDevices.length} 张 · ${activeDevices.join(', ')} · 1 路推理 + ${b.workers||2} 路渲染`
     : '启动后自动加载所选模型';

@@ -1,6 +1,8 @@
 > **mint_enhanced** — lizhenlab 维护的 MINT 部署副本。核心推理、训练、数据流水线和 Viewer 源码基于 [官方 MINT](https://github.com/wuji-technology/wuji-ego-mint) 的 `1bd21e4`，保留上游历史及许可证。
 >
 > 本仓库补充现有 `run_mint.sh`、服务器依赖快照及部署记录，并支持[最多 8 张 GPU 动态共享调度](docs/gpu-scheduling.md)；使用入口、Mac 访问方式和[完整长视频处理](docs/long-video.md)见 [DEPLOYMENT.md](DEPLOYMENT.md)，可靠性、断点恢复与缓存预算见[运行说明](docs/runtime-reliability.md)。模型权重、MANO、用户原始视频和运行缓存需在本地准备。
+>
+> 新增 [MINT / HaWoR / ACE 统一比较平台](docs/comparison-platform.md)：独立原生环境、同输入时间轴、2D/3D 与轨迹对照、显式结果导入、相机来源组合、持久任务恢复和同步导出；页面入口 `/compare`。
 
 <div align="center">
 

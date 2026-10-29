@@ -66,6 +66,8 @@ def _default_input_path(root: Path) -> Path:
 
 def create_app(store) -> Flask:
     app = Flask(__name__)
+    from mint.comparison.api import comparison_blueprint
+    app.register_blueprint(comparison_blueprint())
     dataset_analysis = DatasetAnalysisManager(
         default_root=Path(getattr(store, "root", None) or Path.cwd()),
     )
@@ -98,7 +100,7 @@ def create_app(store) -> Flask:
     @app.after_request
     def _no_cache(resp):
         """Only versioned artifacts and content-addressed exports may be cached."""
-        if request.endpoint in {"artifact_file", "export_file"} \
+        if request.endpoint in {"artifact_file", "export_file", "comparison.input_video"} \
                 and resp.status_code in (200, 206):
             # Result IDs include input, loaded model, parameters and renderer version.
             resp.headers["Cache-Control"] = "private, max-age=3600"

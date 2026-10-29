@@ -33,7 +33,9 @@ def main():
                     'pip==26.2.1', 'setuptools==80.9.0', 'wheel==0.45.1'], check=True)
     core_site = subprocess.check_output([str(core), '-c', 'import sysconfig; print(sysconfig.get_path("purelib"))'], text=True).strip()
     feature_site = Path(subprocess.check_output([str(python), '-c', 'import sysconfig; print(sysconfig.get_path("purelib"))'], text=True).strip())
-    (feature_site / 'mint-inference-foundation.pth').write_text(core_site+'\n')
+    # cmeel/Pinocchio and similar binary packages use their own .pth files.
+    # addsitedir activates those paths as well as the shared numerical packages.
+    (feature_site / 'mint-inference-foundation.pth').write_text('import site; site.addsitedir('+repr(core_site)+')\n')
     requirements = (args.source_root or root) / 'environments'
     plan_path = root / '.deployment/feature-install-plan.json'
     plan_path.parent.mkdir(exist_ok=True)

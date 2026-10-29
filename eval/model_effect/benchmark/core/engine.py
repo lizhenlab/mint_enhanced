@@ -232,7 +232,8 @@ def run_benchmark(predictor, *, heads="all", datasets="all", data_root=None,
         selection={"seq_start": range_start, "seq_end": range_end,
                    "max_frames": max_frames,
                    "dataset_selection": dataset_selection,
-                   "hand_mode": str(hand_mode or "hard")},
+                   "hand_mode": str(hand_mode or "hard"),
+                   "resource_policy": getattr(predictor, "resource_policy", "dedicated")},
     )
 
     def _add(r):

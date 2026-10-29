@@ -58,6 +58,14 @@ def parse_hand_smoothing_mode(mode: str) -> tuple[str, dict | None]:
     return "smooth", normalized
 
 
+def canonical_hand_mode(mode: str) -> str:
+    """Give equivalent UKF settings one identity across CLI, API and recovery."""
+    base, params = parse_hand_smoothing_mode(mode)
+    if params is None or params == DEFAULT_UKF_PARAMS:
+        return base
+    return encode_hand_smoothing_mode(params)
+
+
 def _rot6d_to_mat(values: np.ndarray) -> np.ndarray:
     """Convert row-major 6D rotations to matrices with a stable fallback."""
     values = np.asarray(values, dtype=np.float64)

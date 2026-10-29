@@ -1,0 +1,2 @@
+# Keep data-profile OpenCV aligned with the headless inference build.
+opencv-python==4.11.0.86

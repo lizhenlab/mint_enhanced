@@ -50,12 +50,14 @@ dev = [
   "build==1.3.0",
   "pre-commit==4.5.1",
   "ruff==0.15.5",
+  "pytest==8.4.2",
+  "matplotlib==3.10.8",
 ]
 
 [project.urls]
-Documentation = "https://github.com/1847540790/wuji-ego-mint#readme"
-Issues = "https://github.com/1847540790/wuji-ego-mint/issues"
-Source = "https://github.com/1847540790/wuji-ego-mint"
+Documentation = "https://github.com/lizhenlab/mint_enhanced#readme"
+Issues = "https://github.com/lizhenlab/mint_enhanced/issues"
+Source = "https://github.com/lizhenlab/mint_enhanced"
 
 [tool.setuptools.packages.find]
 include = ["mint*"]

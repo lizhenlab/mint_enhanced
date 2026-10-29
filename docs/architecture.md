@@ -65,5 +65,6 @@ evaluation implementation.
 1. Portable paths are resolved from the repository, never a developer home.
 2. Credentials arrive through the runtime environment, never tracked files.
 3. Dataset and checkpoint licenses remain explicit installation boundaries.
-4. Long-running work is resumable or bounded by an explicit frame limit.
+4. Long videos preserve all source frames by default; decoding and window preprocessing are bounded, with persistent window checkpoints and cache budgets.
 5. Prediction visualization is independent of ground-truth data.
+6. CLI, Viewer and Benchmark share one inference core; model generations and source fingerprints isolate results.

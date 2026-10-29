@@ -11,12 +11,49 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+from mint.runtime import digest, file_identity
 
 from .const import VIDEO_EXTS
 
 
 ALLOWED_TEMPLATE_FIELDS = {"stem", "name", "ext", "parent", "index"}
 DEFAULT_NAME_TEMPLATE = "{stem}_pred"
+
+
+def batch_signature(source, settings):
+    return digest({'source': file_identity(source), 'settings': settings})
+
+
+def existing_result(item, signature):
+    """Return complete/recoverable/new/conflict; never silently skip a partial or stale pair."""
+    video, prediction = item['output_mp4'], item['output_npz']
+    if not video.exists() and not prediction.exists():
+        return 'new'
+    try:
+        with np.load(prediction, allow_pickle=False) as values:
+            if str(values['batch_signature']) != signature:
+                return 'conflict'
+            count = int(values['frame_count'])
+            if values['pose_enc'].shape != (count, 9):
+                return 'recoverable'
+            if 'hand' in values and values['hand'].shape != (count, 218):
+                return 'recoverable'
+            if values['source_frame_indices'].shape != (count,):
+                return 'recoverable'
+            for key in values.files:
+                value = values[key]
+                if np.issubdtype(value.dtype, np.number) and not np.isfinite(value).all():
+                    return 'recoverable'
+    except (OSError, ValueError, KeyError, EOFError):
+        return 'conflict'
+    if not video.exists():
+        return 'recoverable'
+    try:
+        from mint.visualization.encoding import validate_video
+        validate_video(video, count)
+        return 'complete'
+    except (OSError, ValueError, RuntimeError):
+        return 'recoverable'
 
 
 def resolve_batch_roots(input_dir: str, output_dir: str) -> tuple[Path, Path]:

@@ -115,11 +115,21 @@ const U = p => API_BASE + String(p).replace(/^\//, '');
 async function getJSON(u){ const r = await fetch(U(u)); if(!r.ok) throw new Error(`${r.status} ${await r.text()}`); return r.json(); }
 
 let EP_TOTAL = 0, CKPT_TAG = '';
+let SMOOTHING_PRESETS = {};
+let UI_READY = false;
 const clampEp = v => EP_TOTAL ? Math.min(EP_TOTAL-1, Math.max(0, Math.floor(+v||0))) : 0;
 function effectiveHandMode(){
   if(state.handMode!=='smooth') return state.handMode;
   const fmt=value=>Number(value).toFixed(6).replace(/0+$/,'').replace(/\.$/,'');
   return `smooth@${fmt(state.ukf.q)},${fmt(state.ukf.r)},${fmt(state.ukf.beta)}`;
+}
+function syncHandModeUI(){
+  document.querySelectorAll('#handModeSeg [data-hand-mode]').forEach(button=>
+    button.classList.toggle('on',button.dataset.handMode===state.handMode));
+  const controls=$('#ukfControls'); if(controls) controls.hidden=state.handMode!=='smooth';
+  const preset=$('#smoothingPreset');
+  if(preset) preset.value=Object.keys(SMOOTHING_PRESETS).find(name=>
+    ['q','r','beta'].every(key=>Number(SMOOTHING_PRESETS[name][key])===Number(state.ukf[key])))||'custom';
 }
 function appendHandMode(params){ params.set('hand_mode',effectiveHandMode()); return params; }
 function syncFullLimit(value){
@@ -183,7 +193,7 @@ function updateLoadBtn(){
     btn.title = state.modelReady ? '显式运行当前输入和设置；其他选择操作不会自动推理'
                                  : '请先点 [⬇ 加载模型] 载入模型后再推理';
   }
-  for(const id of ['#camMode','#gtBetas','#predBetas','#predFov','#ukfQ','#ukfR','#ukfBeta','#videoView']){
+  for(const id of ['#camMode','#gtBetas','#predBetas','#predFov','#ukfQ','#ukfR','#ukfBeta','#videoView','#smoothingPreset']){
     const el=$(id); if(el) el.disabled=state.loading || (id==='#videoView' && !state.no_truth);
   }
   document.querySelectorAll('#handModeSeg button').forEach(el=>{ el.disabled=state.loading; });
@@ -489,12 +499,9 @@ async function init(){
   // 手部拼窗/后处理模式：hard、blend、blend 后生产 UKF+RTS 平滑分别独立缓存。
   state.handMode = meta.default_hand_mode || 'smooth';
   state.ukf = {...state.ukf,...(meta.default_ukf_params||{})};
+  SMOOTHING_PRESETS = meta.smoothing_presets || {};
   const handModeBtns = document.querySelectorAll('#handModeSeg [data-hand-mode]');
-  const ukfControls=$('#ukfControls');
-  const syncHandMode = ()=>{
-    handModeBtns.forEach(btn => btn.classList.toggle('on', btn.dataset.handMode === state.handMode));
-    if(ukfControls) ukfControls.hidden=state.handMode!=='smooth';
-  };
+  const syncHandMode = syncHandModeUI;
   syncHandMode();
   handModeBtns.forEach(btn => btn.onclick = ()=>{
     const next = btn.dataset.handMode;
@@ -510,11 +517,19 @@ async function init(){
       const parsed=Number(input.value);
       const value=Number.isFinite(parsed)?Math.max(minimum,Math.min(maximum,parsed)):state.ukf[key];
       state.ukf[key]=Math.round(value*1000)/1000; input.value=String(state.ukf[key]);
+      syncHandModeUI();
       console.log(`[btn] UKF ${key} → ${state.ukf[key]}`);
       queueInference(`UKF ${key} 已改为 ${state.ukf[key]}，点击 [▶ 开始推理] 应用`);
     };
   }
   // 手形/内参 每帧 vs 平均：只记录选项，不自动加载、不自动推理。
+  $('#smoothingPreset').onchange=()=>{
+    const params=SMOOTHING_PRESETS[$('#smoothingPreset').value];
+    if(!params) return;
+    state.ukf={...params};
+    for(const [key,value] of Object.entries(params)) $('#ukf'+key[0].toUpperCase()+key.slice(1)).value=value;
+    syncHandModeUI(); queueInference('平滑预设已更新，点击 [▶ 开始推理] 应用');
+  };
   const _pdef = meta.default_param_mode || 'per_frame';
   for(const [id, key] of [['#gtBetas','gtBetas'],['#predBetas','predBetas'],['#predFov','predFov']]){
     const sel = $(id); if(!sel) continue; state[key] = _pdef; sel.value = _pdef;
@@ -648,7 +663,7 @@ function onLoadRawClick(){
     .catch(e => { info.textContent = '定位失败：' + (e && e.message || e); });
 }
 
-async function loadEpisode(eid, {explicitInference=false}={}){
+async function loadEpisode(eid, {explicitInference=false, restoredHandMode=null}={}){
   if(!state.rawOnly && !explicitInference){
     queueInference('输入或设置已更新，点击 [▶ 开始推理] 才会运行模型');
     return;
@@ -675,10 +690,11 @@ async function loadEpisode(eid, {explicitInference=false}={}){
     // raw=1 → 仅 GT；否则带推理/手部模式和手形/内参参数，后端分别缓存。
     const pq = `&gt_betas=${state.gtBetas}&pred_betas=${state.predBetas}&pred_fov=${state.predFov}`;
     const wq = state.rawOnly ? '?raw=1' :
-      (`?cam_mode=${encodeURIComponent(state.camMode)}&hand_mode=${encodeURIComponent(effectiveHandMode())}${pq}`);
+      (`?cam_mode=${encodeURIComponent(state.camMode)}&hand_mode=${encodeURIComponent(restoredHandMode || effectiveHandMode())}${pq}`);
     const r = await fetch(U('/api/world/'+eid + wq));
     if(r.status === 409){ state.stopped = true; state.cancelling = false;
-      info.textContent = '已停止'; setStep('■ 已停止', 'err'); }
+      const issue=await r.json().catch(()=>({}));
+      info.textContent = issue.error || '已停止'; setStep(issue.code==='input_changed' ? '输入文件已更新，请重新开始' : '■ 已停止', 'err'); }
     else if(r.status === 413){
       const d = await r.json(); syncFullLimit(d.full_max_frames);
       const msg = d.error || '视频超过 exact full 安全上限';
@@ -716,6 +732,7 @@ async function loadEpisode(eid, {explicitInference=false}={}){
   }catch(e){ if(!state.stopped){ info.textContent = '加载失败：'+e.message; setStep('✗ 失败', 'err'); } }
   finally{ polling = false; try{ await pollDone; }catch(e){}   // 等轮询真正停下再恢复按钮
     state.loading = false; state.cancelling = false;
+    refreshTaskHistory();
     btn.classList.remove('stopping'); btn.textContent = '▶ 开始推理';
     if(curDatasetRel !== null && EP_TOTAL > 0) _epCtlDisabled(false);
     if(rawBtn) rawBtn.disabled = false; updateLoadBtn();      // 恢复按钮可用性（按模型就绪与否）
@@ -2866,6 +2883,7 @@ async function startBatch(){
   const body={input_dir:input, output_dir:output, name_template:name,
     checkpoint_run:checkpointRun, checkpoint_step:checkpointStep,
     mode:$('#batchMode').value, cam_mode:$('#batchCam').value, hand_mode:$('#batchHand').value,
+    video_view:$('#batchVideoView').value,
     pred_betas:$('#batchBetas').value, pred_fov:$('#batchFov').value,
     overwrite:$('#batchOverwrite').checked};
   console.log('[btn] 开始批量推理 model='+checkpointRun+'/'+checkpointStep+' input='+input+' output='+output+' name='+name);
@@ -4012,7 +4030,7 @@ async function startBench(){
       body: JSON.stringify({heads:sel.heads.join(','), datasets:sel.datasets.join(','),
                             seq_start:seqStart, seq_end:seqEnd,
                             max_frames:maxFrames, dataset_selection:datasetSelection,
-                            devices, models,
+                            devices, models, resource_policy:backend==='aliyun'?'dedicated':$('#bfResourcePolicy').value,
                             reuse_cache:reuseCache, auto_ukf_best:autoUkf, backend, aliyun})});
     if(!r.ok){ const j = await r.json().catch(()=>null);
       state.bench = {...state.bench, running:false, phase:'未启动', error:(j&&j.error)||await r.text().catch(()=>'启动失败')};
@@ -5014,4 +5032,62 @@ function loop(){
 }
 window.addEventListener('resize', requestDraw);
 requestAnimationFrame(loop);
-init().catch(e=> info.textContent = '加载失败: '+(e && e.message || e));
+init().then(()=>{UI_READY=true; return refreshTaskHistory();}).catch(e=> info.textContent = '加载失败: '+(e && e.message || e));
+
+// Durable tasks survive service restarts; reopening reuses verified window checkpoints.
+async function refreshTaskHistory(){
+  const list=$('#taskList'); if(!list) return;
+  try{
+    const data=await getJSON('/api/tasks');
+    const cache=data.frame_cache;
+    $('#cacheUsage').textContent=` · RGB ${(cache.used_bytes/2**30).toFixed(1)} / ${(cache.limit_bytes/2**30).toFixed(0)} GiB`;
+    list.innerHTML=data.tasks.length ? data.tasks.map(task=>{
+      const params=task.parameters||{};
+      const statuses={completed:'已完成',inference_complete:'推理完成',cancelled:'已取消',failed:'失败',interrupted:'已中断',running:'运行中'};
+      const resumable=params.kind==='video'&&params.source;
+      return `<div class="task-row"><b>${_esc(params.source?params.source.split('/').pop():'Dataset / 数据集窗口缓存')}</b><small>${_esc(statuses[task.status]||task.status)} · ${task.completed_windows||0}/${task.total_windows||0} 窗口 · ${_esc(params.video_view||'full')}</small>`
+        +`<button type="button" ${UI_READY&&resumable?'':'disabled'} title="${resumable?'恢复相同输入与参数':'数据集缓存请通过 Episode 选择器使用'}" data-resume-task="${_esc(task.id)}">Resume / 复用或恢复</button></div>`;
+    }).join('') : 'No saved tasks / 暂无记录';
+    for(const button of list.querySelectorAll('[data-resume-task]')){
+      button.addEventListener('click',()=>resumeSavedTask(button.dataset.resumeTask));
+    }
+  }catch(error){list.textContent=error.message;}
+}
+async function resumeSavedTask(id){
+  if(!UI_READY){info.textContent='页面初始化中，请稍后重试';return;}
+  if(state.loading){info.textContent='请先停止当前任务';return;}
+  try{
+    const response=await fetch(U(`/api/tasks/${encodeURIComponent(id)}/prepare`),{method:'POST'});
+    const prepared=await response.json();
+    if(!response.ok) throw new Error(prepared.error||'无法恢复任务');
+    const params=prepared.parameters;
+    CKPT_TAG=prepared.ckpt_tag;
+    if($('#ckptPath')) $('#ckptPath').value=params.checkpoint;
+    const deadline=Date.now()+120000;
+    while(true){
+      const ready=await getJSON('/api/model_ready');
+      state.modelReady=ready.ready;
+      if(ready.ready) break;
+      if(Date.now()>deadline) throw new Error('模型仍在加载，请稍后重试恢复');
+      await new Promise(resolve=>setTimeout(resolve,700));
+    }
+    curDatasetRel=null; state.eid=prepared.eid;
+    applyModeUI(true); setRawOnly(false);
+    state.vidName=params.source.split('/').pop();
+    state.camMode=params.cam_mode; $('#camMode').value=params.cam_mode;
+    $('#videoView').value=params.video_view||'full';
+    state.handMode=(params.hand_mode||'smooth').split('@')[0]; syncHandModeUI();
+    if(params.hand_mode==='smooth'){state.ukf={q:0.6,r:0.6,beta:2.0};}
+    if((params.hand_mode||'').includes('@')){
+      const values=params.hand_mode.split('@')[1].split(',').map(Number);
+      state.ukf={q:values[0],r:values[1],beta:values[2]};
+    }
+    for(const [key,value] of Object.entries(state.ukf)){const input=$('#ukf'+key[0].toUpperCase()+key.slice(1));if(input)input.value=value;}
+    syncHandModeUI();
+    state.loaded=false; state.inferenceDirty=true;
+    await loadEpisode(prepared.eid,{explicitInference:true,restoredHandMode:params.hand_mode});
+    await refreshTaskHistory();
+  }catch(error){info.textContent=error.message;}
+}
+if($('#refreshTasks')) $('#refreshTasks').addEventListener('click',refreshTaskHistory);
+refreshTaskHistory();

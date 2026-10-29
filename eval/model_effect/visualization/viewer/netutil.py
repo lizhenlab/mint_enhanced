@@ -94,41 +94,12 @@ def cmd_of(pid: int) -> str:
 
 
 def ensure_port(port: int) -> int:
-    """启动前自愈端口：固定端口、每次强制腾出。空闲直接用；被占用则不管是不是本脚本，
-    一律 SIGTERM→（等不掉再）SIGKILL 把占该端口的 LISTEN 进程清掉，始终复用请求端口；
-    只有实在杀不掉（如权限不足/杀不动的系统进程）才退回自动改用下一个空闲端口。"""
-    import signal
-    import time as _t
-    if port_free(port):
-        return port
-    victims = [pid for pid in pids_on_port(port) if pid != os.getpid()]
-    for pid in victims:
-        own = "viewer_web.py" in cmd_of(pid)
-        print(f"[port] {port} 被{'本脚本旧实例' if own else '其他进程'} PID {pid} 占用，SIGTERM 杀掉…",
-              flush=True)
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except Exception:  # noqa: BLE001
-            pass
-    if victims:
-        for _ in range(25):                 # 最多等 5s 让其退出
-            _t.sleep(0.2)
-            if port_free(port):
-                print(f"[port] {port} 已释放。", flush=True)
-                return port
-        for pid in victims:                 # 还赖着就强杀
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except Exception:  # noqa: BLE001
-                pass
-        _t.sleep(0.5)
-        if port_free(port):
-            print(f"[port] {port} 已释放（SIGKILL）。", flush=True)
-            return port
-    for p in range(port + 1, port + 50):    # 实在腾不掉（权限/杀不动）才退回换端口
-        if port_free(p):
-            print(f"[port] {port} 无法腾出（杀不掉占用进程），退回改用空闲端口 {p}。", flush=True)
-            return p
+    """Use the requested port or report a conflict; never signal its owner."""
+    if not 1 <= int(port) <= 65535:
+        raise ValueError('Port must be between 1 and 65535')
+    if not port_free(port):
+        owners = pids_on_port(port)
+        raise OSError(f'Port {port} is occupied (PIDs: {owners}). Stop the intended MINT instance explicitly or select another port.')
     return port
 
 

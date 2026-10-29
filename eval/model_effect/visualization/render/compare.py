@@ -44,8 +44,10 @@ def _write_rendered_frames(vw, total: int, render_one, *, on_step=None,
         if on_step is not None:
             try:
                 on_step(done, total)
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:
+                from mint.inference.base import InferenceCancelled
+                if isinstance(exc, InferenceCancelled):
+                    raise
         if progress and (done % step == 0 or done == total):
             print(f"\r[compare] {label} {100 * done // total:3d}% ({done}/{total})",
                   end="\n" if done == total else "", flush=True)
@@ -321,11 +323,13 @@ def render_2d(raw: dict, pred: dict, out_path, *,
             ])
             return panel
 
-    _write_rendered_frames(
-        vw, T, render_one, on_step=on_step, progress=progress,
-        label=f"2D {content}/{layout} 渲染",
-    )
-    vw.close()
+    try:
+        _write_rendered_frames(
+            vw, T, render_one, on_step=on_step, progress=progress,
+            label=f"2D {content}/{layout} 渲染",
+        )
+    finally:
+        vw.close()
     return out_path
 
 
@@ -364,11 +368,13 @@ def render_gt_overlay(raw: dict, out_path, *,
         draw.presence_label(panel, [(presence_name, gt_kept[i, 0], gt_kept[i, 1])])
         return panel
 
-    _write_rendered_frames(
-        vw, T, render_one, on_step=on_step, progress=progress,
-        label="GT-only 渲染",
-    )
-    vw.close()
+    try:
+        _write_rendered_frames(
+            vw, T, render_one, on_step=on_step, progress=progress,
+            label="GT-only 渲染",
+        )
+    finally:
+        vw.close()
     return out_path
 
 
@@ -411,9 +417,11 @@ def render_pred_overlay(frames: np.ndarray, pred: dict, out_path, *,
         draw.presence_label(panel, [("", *_presence_at(pred_kept, i))])
         return panel
 
-    _write_rendered_frames(
-        vw, T, render_one, on_step=on_step, progress=progress,
-        label="PRED 渲染",
-    )
-    vw.close()
+    try:
+        _write_rendered_frames(
+            vw, T, render_one, on_step=on_step, progress=progress,
+            label="PRED 渲染",
+        )
+    finally:
+        vw.close()
     return out_path

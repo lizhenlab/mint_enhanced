@@ -44,7 +44,9 @@ def test_export_defaults_to_all_four_server_rendered_views():
 def test_individual_export_bundle_contains_named_gt_pred_videos(tmp_path):
     from visualization.viewer.store import Store
 
-    store = Store.__new__(Store)
+    store = Store(None, root=tmp_path, default_mode="mesh_skel", max_frames=None,
+                  scene="test", cache_dir=tmp_path, ckpt_path=None)
+    store.video_eid(str(tmp_path / "input.mp4"))
     store.cache_dir = tmp_path / "cache"
     store._locks = {}
     store._reg_lock = threading.Lock()
@@ -70,7 +72,9 @@ def test_individual_export_bundle_contains_named_gt_pred_videos(tmp_path):
 def test_individual_raw_export_uses_gt_filename(tmp_path):
     from visualization.viewer.store import Store
 
-    store = Store.__new__(Store)
+    store = Store(None, root=tmp_path, default_mode="mesh_skel", max_frames=None,
+                  scene="test", cache_dir=tmp_path, ckpt_path=None)
+    store.video_eid(str(tmp_path / "input.mp4"))
     store.cache_dir = tmp_path / "cache"
     store._locks = {}
     store._reg_lock = threading.Lock()
@@ -87,7 +91,9 @@ def test_individual_raw_export_uses_gt_filename(tmp_path):
 def test_export_renders_overall_2d_before_robot_views_and_keeps_layout_order(tmp_path):
     from visualization.viewer.store import Store
 
-    store = Store.__new__(Store)
+    store = Store(None, root=tmp_path, default_mode="mesh_skel", max_frames=None,
+                  scene="test", cache_dir=tmp_path, ckpt_path=None)
+    store.video_eid(str(tmp_path / "input.mp4"))
     primary_done = threading.Event()
     calls = []
     composed = []
@@ -157,7 +163,9 @@ def test_export_renders_overall_2d_before_robot_views_and_keeps_layout_order(tmp
 def test_export_without_2d_still_renders_selected_robot_views(tmp_path):
     from visualization.viewer.store import Store
 
-    store = Store.__new__(Store)
+    store = Store(None, root=tmp_path, default_mode="mesh_skel", max_frames=None,
+                  scene="test", cache_dir=tmp_path, ckpt_path=None)
+    store.video_eid(str(tmp_path / "input.mp4"))
     composed = []
     store.is_no_truth = lambda _eid: True
     store.raw = lambda _eid: {"frames": __import__("numpy").zeros((1, 512, 512, 3))}

@@ -92,3 +92,8 @@ assets/mano/mano_left/MANO_LEFT.pkl
 
 模型权重、MANO、用户原始视频、运行输出、日志、虚拟环境和缓存未纳入此次代码上传。
 官方仓库原有的文档媒体及公开示例保留在上游历史中；第三方代码与资产遵循各自条款，参见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+## 可靠性与恢复
+
+模型版本隔离、原子导出、批量左右眼、窗口断点恢复、缓存预算、Benchmark 资源策略和独立训练环境见[运行说明](docs/runtime-reliability.md)。
+本轮完整原片、跨进程恢复、多轮 API、带真值样例与扩展环境的实际结果见[全面优化验收](docs/validation-20261029.md)。

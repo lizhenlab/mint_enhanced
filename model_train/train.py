@@ -239,7 +239,7 @@ def main():
     init_from = None
     # A resumed transfer run keeps train.init_from in its snapshot as provenance;
     # --resume must ignore it and restore the newer full training state instead.
-    if not resume_dir and (args.init_from or configured_init_from):
+    if not args.inspect and not resume_dir and (args.init_from or configured_init_from):
         try:
             init_from = _resolve_init_from(args.init_from or configured_init_from)
         except FileNotFoundError as error:

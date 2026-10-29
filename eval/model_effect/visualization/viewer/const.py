@@ -27,7 +27,8 @@ DEFAULT_CAM_MODE = "max_chunked"
 HAND_MODES = ["hard", "blend", "smooth"]
 DEFAULT_HAND_MODE = "smooth"
 # Viewer starts slightly lighter than production (0.6/0.6/2.0); users can tune all three.
-DEFAULT_UKF_PARAMS = {"q": 0.7, "r": 0.5, "beta": 0.3}
+from mint.inference.options import SMOOTHING_PRESETS
+DEFAULT_UKF_PARAMS = dict(SMOOTHING_PRESETS['viewer'])
 # 手形 betas / 内参 FoV 可视化：per_frame=用每帧各自值（现状）；mean=用整段平均值（去逐帧抖动）。
 PARAM_MODES = ["per_frame", "mean"]
 DEFAULT_PARAM_MODE = "per_frame"

@@ -21,6 +21,7 @@ from .const import (CAM_MODES, CONTENTS, DEFAULT_CAM_MODE, DEFAULT_HAND_MODE,
                     HAND_MODES, LAYOUTS, MODEL_TRAIN_ROOT, MODES, PARAM_MODES,
                     VIDEO_EXTS)
 from .dataset_analysis import DatasetAnalysisManager
+from mint.inference.options import SMOOTHING_PRESETS
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 WORLD_COORD_MODES = {"z_up", "opencv"}
@@ -28,13 +29,8 @@ WORLD_COORD_MODES = {"z_up", "opencv"}
 
 def _normalize_hand_mode(value: str) -> str:
     """Validate base or parameterized smooth mode and return a stable cache key."""
-    from inference.hand_smoothing import (
-        encode_hand_smoothing_mode,
-        parse_hand_smoothing_mode,
-    )
-
-    base, params = parse_hand_smoothing_mode(value)
-    return encode_hand_smoothing_mode(params) if params is not None else base
+    from mint.inference.hand_smoothing import canonical_hand_mode
+    return canonical_hand_mode(value)
 
 
 def _is_lerobot_dir(path: Path) -> bool:
@@ -76,6 +72,26 @@ def create_app(store) -> Flask:
     export_files: dict[str, tuple[Path, str]] = {}
     export_jobs: dict[str, dict] = {}
     export_lock = threading.Lock()
+    export_slots = threading.BoundedSemaphore(2)
+    heavy_slots = threading.BoundedSemaphore(max(1, int(os.environ.get("MINT_HTTP_WORKERS", "4"))))
+
+    @app.before_request
+    def admit_heavy_request():
+        if request.endpoint in {"api_world", "video", "world_video", "mujoco_video", "retarget_video"}:
+            if not heavy_slots.acquire(blocking=False):
+                return jsonify(error="系统正在处理其他任务，请稍后重试"), 429, {"Retry-After": "2"}
+            request._mint_heavy_slot = True
+
+    @app.teardown_request
+    def release_heavy_request(error):
+        if getattr(request, "_mint_heavy_slot", False):
+            request._mint_heavy_slot = False
+            heavy_slots.release()
+
+    from mint.inference.base import InputChanged
+    @app.errorhandler(InputChanged)
+    def source_changed(error):
+        return jsonify(code="input_changed", error=str(error), replacement_eid=error.replacement_eid), 409
     # 压掉 werkzeug 每请求的 200 访问日志（/api/progress 轮询等刷屏大头）；4xx/5xx 仍会以 WARNING 打出。
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
@@ -93,6 +109,52 @@ def create_app(store) -> Flask:
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         resp.headers["Pragma"] = "no-cache"
         return resp
+
+    @app.get('/api/tasks')
+    def task_history():
+        from mint.inference.checkpoints import list_tasks, prune_tasks
+        from mint.inference.cache_budget import CacheBudget
+        from mint.inference.frame_store import frame_cache_directory
+        return jsonify(tasks=list_tasks(), checkpoint_cache=prune_tasks(),
+                       frame_cache=CacheBudget(frame_cache_directory()).status())
+
+    @app.post('/api/tasks/<task_id>/prepare')
+    def prepare_task(task_id):
+        from mint.inference.checkpoints import list_tasks
+        from mint.runtime import file_identity
+        task = next((item for item in list_tasks(limit=10000) if item.get('id') == task_id), None)
+        if task is None:
+            abort(404, 'Task not found')
+        params = task.get('parameters', {})
+        source = params.get('source')
+        if params.get('kind') != 'video' or not source or not Path(source).is_file():
+            abort(400, 'This task has no readable video source')
+        if task.get('identity', {}).get('input', {}).get('source') != file_identity(source):
+            return jsonify(error='Source file changed; select it as a new input.'), 409
+        checkpoint = ckpts.resolve_checkpoint_path(params.get('checkpoint'))
+        if checkpoint is None:
+            abort(400, 'The saved checkpoint is unavailable')
+        import yaml
+        from mint.runtime import digest
+        # Resolve the configuration the Viewer will actually load. A prior release's
+        # worktree may be gone; equivalent content at the current path is sufficient.
+        config = Path(ckpts.config_for_ckpt(str(checkpoint), store.config_path) or params.get('config') or '')
+        if not config.is_absolute():
+            config = Path(__file__).resolve().parents[4] / config
+        try:
+            configuration = yaml.safe_load(config.read_text())
+            expected = digest({'weights': file_identity(ckpts.checkpoint_weight_file(checkpoint)), 'config': configuration})
+        except (OSError, ValueError, TypeError):
+            return jsonify(error='The saved model configuration is unavailable.'), 409
+        if task.get('identity', {}).get('model') != expected:
+            return jsonify(error='Checkpoint or configuration changed; select it as a new task.'), 409
+        params = {**params, 'config': str(config.resolve())}
+        if not store.ckpt_path or Path(store.ckpt_path).resolve() != checkpoint.resolve():
+            store.swap_ckpt(str(checkpoint))
+        store.start_load()
+        eid = store.video_eid(source, params.get('video_view', 'full'),
+            params.get('target_fps', 0), params.get('max_frames'))
+        return jsonify(eid=eid, parameters=params, ready=store.predictor_ready(), ckpt_tag=store.ckpt_tag)
 
     # ---- 静态资源（前端单页）----
     @app.get("/")
@@ -317,6 +379,12 @@ def create_app(store) -> Flask:
     @app.post("/api/batch/start")
     def api_batch_start():
         body = request.get_json(force=True, silent=True) or {}
+        from mint.inference.options import InferenceOptions
+        try:
+            InferenceOptions(body.get('video_view', 'full'), body.get('cam_mode') or DEFAULT_CAM_MODE,
+                             body.get('hand_mode') or DEFAULT_HAND_MODE)
+        except ValueError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
         checkpoint = None
         checkpoint_run = body.get("checkpoint_run") or ""
         checkpoint_step = body.get("checkpoint_step") or ""
@@ -349,6 +417,7 @@ def create_app(store) -> Flask:
             pred_fov_mean=(pred_fov == "mean"),
             overwrite=bool(body.get("overwrite", False)),
             checkpoint=str(checkpoint) if checkpoint else None,
+            video_view=body.get("video_view", "full"),
         )
         if not res.get("ok"):
             return jsonify(**res), 409
@@ -506,6 +575,7 @@ def create_app(store) -> Flask:
             reuse_cache=body.get("reuse_cache", True),
             auto_ukf_best=body.get("auto_ukf_best", True),
             backend=body.get("backend") or "local",
+            resource_policy=body.get("resource_policy", "shared"),
             aliyun=body.get("aliyun"))
         if not res.get("ok"):
             return jsonify(ok=False, error=res.get("error", "无法启动测评")), 409
@@ -584,7 +654,7 @@ def create_app(store) -> Flask:
         view = request.args.get('view', 'full')
         if view not in {'full', 'left', 'right'}:
             abort(400, 'Video view must be full, left or right')
-        return jsonify(eid=store.video_eid(item['path'], view=view), video_view=view)
+        return jsonify(eid=store.video_eid(item['path'], view=view, target_fps=item.get('target_fps'), frame_limit=item.get('frame_limit')), video_view=view)
 
     # ---- episode 元信息 / 世界系 payload / 进度 ----
     @app.get("/api/episode/<int:eid>")
@@ -603,6 +673,7 @@ def create_app(store) -> Flask:
                        )(),
                        hand_modes=HAND_MODES, default_hand_mode=DEFAULT_HAND_MODE,
                        default_ukf_params=DEFAULT_UKF_PARAMS,
+                       smoothing_presets=SMOOTHING_PRESETS,
                        param_modes=PARAM_MODES, default_param_mode=DEFAULT_PARAM_MODE)
 
     @app.get("/api/world/<int:eid>")
@@ -628,14 +699,18 @@ def create_app(store) -> Flask:
         progress = store.get_prog(eid)
         if progress.get("stage") != "cancelling":
             store.clear_cancel(eid)
+        request_generation = getattr(store, "_load_gen", None)
         try:
             if raw:                      # 仅原始 GT：不跑推理，直接返回 GT-only payload
                 if store.is_no_truth(eid):
                     abort(400, "裸视频项无 GT，无法「仅看原始」")
                 return jsonify(**store.payload_gt(eid))
             return jsonify(**store.payload(eid, cam_mode, hand_mode, gtb, pdb, pdf))
+        except InputChanged:
+            raise
         except InferenceCancelled:
-            store.set_prog(eid, stage="cancelled")
+            if request_generation == getattr(store, "_load_gen", None):
+                store.set_prog(eid, stage="cancelled")
             return jsonify(cancelled=True), 409   # 前端据此显示「已停止」，不写入 state
         except FullSequenceTooLong as exc:
             store.set_prog(eid, stage="rejected")
@@ -896,6 +971,8 @@ def create_app(store) -> Flask:
             "raw": bool(body.get("raw")),
             "output_format": output_format,
         }
+        if not export_slots.acquire(blocking=False):
+            return jsonify(error="已有两个导出任务，请等待完成后再导出"), 429
         with export_lock:
             export_jobs[token] = {
                 "ok": True, "stage": "queued", "progress": 0.0,
@@ -935,6 +1012,9 @@ def create_app(store) -> Flask:
                     if job is not None:
                         job.update(stage="error", message="导出失败",
                                    error=str(exc), download=None)
+
+            finally:
+                export_slots.release()
 
         threading.Thread(
             target=run_export, name=f"viewer-export-{token[:8]}", daemon=True,

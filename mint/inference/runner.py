@@ -12,6 +12,11 @@ import numpy as np
 from .acceleration import COMPILE_MODES, FP8_MODES
 from .engine import StudentEngine
 from .video import read_video
+from mint.runtime import StageTimer, atomic_json, atomic_npz, video_identity
+from mint.visualization.encoding import atomic_video_file
+from .checkpoints import update_task
+from .options import SMOOTHING_PRESETS
+from .hand_smoothing import canonical_hand_mode, encode_hand_smoothing_mode
 
 
 def inference_main(argv: list[str] | None = None) -> int:
@@ -34,8 +39,10 @@ def inference_main(argv: list[str] | None = None) -> int:
         "--window-batch-size", type=int, default=None,
         help="Independent windows per forward; compile keeps local batch=1 per GPU",
     )
-    parser.add_argument("--camera-mode", choices=("chunked", "max_chunked", "streaming", "full"), default="chunked")
+    parser.add_argument("--camera-mode", choices=("chunked", "max_chunked", "streaming", "full"), default="max_chunked")
     parser.add_argument("--hand-mode", choices=("hard", "blend", "smooth"), default="smooth")
+    parser.add_argument("--smoothing-preset", choices=tuple(SMOOTHING_PRESETS), default="production",
+                        help="UKF defaults: production=.6,.6,2; viewer=.7,.5,.3 (only smooth mode)")
     parser.add_argument(
         "--compile-mode", choices=("off", *COMPILE_MODES), default="off",
         help="torch.compile mode; use auto for reduce-overhead on CUDA",
@@ -50,7 +57,10 @@ def inference_main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--render-mode", choices=("mesh", "skeleton", "mesh_skel"), default="mesh_skel")
     parser.add_argument("--no-render", action="store_true")
+    parser.add_argument("--no-resume", action="store_true", help="Recompute windows instead of reusing saved predictions")
     args = parser.parse_args(argv)
+    if args.hand_mode == 'smooth':
+        args.hand_mode = canonical_hand_mode(encode_hand_smoothing_mode(SMOOTHING_PRESETS[args.smoothing_preset]))
     if args.devices in {'idle', 'shared'}:
         os.environ.setdefault('MINT_MANO_DEVICE', 'cpu')
 
@@ -60,55 +70,54 @@ def inference_main(argv: list[str] | None = None) -> int:
     def decode_progress(done, total):
         if done == total or done % max(1, total // 20) < 96:
             print(f"[decode] {done}/{total}", flush=True)
-    video = read_video(source, max_frames=args.max_frames, target_fps=args.target_fps,
-                       view=args.video_view, cache_dir=args.frame_cache_dir,
-                       on_step=decode_progress)
-    print(f"Decoded {len(video.frames_rgb)} frames at {video.fps:.2f} FPS from {source.name}")
-
-    started = time.perf_counter()
-    load_started = time.perf_counter()
-    engine = StudentEngine(
-        args.config,
-        ckpt=args.checkpoint,
-        devices=args.devices,
-        window=args.window,
-        compile_mode=args.compile_mode,
-        fp8_mode=args.fp8_mode,
-    )
-    load_seconds = time.perf_counter() - load_started
-    warmup = None
-    if args.warmup_passes > 0 and engine.compile_mode is not None:
-        warmup = engine.warmup_acceleration(
-            window_batch_size=args.window_batch_size or engine.parallel_device_count,
-            passes=args.warmup_passes,
-        )
-    inference_started = time.perf_counter()
-    prediction = engine.predict(
-        video.frames_rgb,
-        cam_mode=args.camera_mode,
-        window_batch_size=args.window_batch_size,
-        hand_mode=args.hand_mode,
-    )
-    engine.close()
-    inference_seconds = time.perf_counter() - inference_started
-    elapsed = time.perf_counter() - started
-
+    timer = StageTimer()
+    with timer.stage('decode_seconds'):
+        video = read_video(source, max_frames=args.max_frames, target_fps=args.target_fps,
+                           view=args.video_view, cache_dir=args.frame_cache_dir, on_step=decode_progress)
+    engine = None
+    try:
+        with timer.stage('model_load_seconds'):
+            engine = StudentEngine(args.config, ckpt=args.checkpoint, devices=args.devices,
+                window=args.window, compile_mode=args.compile_mode, fp8_mode=args.fp8_mode)
+        warmup = None
+        with timer.stage('warmup_seconds'):
+            if args.warmup_passes > 0 and engine.compile_mode is not None:
+                warmup = engine.warmup_acceleration(window_batch_size=args.window_batch_size or engine.parallel_device_count,
+                                                   passes=args.warmup_passes)
+        with timer.stage('inference_seconds'):
+            prediction = engine.predict(video.frames_rgb, cam_mode=args.camera_mode,
+                window_batch_size=args.window_batch_size, hand_mode=args.hand_mode, resume=not args.no_resume,
+                cache_identity=video_identity(source, video.frame_indices, video.view, video.fps),
+                task_parameters={'kind': 'video', 'source': str(source), 'video_view': video.view,
+                    'target_fps': args.target_fps, 'max_frames': args.max_frames, 'checkpoint': str(Path(args.checkpoint).resolve()),
+                    'config': str(Path(args.config).resolve()), 'cam_mode': args.camera_mode, 'hand_mode': args.hand_mode})
+        acceleration = engine.acceleration_metadata
+    finally:
+        if engine is not None:
+            with timer.stage('model_release_seconds'):
+                engine.close()
+    task_id = prediction.get('_task', {}).get('id')
     arrays = {key: np.asarray(value) for key, value in prediction.items() if not key.startswith("_")}
     arrays['source_frame_indices'] = video.frame_indices
     arrays['fps'] = np.asarray(video.fps)
-    np.savez_compressed(output / "prediction.npz", **arrays)
+    with timer.stage("prediction_write_seconds"):
+        atomic_npz(output / "prediction.npz", **arrays)
     if not args.no_render:
         from mint.visualization.render import render_prediction
 
-        render_prediction(
-            video.frames_rgb,
-            prediction,
-            output / "prediction.mp4",
-            video.fps,
-            mode=args.render_mode,
-        )
+        try:
+            with timer.stage('render_and_video_write_seconds'):
+                atomic_video_file(output / 'prediction.mp4',
+                    lambda temporary: render_prediction(video.frames_rgb, prediction, temporary, video.fps,
+                                                         mode=args.render_mode), len(video.frames_rgb))
+        except Exception as exc:
+            update_task(task_id, status='failed', stage='render', error=str(exc))
+            raise
+    elapsed = timer.snapshot()['end_to_end_seconds']
     summary = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "stages": timer.snapshot(),
+        "task": prediction.get("_task"),
         "input_name": source.name,
         "frames": len(video.frames_rgb),
         "fps": video.fps,
@@ -119,17 +128,19 @@ def inference_main(argv: list[str] | None = None) -> int:
         "source_first_frame": int(video.frame_indices[0]),
         "source_last_frame": int(video.frame_indices[-1]),
         "duration_seconds": round(elapsed, 4),
-        "model_load_seconds": round(load_seconds, 4),
-        "inference_seconds": round(inference_seconds, 4),
+        "model_load_seconds": round(timer.seconds["model_load_seconds"], 4),
+        "inference_seconds": round(timer.seconds["inference_seconds"], 4),
         "camera_mode": args.camera_mode,
         "hand_mode": args.hand_mode,
+        "smoothing_preset": args.smoothing_preset if args.hand_mode.startswith('smooth') else None,
         "window_batch_size": args.window_batch_size,
-        "acceleration": engine.acceleration_metadata,
+        "acceleration": acceleration,
         "warmup": warmup,
         "timings": prediction.get("_timings"),
         "rendered": not args.no_render,
     }
-    (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    atomic_json(output / "summary.json", summary)
+    update_task(task_id, status="completed", stage="completed", outputs={"directory": str(output)}, stages=timer.snapshot())
     print(f"Artifacts written to {output}")
     return 0
 

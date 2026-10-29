@@ -1,0 +1,21 @@
+name: CPU regression
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  reliability:
+    runs-on: ubuntu-latest
+    env:
+      CUDA_VISIBLE_DEVICES: ''
+      MINT_MANO_DEVICE: cpu
+      MINT_CACHE_MIN_FREE_GIB: '0'
+      OMP_NUM_THREADS: '2'
+      MKL_NUM_THREADS: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install numpy==1.26.4 scipy PyYAML Flask opencv-python-headless==4.11.0.86 pyarrow einops pytest==8.4.2 matplotlib==3.10.8
+      - run: python -m pytest -q tests eval/model_effect/benchmark/tests -k 'not finds_repo_mano_assets'

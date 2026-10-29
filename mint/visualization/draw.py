@@ -265,7 +265,7 @@ class H264PipeWriter:
             pass
         ret = self._proc.wait()
         self._proc = None
-        if ret != 0:
-            print(f"[inference]  {ret}; {self.path}.")
+        if ret != 0 or self._pipe_failed:
+            raise RuntimeError(f'ffmpeg encoding failed (exit {ret}): {self.path}')
 
     release = close

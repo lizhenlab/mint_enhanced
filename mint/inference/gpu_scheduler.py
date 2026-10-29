@@ -363,30 +363,52 @@ class IdleGpuScheduler:
                 self._states[device].update(resident=False, running=False)
                 self._cv.notify_all()
 
-    def map(self, items, run, *, cancel_check=None, cancelled_error=RuntimeError):
-        """Return results in input order, even when GPUs finish out of order."""
+    def iter_map(self, items, run, *, cancel_check=None, cancelled_error=RuntimeError,
+                 max_inflight=None):
+        """Continuously refill a bounded queue and yield results in original order."""
+        limit = int(max_inflight or max(4, len(self.devices) * 4))
+        if limit < 1:
+            raise ValueError('max_inflight must be positive')
         cancelled = threading.Event()
-        jobs = [_Job(item, run, cancelled) for item in items]
-        with self._cv:
-            if self._closed:
-                raise cancelled_error('GPU scheduler is closed')
-            self._queue.extend(jobs)
-            self._cv.notify_all()
-        futures = [job.future for job in jobs]
+        source = iter(items)
+        jobs, exhausted = deque(), False
+        def fill():
+            nonlocal exhausted
+            with self._cv:
+                if self._closed:
+                    raise cancelled_error('GPU scheduler is closed')
+                while len(jobs) < limit and not exhausted:
+                    try:
+                        item = next(source)
+                    except StopIteration:
+                        exhausted = True
+                        break
+                    job = _Job(item, run, cancelled)
+                    jobs.append(job)
+                    self._queue.append(job)
+                self._cv.notify_all()
         try:
-            while any(not future.done() for future in futures):
+            fill()
+            while jobs:
                 if cancel_check is not None and cancel_check():
-                    raise cancelled_error('Cancelled while waiting for idle GPUs')
+                    raise cancelled_error('Cancelled while waiting for GPU work')
                 with self._cv:
                     if self._closed:
                         raise cancelled_error('GPU scheduler is closed')
-                for future in futures:
-                    if future.done() and not future.cancelled() and future.exception() is not None:
-                        raise future.exception()
-                wait(futures, timeout=0.1)
-            if self._closed or (cancel_check is not None and cancel_check()):
-                raise cancelled_error('GPU work cancelled')
-            return [future.result() for future in futures]
+                for job in jobs:
+                    if job.future.done() and not job.future.cancelled() and job.future.exception() is not None:
+                        raise job.future.exception()
+                first = jobs[0]
+                if not first.future.done():
+                    # Wait on the head; already-completed later results stay within the queue budget.
+                    wait([first.future], timeout=.1)
+                    continue
+                value = first.future.result()
+                with self._cv:
+                    self._cv.wait_for(lambda: not first.active)
+                jobs.popleft()
+                fill()
+                yield value
         finally:
             cancelled.set()
             with self._cv:
@@ -395,8 +417,10 @@ class IdleGpuScheduler:
                     if not job.active and not job.future.done():
                         job.future.cancel()
                 self._cv.notify_all()
-                # In-flight CUDA windows must finish before weights can be changed.
-                self._cv.wait_for(lambda: not any(job.active for job in jobs), timeout=None)
+                self._cv.wait_for(lambda: not any(job.active for job in jobs))
+
+    def map(self, items, run, *, cancel_check=None, cancelled_error=RuntimeError):
+        return list(self.iter_map(items, run, cancel_check=cancel_check, cancelled_error=cancelled_error))
 
     def status(self):
         with self._cv:

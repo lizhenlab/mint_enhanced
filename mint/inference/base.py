@@ -7,6 +7,12 @@ class InferenceCancelled(Exception):
     """Raised when an inference job is cancelled by the caller."""
 
 
+class InputChanged(InferenceCancelled):
+    def __init__(self, replacement_eid):
+        self.replacement_eid = int(replacement_eid)
+        super().__init__('The source video changed. Select it again to use the new version.')
+
+
 class FullSequenceTooLong(ValueError):
     """Raised when full-sequence inference exceeds its configured safety limit."""
 

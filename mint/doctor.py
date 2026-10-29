@@ -103,8 +103,15 @@ def run_checks(profile: str) -> list[Check]:
         ))
     if profile in {"train", "full"}:
         checks.extend([_module("accelerate"), _module("decord"), _module("pyarrow")])
+        roots = [PROJECT_DIR / 'data/lerobot/stage2/lerobot_v3/meta/info.json']
+        checks.append(Check('Stage 2 training data', all(p.is_file() for p in roots),
+                            'configure data.root in configs/training/mint_step2.yaml', False))
+        checks.append(Check('Stage 1 initialization',
+            (PROJECT_DIR / 'checkpoints/stage1/model.safetensors').is_file(),
+            'provide your Stage 1 run for Stage 2; public inference checkpoint remains available', False))
     if profile in {"data", "full"}:
-        checks.extend([_module("ray"), _module("joblib"), _module("ultralytics")])
+        checks.extend([_module("ray"), _module("joblib"), _module("ultralytics"),
+                       _module("geocalib"), _module("moge"), _module("utils3d")])
         for name in ("GeoCalib", "MoGe", "mega-sam"):
             path = PROJECT_DIR / "third_party" / name
             checks.append(Check(
@@ -118,7 +125,13 @@ def run_checks(profile: str) -> list[Check]:
         }
         for name, path in assets.items():
             detail = str(path.relative_to(PROJECT_DIR))
-            checks.append(Check(name, path.is_file(), detail, False))
+            checks.append(Check(name, path.is_file(), detail))
+        hawor = PROJECT_DIR / 'third_party/HaWoR/scripts/scripts_test_video'
+        checks.append(Check('HaWoR local integration',
+            all((hawor / name).is_file() for name in ('detect_track_video.py', 'hawor_slam.py', 'hawor_video.py')),
+            'separately supplied adapted backend'))
+        for extension in ('droid_backends', 'lietorch'):
+            checks.append(_module(extension))
     return checks
 
 

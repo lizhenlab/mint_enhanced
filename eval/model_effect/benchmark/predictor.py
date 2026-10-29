@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import sys
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -33,10 +34,14 @@ class StudentPredictor:
                  device: str | None = None, window: int | None = None,
                  single_forward: bool = True, window_batch_size: int = 1,
                  image_workers: int = 1, hand_mode: str = "hard",
-                 compile_mode: str | None = None, fp8_mode: str | None = None):
+                 compile_mode: str | None = None, fp8_mode: str | None = None, resource_policy=None):
         from inference.engine import HandReprojPredictor
+        self.resource_policy = resource_policy or os.environ.get('MINT_BENCH_RESOURCE_POLICY', 'dedicated')
+        if self.resource_policy not in {'shared', 'idle', 'dedicated'}:
+            raise ValueError('Invalid benchmark resource policy')
         self._engine = HandReprojPredictor(
             config_path, ckpt=ckpt, device=device, window=window,
+            devices=self.resource_policy if self.resource_policy in {"shared", "idle"} else None,
             compile_mode=compile_mode, fp8_mode=fp8_mode,
         )
         self.ckpt = ckpt
@@ -59,6 +64,7 @@ class StudentPredictor:
         window 由 predict 按 single_forward 临时设置并复原(见 predict),不污染引擎供交互推理的原 window。"""
         self = cls.__new__(cls)
         self._engine = engine
+        self.resource_policy = getattr(engine, "gpu_scheduler_status", {}).get("policy", "dedicated")
         self.ckpt = ckpt
         self.single_forward = single_forward
         self.window = engine.window

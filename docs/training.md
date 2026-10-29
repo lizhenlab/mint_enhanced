@@ -24,6 +24,14 @@ See [LeRobot v3 training data contract](lerobot-training-data.md) for the exact
 directory layout, Parquet columns, coordinate conventions, masks, video-frame
 alignment, and clip construction used by these recipes.
 
+## Validate inputs
+
+```bash
+./run_mint.sh train --check --config configs/training/mint_step2.yaml
+```
+
+This checks selected dataset and initialization paths without allocating a GPU.
+
 ## Inspect first
 
 ```bash

@@ -20,6 +20,7 @@ class WindowFrames:
         self.cancel_check, self.cancelled_error = cancel_check, cancelled_error
         self._lock = threading.Lock()
         self._seconds, self._peak_chunk = 0.0, 0
+        self._intervals = []
 
     def __getitem__(self, index):
         started = time.perf_counter()
@@ -49,7 +50,9 @@ class WindowFrames:
             del part, values
         release_mapped_pages(self.frames)
         with self._lock:
-            self._seconds += time.perf_counter() - started
+            finished = time.perf_counter()
+            self._seconds += finished - started
+            self._intervals.append((started, finished))
             self._peak_chunk = max(self._peak_chunk, min(chunk, len(frames)))
         return output
 
@@ -67,6 +70,10 @@ class WindowFrames:
     @property
     def metadata(self):
         with self._lock:
-            return {'preprocess_strategy': 'per_window',
+            wall, last = 0.0, 0.0
+            for start, end in sorted(self._intervals):
+                wall += max(0.0, end - max(start, last))
+                last = max(last, end)
+            return {'preprocess_strategy': 'per_window', 'preprocess_wall_seconds': wall, 'preprocess_s': wall,
                     'preprocess_worker_seconds': self._seconds,
                     'preprocess_peak_native_frames': self._peak_chunk}

@@ -110,9 +110,7 @@ def main() -> int:
     # 则为 None，后续 ckpts 调用安全降级，模型真正构建时由适配器抛清晰的「需 --config」错误。
     cfg_tmpl = args.config or default_config(args.model)
 
-    # 启动前自愈端口：固定端口、强制腾出——占用者不管是不是本脚本一律杀掉，始终复用该端口；
-    # 实在杀不掉才退回换端口。
-    # 重活（MANO、模型）挪到 app.run 之后的后台线程；数据集/视频均**不预扫描**，浏览到才登记。
+    # Bind only the requested free port; an unrelated listener is never terminated.
     args.port = netutil.ensure_port(args.port)
 
     in_path = Path(args.input).expanduser().resolve()
@@ -159,6 +157,18 @@ def main() -> int:
                   inference_fp8_mode=args.fp8_mode,
                   batch_workers=args.jobs)
     app = create_app(store)
+    import atexit
+    import signal
+    def shutdown(signum=None, frame=None):
+        store.cancel_batch_inference()
+        if store._bench_backend == 'local' and store._bench.get('running'):
+            store.cancel_benchmark()
+        store.close()
+        if signum is not None:
+            raise SystemExit(0)
+    atexit.register(shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
     print(f"[info] 浏览根: {root}")
     print(f"[info] overlay/预测 缓存目录: {cache_dir}")
     print(f"[info] 打开浏览器访问:  http://localhost:{args.port}/")

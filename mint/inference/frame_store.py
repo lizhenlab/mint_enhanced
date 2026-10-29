@@ -17,6 +17,11 @@ from pathlib import Path
 import numpy as np
 
 from .base import InferenceCancelled
+from .cache_budget import CacheBudget, pin_mapping
+
+
+def frame_cache_directory():
+    return Path(os.environ.get('MINT_FRAME_CACHE_DIR') or Path(__file__).resolve().parents[2] / '.cache/video-frames')
 
 
 def release_mapped_pages(frames):
@@ -125,14 +130,16 @@ def read_frames(reader, indices, *, source_path=None, view='full', cache_dir=Non
         fill(output)
         return output
 
-    directory = Path(cache_dir or os.environ.get('MINT_FRAME_CACHE_DIR') or
-                     Path(__file__).resolve().parents[2] / '.cache' / 'video-frames')
+    directory = Path(cache_dir or frame_cache_directory())
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     if source_path is None:
         raise ValueError('Disk-backed decoding requires the source path for cache identity')
     source = Path(source_path).resolve()
     stat = source.stat()
-    identity = {'version': 1, 'source': str(source), 'size': stat.st_size,
+    from mint.runtime import file_identity
+    source_identity = file_identity(source)
+    identity = {'version': 2, 'source': str(source), 'size': stat.st_size,
+                'ctime_ns': stat.st_ctime_ns, 'inode': stat.st_ino,
                 'mtime_ns': stat.st_mtime_ns, 'shape': list(shape), 'view': view,
                 'indices_sha256': hashlib.sha256(indices.tobytes()).hexdigest()}
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
@@ -143,6 +150,7 @@ def read_frames(reader, indices, *, source_path=None, view='full', cache_dir=Non
             if json.loads(manifest.read_text()) == identity:
                 cached = np.load(destination, mmap_mode='r', allow_pickle=False)
                 if cached.shape == shape and cached.dtype == np.uint8:
+                    pin_mapping(cached, destination)
                     progress(len(indices))
                     return cached
                 cached._mmap.close()
@@ -151,26 +159,25 @@ def read_frames(reader, indices, *, source_path=None, view='full', cache_dir=Non
         # Only this key's writer can hold the lock; these belong to interrupted writers.
         for stale in directory.glob(key + '.partial-*'):
             stale.unlink(missing_ok=True)
-        needed = len(indices) * frame_bytes + 2**30
-        if shutil.disk_usage(directory).free < needed:
-            raise OSError(f'Insufficient frame-cache disk space: need about {needed / 2**30:.1f} GiB. '
-                          'Set MINT_FRAME_CACHE_DIR to a disk with more space.')
+        budget = CacheBudget(directory)
         temporary = directory / (key + f'.partial-{os.getpid()}-{threading.get_ident()}.npy')
         metadata_temp = temporary.with_suffix('.json')
         mapped = None
         try:
-            mapped = np.lib.format.open_memmap(temporary, mode='w+', dtype=np.uint8, shape=shape)
-            temporary.chmod(0o600)
-            fill(mapped)
-            if (source.stat().st_size, source.stat().st_mtime_ns) != (stat.st_size, stat.st_mtime_ns):
-                raise RuntimeError('Video changed during decoding; retry after the recording is complete')
-            mapped.flush()
-            mapped._mmap.close()
-            mapped = None
-            metadata_temp.write_text(json.dumps(identity, sort_keys=True))
-            os.replace(temporary, destination)
-            os.replace(metadata_temp, manifest)
-            return np.load(destination, mmap_mode='r', allow_pickle=False)
+            with budget.reserve(destination, len(indices) * frame_bytes + 4096):
+                mapped = np.lib.format.open_memmap(temporary, mode='w+', dtype=np.uint8, shape=shape)
+                temporary.chmod(0o600)
+                fill(mapped)
+                if file_identity(source) != source_identity:
+                    raise RuntimeError('Video changed during decoding; retry after the recording is complete')
+                mapped.flush()
+                mapped._mmap.close()
+                mapped = None
+                metadata_temp.write_text(json.dumps(identity, sort_keys=True))
+                os.replace(temporary, destination)
+                os.replace(metadata_temp, manifest)
+                return pin_mapping(np.load(destination, mmap_mode='r', allow_pickle=False), destination)
+
         finally:
             if mapped is not None:
                 mapped._mmap.close()

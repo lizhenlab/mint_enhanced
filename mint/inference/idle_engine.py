@@ -90,39 +90,73 @@ class IdleGpuMixin:
         return {**scheduler.status(), 'memory_fraction': float(os.environ.get('MINT_GPU_MEMORY_FRACTION', '0.30'))}
 
     def close(self):
+        if getattr(self, '_closed', False):
+            return
+        self._closed = True
         scheduler = getattr(self, '_gpu_scheduler', None)
         if scheduler is not None:
             scheduler.close()
+            self._gpu_scheduler = None
         pool = getattr(self, '_forward_pool', None)
         if pool is not None:
             pool.shutdown(wait=True)
+            self._forward_pool = None
+        devices = list(getattr(self, 'devices', []))
+        self.models, self.model = [], None
+        if devices:
+            import torch
+            for device in devices:
+                if device.type == 'cuda':
+                    with torch.cuda.device(device):
+                        torch.cuda.empty_cache()
 
     def predict(self, frames_uint8, on_step=None, cancel_check=None,
                 cam_mode='chunked', window_batch_size=None, hand_mode='hard',
-                preprocessed=False):
+                preprocessed=False, cache_identity=None, task_parameters=None, resume=True):
         scheduler = getattr(self, '_gpu_scheduler', None)
+        if getattr(self, '_closed', False):
+            raise RuntimeError('The inference engine has been closed')
         kwargs = dict(on_step=on_step, cancel_check=cancel_check, cam_mode=cam_mode,
                       window_batch_size=window_batch_size, hand_mode=hand_mode,
-                      preprocessed=preprocessed)
-        if scheduler is None:
-            return self._predict(frames_uint8, **kwargs)
+                      preprocessed=preprocessed, cache_identity=cache_identity,
+                      task_parameters=task_parameters, resume=resume)
         cancelled_error = self._inference_cancelled
+        if not hasattr(self, "_scheduling_context"):
+            self._scheduling_context = threading.local()
+        if not hasattr(self, "_prediction_context"):
+            self._prediction_context = threading.local()
+        self._prediction_context.task = None
         self._scheduling_context.cancel_check = cancel_check
         self._scheduling_context.cancelled_error = cancelled_error
         try:
-            if cam_mode == 'streaming':
+            if scheduler is not None and cam_mode == 'streaming':
                 result = scheduler.map(
                     [None], lambda view, device, _: view._predict(frames_uint8, **kwargs),
                     cancel_check=cancel_check, cancelled_error=cancelled_error,
                 )[0]
             else:
                 result = self._predict(frames_uint8, **kwargs)
-            status = scheduler.status()
-            result.setdefault('_timings', {})['gpu_scheduler'] = status
-            result['_timings']['devices'] = status['resident_devices']
+            if scheduler is not None:
+                status = scheduler.status()
+                result.setdefault('_timings', {})['gpu_scheduler'] = status
+                result['_timings']['devices'] = status['resident_devices']
+            task = self._prediction_context.task
+            if task is not None:
+                task.finish('inference_complete', stage='inference_complete')
+                result['_task'] = task.metadata
             return result
+        except Exception as exc:
+            task = self._prediction_context.task
+            if task is not None:
+                task.finish('cancelled' if isinstance(exc, cancelled_error) else 'failed', error=str(exc))
+            raise
         finally:
             self._scheduling_context.cancel_check = None
+            task = self._prediction_context.task
+            if task is not None:
+                task.close()
+                from .checkpoints import prune_tasks
+                prune_tasks(task.directory)
 
     def _idle_forward_window_batch(self, x, bounds, disable_persistent_kv_cache):
         started = time.perf_counter()
@@ -137,3 +171,64 @@ class IdleGpuMixin:
         keys = set.intersection(*(set(output) for output in outputs))
         return {key: np.concatenate([output[key] for output in outputs], axis=0)
                 for key in keys}, time.perf_counter() - started
+
+    def _iter_forward_batches(self, x, bounds, batch_size, cancel_check, checkpoint=None, resume=True):
+        """Feed fast GPUs continuously while the caller stitches strictly in input order."""
+        cached = {}
+        if checkpoint is not None and resume:
+            for index in range(len(bounds)):
+                value = checkpoint.load(index)
+                if value is not None:
+                    cached[index] = value
+        scheduler = getattr(self, '_gpu_scheduler', None)
+        if scheduler is not None:
+            missing = [(index, bound) for index, bound in enumerate(bounds) if index not in cached]
+            def forward(view, device, item):
+                index, bound = item
+                output, seconds = view._forward_window_batch(x, [bound], disable_persistent_kv_cache=True)
+                if checkpoint is not None:
+                    checkpoint.save(index, output)
+                return index, output, seconds
+            results = scheduler.iter_map(missing, forward, cancel_check=cancel_check,
+                cancelled_error=self._inference_cancelled,
+                max_inflight=int(os.environ.get('MINT_GPU_PREFETCH_WINDOWS', str(len(scheduler.devices) * 4))))
+            try:
+                for index, bound in enumerate(bounds):
+                    if cancel_check is not None and cancel_check():
+                        raise self._inference_cancelled('Window inference cancelled')
+                    if index in cached:
+                        output, seconds = cached.pop(index), 0.0
+                    else:
+                        actual, output, seconds = next(results)
+                        if actual != index:
+                            raise RuntimeError('GPU queue returned an unordered window')
+                    yield [bound], output, seconds, index + 1
+            finally:
+                results.close()
+            return
+        index = 0
+        while index < len(bounds):
+            if cancel_check is not None and cancel_check():
+                raise self._inference_cancelled('Window inference cancelled')
+            if index in cached:
+                yield [bounds[index]], cached.pop(index), 0.0, index + 1
+                index += 1
+                continue
+            end = min(len(bounds), index + batch_size)
+            for candidate in range(index + 1, end):
+                if candidate in cached or bounds[candidate][1] - bounds[candidate][0] != bounds[index][1] - bounds[index][0]:
+                    end = candidate
+                    break
+            import torch
+            try:
+                output, seconds = self._forward_window_batch(x, bounds[index:end], disable_persistent_kv_cache=True)
+            except torch.cuda.OutOfMemoryError:
+                if end - index <= 1:
+                    raise
+                batch_size = max(1, (end - index) // 2)
+                continue
+            if checkpoint is not None:
+                for offset, window in enumerate(range(index, end)):
+                    checkpoint.save(window, {key: value[offset:offset+1] for key, value in output.items()})
+            yield bounds[index:end], output, seconds, end
+            index = end

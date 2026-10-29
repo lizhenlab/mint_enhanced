@@ -14,7 +14,7 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[3]
 BENCHMARK_ROOT = _REPO / "output" / "eval" / "benchmark"
 MODEL_TRAIN_ROOT = _REPO / "output" / "model_train"
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 PROTOCOL_REVISION = "hawor-vidihand-camera-se3table-20260816-v2"
 MANIFEST_NAME = "benchmark_cache.json"
 _MAXIMIZE = {"FAcc", "Recall", "F1", "AUC"}
@@ -105,7 +105,7 @@ def _checkpoint_stamp(ckpt: Path | str) -> dict:
 
 def build_signature(*, ckpt, config, heads, datasets, seq_start=0,
                     seq_end=None, max_seqs=None, max_frames=None,
-                    dataset_selection=None, hand_mode="hard") -> dict:
+                    dataset_selection=None, hand_mode="hard", resource_policy="dedicated") -> dict:
     """Describe every result-affecting input; devices/backend intentionally do not matter."""
     from benchmark.datasets.base import normalize_dataset_selection
 
@@ -134,6 +134,7 @@ def build_signature(*, ckpt, config, heads, datasets, seq_start=0,
             "base_windowed": not protocol_only,
             "coverage_forced_single_forward": True,
             "hand_mode": str(hand_mode or "hard"),
+            "resource_policy": resource_policy,
         },
         "protocol_env": {
             key: os.environ.get(key, default)

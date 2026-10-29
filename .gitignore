@@ -87,3 +87,8 @@ docs/dataset-card/
 .DS_Store
 
 !tests/test_long_video.py
+
+!tests/test_runtime_reliability.py
+!tests/test_service_runtime.py
+/.venv-features/
+/model/

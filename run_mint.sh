@@ -12,4 +12,15 @@ export MUJOCO_GL="${MUJOCO_GL:-egl}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-8}"
 mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$VIEWER_CACHE_DIR"
-exec "$MINT_PROJECT_DIR/.venv/bin/python" -m mint "$@"
+MINT_PYTHON_BIN="$MINT_PROJECT_DIR/.venv/bin/python"
+if [[ -x "$MINT_PROJECT_DIR/.venv-features/bin/python" ]]; then
+  case "${1:-}" in
+    train|pipeline) MINT_PYTHON_BIN="$MINT_PROJECT_DIR/.venv-features/bin/python" ;;
+    doctor)
+      if [[ " $* " != *" --profile inference "* ]]; then
+        MINT_PYTHON_BIN="$MINT_PROJECT_DIR/.venv-features/bin/python"
+      fi ;;
+  esac
+fi
+export YOLO_CONFIG_DIR="$MINT_PROJECT_DIR/.cache/ultralytics"
+exec "$MINT_PYTHON_BIN" -m mint "$@"

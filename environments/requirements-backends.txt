@@ -1,0 +1,6 @@
+# Public GeoCalib/MoGe inference dependencies. Full pipeline still needs adapted HaWoR/SLAM.
+kornia==0.8.2
+trimesh==5.2.0
+gradio==6.31.0
+utils3d @ https://codeload.github.com/EasternJournalist/utils3d/tar.gz/3fab839f0be9931dac7c8488eb0e1600c236e183#sha256=f1f167b1f68809bea391a66dd0d2ad0e14f7382cbddf087b655181c31a285abb
+pipeline @ https://codeload.github.com/EasternJournalist/pipeline/tar.gz/866f059d2a05cde05e4a52211ec5051fd5f276d6#sha256=36e2fc484c98ff4b9e007457ab45b71009434e9834992336bd2efda22f532523

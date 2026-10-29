@@ -39,7 +39,8 @@ def test_viewer_normalizes_parameterized_ukf_mode():
     from visualization.viewer.routes import _normalize_hand_mode
 
     assert _normalize_hand_mode("hard") == "hard"
-    assert _normalize_hand_mode("smooth") == "smooth@0.6,0.6,2"
+    assert _normalize_hand_mode("smooth") == "smooth"
+    assert _normalize_hand_mode("smooth@0.6,0.6,2") == "smooth"
     assert _normalize_hand_mode("smooth@0.7000,0.500,1.600") == "smooth@0.7,0.5,1.6"
     with pytest.raises(ValueError):
         _normalize_hand_mode("smooth@0.7,9,1.6")

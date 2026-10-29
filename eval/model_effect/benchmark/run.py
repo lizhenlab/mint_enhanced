@@ -88,6 +88,7 @@ def main():
         "--fp8-mode", choices=("dynamic",), default=None,
         help="可选 torchao FP8 dynamic activation + weight，仅量化 aggregator 大 Linear",
     )
+    ap.add_argument("--resource-policy", choices=("shared", "idle", "dedicated"), default=os.environ.get("MINT_BENCH_RESOURCE_POLICY", "dedicated"))
     ap.add_argument("--out", default=None)
     ap.add_argument("--model", default="lingbotmap",
                     help="推理模型(inference.registry 注册名);非 lingbotmap 走 registry 构建引擎")
@@ -101,6 +102,7 @@ def main():
     except json.JSONDecodeError as exc:
         ap.error(f"--dataset-selection-json 不是有效 JSON: {exc}")
 
+    os.environ["MINT_BENCH_RESOURCE_POLICY"] = args.resource_policy
     os.environ["HAND_COVERAGE_TEST_SEGMENTS"] = str(args.hand_coverage_test_segments)
     os.environ["HAND_COVERAGE_SPLIT_SEED"] = str(args.hand_coverage_split_seed)
 
@@ -116,7 +118,7 @@ def main():
             image_workers=args.image_workers,
             hand_mode=args.hand_mode,
             compile_mode=args.compile_mode,
-            fp8_mode=args.fp8_mode,
+            fp8_mode=args.fp8_mode, resource_policy=args.resource_policy,
         )
     else:   # 其它模型(如 vggt):复用 registry 构建引擎再包 StudentPredictor,与 viewer 语义一致
         from inference.registry import get_predictor
@@ -213,6 +215,10 @@ def main():
                       shard_index=args.shard_index, shard_count=args.shard_count)
     except ValueError as e:
         ap.error(str(e))
+    finally:
+        engine = getattr(predictor, "_engine", None)
+        if engine is not None and hasattr(engine, "close"):
+            engine.close()
 
 
 if __name__ == "__main__":

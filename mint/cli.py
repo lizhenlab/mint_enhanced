@@ -42,8 +42,17 @@ def main(argv: list[str] | None = None) -> int:
     command, remainder = raw[0], raw[1:]
 
     if command == "pipeline":
+        if "--check" in remainder:
+            from .doctor import doctor_main
+            return doctor_main(["--profile", "data", "--strict"])
         return _run_script("ego_pipeline/run_batch.py", _normalize_pipeline_args(remainder))
     if command == "train":
+        if "--check" in remainder:
+            from .readiness import training_inputs
+            config = remainder[remainder.index("--config")+1] if "--config" in remainder else "configs/training/mint_step2.yaml"
+            checks = training_inputs(config)
+            for check in checks: print(f"[{'PASS' if check.ok else 'MISSING'}] {check.name}: {check.detail}")
+            return int(any(not check.ok for check in checks))
         return _run_script("model_train/train.py", remainder)
     if command == "infer":
         from .inference.runner import inference_main

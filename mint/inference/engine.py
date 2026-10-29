@@ -253,6 +253,10 @@ class StudentEngine(IdleGpuMixin):
         with open(_abs(config_path)) as f:
             cfg = yaml.safe_load(f)
         mcfg = dict(cfg["model"])
+        self._prediction_context = threading.local()
+        self._cache_configuration = cfg
+        from mint.runtime import digest, file_identity
+        self._cache_model_identity = (digest({"weights": file_identity(_find_weight_file(ckpt)), "config": cfg}) if ckpt else None)
         self._raw_mcfg = dict(cfg["model"])
 
         self.size_hw = tuple(cfg.get("data", {}).get("size_hw", (378, 518)))
@@ -282,7 +286,7 @@ class StudentEngine(IdleGpuMixin):
         elif mcfg.get("pretrained"):
             mcfg["pretrained"] = _abs(mcfg["pretrained"])
 
-        idle_requested = device is None and devices in {"idle", "shared"}
+        idle_requested = device is None and isinstance(devices, str) and devices in {"idle", "shared"}
         requested_devices = _resolve_devices(
             device=device, devices="auto" if idle_requested else devices
         )
@@ -533,6 +537,8 @@ class StudentEngine(IdleGpuMixin):
         self.has_hand_presence = bool(
             getattr(self.model, "enable_hand_presence", False)
         )
+        from mint.runtime import digest, file_identity
+        self._cache_model_identity = digest({'weights': file_identity(wf), 'config': self._cache_configuration})
         print(f"[inference] reloaded={os.path.basename(wf)} replicas={len(models)} "
               f"tensors={len(sd)} missing={len(missing)} unexpected={len(unexpected)}", flush=True)
         return missing, unexpected
@@ -651,13 +657,14 @@ class StudentEngine(IdleGpuMixin):
     def _predict(self, frames_uint8: np.ndarray, on_step=None, cancel_check=None,
                 cam_mode: str = "chunked", window_batch_size: int | None = None,
                 hand_mode: str = DEFAULT_HAND_WINDOW_MODE,
-                preprocessed: bool = False) -> dict:
+                preprocessed: bool = False, cache_identity=None, task_parameters=None, resume=True) -> dict:
         import time
         import torch
 
-        from .hand_smoothing import parse_hand_smoothing_mode
+        from .hand_smoothing import canonical_hand_mode, parse_hand_smoothing_mode
         requested_hand_mode = str(hand_mode)
         try:
+            requested_hand_mode = canonical_hand_mode(requested_hand_mode)
             hand_mode, ukf_params = parse_hand_smoothing_mode(requested_hand_mode)
         except (TypeError, ValueError) as exc:
             raise ValueError(
@@ -908,42 +915,25 @@ class StudentEngine(IdleGpuMixin):
                 f"to {effective_batch} so every GPU keeps local batch=1",
                 flush=True,
             )
+        checkpoint = None
+        source_identity = cache_identity
+        if source_identity is None and isinstance(frames_uint8, np.memmap):
+            from mint.runtime import file_identity
+            source_identity = file_identity(frames_uint8.filename)
+        if source_identity is not None and getattr(self, '_cache_model_identity', None):
+            from .checkpoints import WindowCheckpoint
+            checkpoint = WindowCheckpoint({'model': self._cache_model_identity, 'input': source_identity,
+                'size_hw': self.size_hw, 'camera_mode': cam_mode, 'hand_mode': requested_hand_mode,
+                'acceleration': self.acceleration_metadata, 'hand_blending': blend_hands,
+                'output_heads': [self.has_hand, self.has_hand_presence]}, win_bounds, task_parameters)
+            self._prediction_context.task = checkpoint
         forward_batches = 0
-        with torch.inference_mode():
+        dispatch_started = time.perf_counter()
+        batches = self._iter_forward_batches(x, win_bounds, effective_batch, cancel_check, checkpoint, resume)
+        from contextlib import closing
+        with closing(batches), torch.inference_mode():
             wi = 0
-            while wi < nwin:
-                if cancel_check is not None and cancel_check():
-                    raise InferenceCancelled(f"Cancelled at window {wi + 1}/{nwin}.")
-
-
-                batch_end = min(wi + effective_batch, nwin)
-                first_len = win_bounds[wi][1] - win_bounds[wi][0]
-                while batch_end > wi + 1:
-                    last_s, last_e = win_bounds[batch_end - 1]
-                    if last_e - last_s == first_len:
-                        break
-                    batch_end -= 1
-                batch_bounds = win_bounds[wi:batch_end]
-                try:
-                    out, dt = self._forward_window_batch(
-                        x,
-                        batch_bounds,
-                        disable_persistent_kv_cache=True,
-                    )
-                except torch.cuda.OutOfMemoryError:
-                    if len(batch_bounds) <= 1:
-                        raise
-                    effective_batch = max(1, (len(batch_bounds) + 1) // 2)
-                    for replica_device in getattr(self, "devices", [self.device]):
-                        if replica_device.type == "cuda":
-                            with torch.cuda.device(replica_device):
-                                torch.cuda.empty_cache()
-                    print(
-                        f"[inference] reducing window batch from {len(batch_bounds)} "
-                        f"to {effective_batch} after CUDA out of memory",
-                        flush=True,
-                    )
-                    continue
+            for batch_bounds, out, dt, batch_end in batches:
                 t_fwd += dt
                 forward_batches += 1
                 pose_batch = out["pose_enc"]
@@ -1048,10 +1038,14 @@ class StudentEngine(IdleGpuMixin):
             logits = (presence_sum / np.maximum(presence_weight, 1e-8)).astype(np.float32)
             res["hand_presence_logits"] = logits
             res["hand_confidence"] = _sigmoid_np(logits)
+        postprocess_started = time.perf_counter()
         hand_smoothed = _postprocess_hands(res, hand_mode, ukf_params)
         res["_timings"] = {
             "preprocess_s": preprocess_s,
-            "forward_s": t_fwd,
+            "forward_s": postprocess_started - dispatch_started,
+            "forward_worker_seconds": t_fwd,
+            "postprocess_s": time.perf_counter() - postprocess_started,
+            "dispatch_policy": "rolling" if getattr(self, "_gpu_scheduler", None) else "fixed_batch",
             "total_s": time.perf_counter() - predict_started,
             "requested_window_batch_size": requested_batch,
             "window_batch_size": effective_batch,

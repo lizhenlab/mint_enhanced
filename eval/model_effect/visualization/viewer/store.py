@@ -21,6 +21,8 @@ from pathlib import Path
 import numpy as np
 
 from . import ckpts
+from .lifecycle import ModelLifecycle, model_request, input_request, serialized_start
+from mint.runtime import digest, file_identity, video_identity, StageTimer
 from .const import (
     DEFAULT_CAM_MODE, DEFAULT_HAND_MODE, MODEL_TRAIN_ROOT, REPO_DIR,
     ROBOT_RENDER_WIDTH,
@@ -76,7 +78,7 @@ def _benchmark_progress_timing(progress: dict, *, running: bool,
     return value
 
 
-def _render_video_atomically(output: Path, render) -> Path:
+def _render_video_atomically(output: Path, render, expected_frames=None) -> Path:
     """Keep an in-progress MP4 hidden until ffmpeg has written its final metadata."""
     output = Path(output)
     temporary = output.with_name(
@@ -87,6 +89,9 @@ def _render_video_atomically(output: Path, render) -> Path:
         render(temporary)
         if not temporary.is_file() or temporary.stat().st_size == 0:
             raise RuntimeError("视频编码失败，未生成有效 MP4")
+        if expected_frames is not None:
+            from mint.visualization.encoding import validate_video
+            validate_video(temporary, expected_frames)
         temporary.replace(output)
     finally:
         temporary.unlink(missing_ok=True)
@@ -185,7 +190,7 @@ class _StdoutTee:
         return getattr(self._orig, name)
 
 
-class Store:
+class Store(ModelLifecycle):
     def __init__(self, predictor, *, root: Path, default_mode: str,
                  max_frames: int | None, scene: str, cache_dir: Path,
                  loss_cfg: dict | None = None, config_path: str | None = None,
@@ -233,6 +238,7 @@ class Store:
         # 换模型的「代次」：每次 swap_ckpt +1。后台单加载线程每轮只提交仍是最新代的结果，
         # 途中被跨过的选择直接跳过 → 加载途中再点别的模型，最终加载的一定是最后点的那个。
         self._load_gen = 0
+        self._init_lifecycle()
         self._loading = False                     # 是否已有后台加载线程在跑（保证同一时刻仅一个，不并发建模/叠显存）
         self._load_err: Exception | None = None   # 最新代加载失败时的异常，供 ensure_predictor 抛出
         self._assets_ready = threading.Event()    # MANO 权重就绪（渲染/hands_to_world 需要）
@@ -315,6 +321,8 @@ class Store:
             self._cancel.setdefault(eid, threading.Event()).clear()
 
     def cancelled(self, eid: int) -> bool:
+        if self._service_closed or not self._generation_current():
+            return True
         with self._cancel_lock:
             ev = self._cancel.get(eid)
             return bool(ev and ev.is_set())
@@ -351,6 +359,9 @@ class Store:
     def _batch_activity(self, index: int, relative: Path | str, stage: str | None,
                         *, eid: int | None = None, done: int = 0, total: int = 0) -> None:
         """Publish all in-flight videos while keeping the legacy single-current fields useful."""
+        if stage == "render" and self._batch_cancel.is_set():
+            from mint.inference.base import InferenceCancelled
+            raise InferenceCancelled("Batch rendering cancelled")
         labels = {"load": "读取", "infer": "推理", "render": "渲染", "write": "写入"}
         with self._batch_lock:
             if stage is None:
@@ -395,11 +406,14 @@ class Store:
                               pred_betas_mean: bool = False,
                               pred_fov_mean: bool = False,
                               overwrite: bool = False,
-                              checkpoint: str | None = None) -> dict:
+                              checkpoint: str | None = None, video_view: str = 'full') -> dict:
         """Start a batch, switching to and loading ``checkpoint`` in the worker when requested."""
         from .batch import resolve_batch_roots, validate_name_template
 
         try:
+            from mint.inference.options import InferenceOptions
+            options = InferenceOptions(video_view, cam_mode, hand_mode)
+            video_view, hand_mode = options.video_view, options.hand_mode
             input_root, output_root = resolve_batch_roots(input_dir, output_dir)
             template = validate_name_template(name_template)
         except ValueError as exc:
@@ -433,7 +447,7 @@ class Store:
                     "running": True,
                     "phase": "扫描视频…" if self.predictor_ready() else "加载所选模型…",
                     "input_root": str(input_root), "output_root": str(output_root),
-                    "name_template": template, "checkpoint": ckpt_tag,
+                    "name_template": template, "checkpoint": ckpt_tag, "video_view": video_view,
                     "checkpoint_path": ckpt_path, "total": 0, "done": 0,
                     "succeeded": 0, "failed": 0, "skipped": 0,
                     "current": None, "current_index": 0, "file_done": 0,
@@ -446,7 +460,7 @@ class Store:
                 "name_template": template, "mode": mode, "cam_mode": cam_mode,
                 "hand_mode": hand_mode, "pred_betas_mean": bool(pred_betas_mean),
                 "pred_fov_mean": bool(pred_fov_mean), "overwrite": bool(overwrite),
-                "devices": devices, "ckpt_tag": ckpt_tag, "ckpt_path": ckpt_path,
+                "devices": devices, "ckpt_tag": ckpt_tag, "ckpt_path": ckpt_path, "video_view": video_view,
             }
             threading.Thread(target=self._batch_inference_worker, kwargs=kwargs,
                              name="batch-inference", daemon=True).start()
@@ -470,12 +484,12 @@ class Store:
     def _batch_prepare_video(self, item: dict, *, cam_mode: str, hand_mode: str,
                              mode: str, pred_betas_mean: bool,
                              pred_fov_mean: bool, ckpt_tag: str,
-                             ckpt_path: str | None) -> dict:
+                             ckpt_path: str | None, video_view: str = 'full') -> dict:
         """Read and infer one video; the returned CPU data can be rendered concurrently."""
         source = item["source"]
         relative = item["relative"]
         index = int(item["index"])
-        eid = self.video_eid(str(source))
+        eid = self.video_eid(str(source), video_view)
         self.clear_cancel(eid)
         self._batch_activity(index, relative, "load", eid=eid)
         if self._batch_cancel.is_set():
@@ -510,6 +524,11 @@ class Store:
             "camera_K": np.asarray(camera_k),
             "fps": np.asarray(self.item_fps(eid), dtype=np.float32),
             "frame_count": np.asarray(raw["frames"].shape[0], dtype=np.int64),
+            "source_frame_count": np.asarray(raw.get("source_frames", raw["T"]), dtype=np.int64),
+            "source_frame_indices": np.asarray(raw.get("source_indices", np.arange(raw["T"])), dtype=np.int64),
+            "video_view": np.asarray(video_view),
+            "source_identity_json": np.asarray(__import__("json").dumps(file_identity(source), sort_keys=True)),
+            "batch_signature": np.asarray(item.get("signature", "")),
             "source_path": np.asarray(str(source)),
             "source_relpath": np.asarray(relative.as_posix()),
             "ckpt_tag": np.asarray(ckpt_tag),
@@ -559,14 +578,7 @@ class Store:
             tmp_mp4 = Path(tmp_dir) / "render.mp4"
             tmp_npz = Path(tmp_dir) / "prediction.npz"
             from ..render import compare
-            compare.render_pred_overlay(
-                raw["frames"], pred, tmp_mp4, mode=mode, fps=self.item_fps(eid),
-                hand_frame=self.item_hand_frame(eid), betas_mean=pred_betas_mean,
-                fov_mean=pred_fov_mean, pred_world_data=prepared["pred_world"],
-                on_step=lambda current, count: self._batch_activity(
-                    index, relative, "render", eid=eid,
-                    done=int(current), total=int(count)),
-            )
+            self._complete_overlay(compare.render_pred_overlay, tmp_mp4, raw['frames'], pred, mode=mode, fps=self.item_fps(eid), hand_frame=self.item_hand_frame(eid), betas_mean=pred_betas_mean, fov_mean=pred_fov_mean, pred_world_data=prepared['pred_world'], on_step=lambda current, count: self._batch_activity(index, relative, 'render', eid=eid, done=int(current), total=int(count)))
             atomic_save_npz(tmp_npz, **prepared["arrays"])
             self._batch_activity(index, relative, "write", eid=eid)
             atomic_copy_file(tmp_npz, output_npz)
@@ -578,11 +590,11 @@ class Store:
                                 hand_mode: str, pred_betas_mean: bool,
                                 pred_fov_mean: bool, overwrite: bool,
                                 devices: list[str], ckpt_tag: str,
-                                ckpt_path: str | None) -> None:
+                                ckpt_path: str | None, video_view: str = 'full') -> None:
         import datetime
         import traceback
 
-        from .batch import atomic_write_json, build_output_plan
+        from .batch import atomic_write_json, build_output_plan, batch_signature, existing_result
 
         started_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         manifest_path = output_root / "batch_manifest.json"
@@ -591,7 +603,7 @@ class Store:
             "input_root": str(input_root), "output_root": str(output_root),
             "name_template": name_template, "checkpoint": ckpt_tag,
             "checkpoint_path": ckpt_path,
-            "devices": devices, "settings": {
+            "devices": devices, "settings": {"video_view": video_view,
                 "mode": mode, "cam_mode": cam_mode, "hand_mode": hand_mode,
                 "pred_betas": "mean" if pred_betas_mean else "per_frame",
                 "pred_fov": "mean" if pred_fov_mean else "per_frame",
@@ -630,6 +642,9 @@ class Store:
             records: dict[int, dict] = {}
             work_items = []
             for item in plan:
+                item["signature"] = batch_signature(item["source"], {**{key: value for key, value in manifest["settings"].items() if key not in {"overwrite", "render_workers"}},
+                    "model": getattr(self.predictor, "_cache_model_identity", ckpt_tag),
+                    "target_fps": self.default_fps, "max_frames": self.max_frames})
                 source, relative, index = item["source"], item["relative"], int(item["index"])
                 record = {
                     "index": index, "source": str(source), "relative": relative.as_posix(),
@@ -638,11 +653,16 @@ class Store:
                 }
                 records[index] = record
                 manifest["files"].append(record)
-                if not overwrite and (item["output_mp4"].exists() or item["output_npz"].exists()):
+                result_state = existing_result(item, item["signature"]) if not overwrite else "new"
+                if result_state == "complete":
                     skipped += 1
                     done += 1
                     record.update(status="skipped", reason="输出文件已存在（未启用覆盖）")
                     self._batch_log(f"[{index}/{len(plan)}] 跳过 {relative}: 输出已存在")
+                elif result_state == "conflict":
+                    failed += 1
+                    done += 1
+                    record.update(status="failed", error="输出存在但输入或参数不匹配；请选择新目录或启用覆盖")
                 else:
                     work_items.append(item)
 
@@ -680,8 +700,16 @@ class Store:
                     atomic_write_json(manifest_path, manifest)
 
             with ThreadPoolExecutor(
-                    max_workers=self.batch_workers, thread_name_prefix="batch-render") as render_pool:
-                for item in work_items:
+                    max_workers=self.batch_workers, thread_name_prefix="batch-render") as render_pool, \
+                    ThreadPoolExecutor(max_workers=1, thread_name_prefix="batch-decode") as decode_pool:
+                def prefetch(item):
+                    eid = self.video_eid(str(item['source']), video_view)
+                    self.clear_cancel(eid)
+                    self._batch_activity(int(item['index']), item['relative'], 'load', eid=eid)
+                    return decode_pool.submit(self.raw, eid,
+                        cancel_check=lambda: self._batch_cancel.is_set() or self.cancelled(eid))
+                next_decode = prefetch(work_items[0]) if work_items else None
+                for position, item in enumerate(work_items):
                     if self._batch_cancel.is_set():
                         break
                     # Keep one prepared item ahead of the render pool so GPU inference overlaps
@@ -697,13 +725,19 @@ class Store:
                     record = records[index]
                     record["status"] = "running"
                     try:
+                        current_decode = next_decode
+                        # One video is decoded ahead while the current video uses the GPU queue.
+                        if current_decode is not None:
+                            current_decode.result()
+                        next_decode = (prefetch(work_items[position + 1])
+                                       if position + 1 < len(work_items) and not self._batch_cancel.is_set() else None)
                         prepared = self._batch_prepare_video(
                             item, cam_mode=cam_mode, hand_mode=hand_mode, mode=mode,
                             pred_betas_mean=pred_betas_mean, pred_fov_mean=pred_fov_mean,
-                            ckpt_tag=ckpt_tag, ckpt_path=ckpt_path)
+                            ckpt_tag=ckpt_tag, ckpt_path=ckpt_path, video_view=video_view)
                     except Exception as exc:  # noqa: BLE001
                         from inference.base import InferenceCancelled
-                        eid = self.video_eid(str(item["source"]))
+                        eid = self.video_eid(str(item["source"]), video_view)
                         self._batch_activity(index, relative, None, eid=eid)
                         self._release_item_cache(eid)
                         if isinstance(exc, InferenceCancelled) or self._batch_cancel.is_set():
@@ -714,6 +748,9 @@ class Store:
                         done += 1
                         record.update(status="failed", error=str(exc))
                         self._batch_log(f"[{index}/{len(plan)}] 失败 {relative}: {exc}")
+                        if next_decode is current_decode:
+                            next_decode = (prefetch(work_items[position + 1])
+                                           if position + 1 < len(work_items) and not self._batch_cancel.is_set() else None)
                         print("[batch] " + traceback.format_exc(), flush=True)
                         self._batch_set(done=done, succeeded=succeeded,
                                         failed=failed, skipped=skipped)
@@ -835,13 +872,19 @@ class Store:
         with self._bench_lock:
             self._bench_sizes = {"computing": False, "data": data}
 
+    @serialized_start
     def start_benchmark(self, *, datasets: str = "all", heads: str = "all",
                         max_seqs=None, max_frames=None, devices=None,
                         seq_start=0, seq_end=None, checkpoints=None,
                         dataset_selection=None, reuse_cache=True,
-                        auto_ukf_best=True, backend="local", aliyun=None) -> dict:
+                        auto_ukf_best=True, backend="local", aliyun=None, resource_policy="shared") -> dict:
         """Run the same benchmark for one or more checkpoints, one model at a time."""
+        resource_policy = str(resource_policy)
+        if resource_policy not in {"shared", "idle", "dedicated"}:
+            return {"ok": False, "error": "Invalid GPU resource policy"}
         backend = str(backend or "local").strip().lower()
+        if backend == "aliyun":
+            resource_policy = "dedicated"
         if backend not in {"local", "aliyun"}:
             return {"ok": False, "error": "测评运行位置仅支持 local 或 aliyun"}
         with self._batch_lock:
@@ -911,7 +954,7 @@ class Store:
                     ckpt=model["ckpt"], config=model["config"], heads=heads,
                     datasets=datasets, seq_start=seq_start, seq_end=seq_end,
                     max_seqs=max_seqs, max_frames=max_frames,
-                    dataset_selection=dataset_selection, hand_mode="hard",
+                    dataset_selection=dataset_selection, hand_mode="hard", resource_policy=resource_policy,
                 )
                 model["benchmark_signature"] = signature
                 model["benchmark_signature_key"] = signature_key(signature)
@@ -971,7 +1014,7 @@ class Store:
                                          "max_seqs": max_seqs, "max_frames": max_frames,
                                          "dataset_selection": dataset_selection,
                                          "reuse_cache": bool(reuse_cache),
-                                         "auto_ukf_best": auto_ukf_enabled},
+                                         "auto_ukf_best": auto_ukf_enabled, "resource_policy": resource_policy},
                            "progress": {"frac": 0.0, "suite_frac": 0.0,
                                         "model_index": 0, "model_total": len(models),
                                         "done": 0, "total": 0, "gpus": []}}
@@ -979,7 +1022,7 @@ class Store:
         threading.Thread(target=self._bench_worker,
                          args=(models, datasets, heads, max_seqs, max_frames, devs,
                                seq_start, seq_end, dataset_selection, bool(reuse_cache),
-                               auto_ukf_enabled),
+                               auto_ukf_enabled, resource_policy),
                          daemon=True).start()
         return {"ok": True, "models": len(models), "cached": cached_count}
 
@@ -1036,7 +1079,7 @@ class Store:
 
     def _bench_worker(self, models, datasets, heads, max_seqs, max_frames, devices,
                       seq_start=0, seq_end=None, dataset_selection=None,
-                      reuse_cache=True, auto_ukf_best=False) -> None:
+                      reuse_cache=True, auto_ukf_best=False, resource_policy="shared") -> None:
         """Run checkpoints sequentially so every model can use the full selected GPU set."""
         import json
         import time
@@ -1121,7 +1164,7 @@ class Store:
                     seq_start, seq_end, base=model_dir, model_index=index,
                     model_total=total, model_label=model["label"],
                     dataset_selection=dataset_selection,
-                    hand_mode=model.get("hand_mode", "hard"),
+                    hand_mode=model.get("hand_mode", "hard"), resource_policy=resource_policy,
                 )
             except Exception as exc:  # noqa: BLE001
                 outcome = {"status": "failed", "out": str(model_dir),
@@ -1199,7 +1242,7 @@ class Store:
     def _bench_model_worker(self, ckpt, datasets, heads, max_seqs, max_frames, devices,
                             seq_start=0, seq_end=None, *, base=None, model_index=1,
                             model_total=1, model_label="", dataset_selection=None,
-                            hand_mode="hard") -> dict:
+                            hand_mode="hard", resource_policy="shared") -> dict:
         """多卡分片评测:每张选中卡起一个子进程(CUDA_VISIBLE_DEVICES 隔离)跑 run.py 的一个分片,
         各自加载模型、按共享输入分组并均衡帧数；逐行读子进程 stdout 聚合「已完成/总数」粗粒度进度,
         全部结束后 dist.aggregate 合并各分片 report → 面板读合并后的 report.json。"""
@@ -1445,6 +1488,8 @@ class Store:
                     )]
                 env = os.environ.copy()
                 env["CUDA_VISIBLE_DEVICES"] = str(dev)
+                env["MINT_BENCH_RESOURCE_POLICY"] = resource_policy
+                cmd += ["--resource-policy", resource_policy]
                 env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
                 _log(f"[gpu{dev}] 启动 shard {i + 1}/{len(devices)}",
                      slot=f"gpu{dev}:launch")
@@ -1646,6 +1691,10 @@ class Store:
         则丢弃本次结果、继续加载最新代。torch 构建无法中途打断，故在途这次会先跑完再被丢弃。"""
         while True:
             with self._load_cv:
+                if self._service_closed:
+                    self._loading = False
+                    self._load_cv.notify_all()
+                    return
                 if self._predictor_ready.is_set():   # 已就绪且无新请求 → 收工
                     self._loading = False
                     return
@@ -1653,37 +1702,14 @@ class Store:
                 boot_cfg, ckpt, window = self._boot_cfg, self.ckpt_path, self.window
                 full_max_frames = self.full_max_frames
                 reload_ckpt, base = self._reload_ckpt, self.predictor
-            # ---- 重活：锁外执行，期间可自由 swap_ckpt ----
+            # Wait for cancelled old requests and retire their resources before building a new model.
             try:
-                if (reload_ckpt is not None and base is not None
-                        and getattr(base, "supports_weight_reload", True)):
-                    # 架构不变且权重格式可重载：只换权重，省重建。
-                    missing, _ = base.reload(reload_ckpt)
-                    if missing:  # 新 ckpt 未覆盖全部权重 → 就地重载会残留旧权重 → 改整重建以确保正确
-                        print(f"[model] 就地重载缺 {len(missing)} 键，改整模型重建以保证权重正确", flush=True)
-                        from inference.registry import get_predictor
-                        new_pred = get_predictor(
-                            self.model, config=boot_cfg, ckpt=ckpt, window=window,
-                            full_max_frames=full_max_frames,
-                            # base 已占着自动选中的卡，重建时沿用这些逻辑设备，不能重新判成“忙”。
-                            devices=getattr(base, "parallel_device_names", self.inference_devices),
-                            compile_mode=self.inference_compile_mode,
-                            fp8_mode=self.inference_fp8_mode,
-                        )
-                    else:
-                        new_pred = base
-                else:
-                    from inference.registry import get_predictor
-                    if base is not None and hasattr(base, "close"):
-                        base.close()
-                    print(f"[model] 后台加载模型：model={self.model} cfg={boot_cfg} ckpt={ckpt}", flush=True)
-                    new_pred = get_predictor(
-                        self.model, config=boot_cfg, ckpt=ckpt, window=window,
-                        full_max_frames=full_max_frames,
-                        devices=self.inference_devices,
-                        compile_mode=self.inference_compile_mode,
-                        fp8_mode=self.inference_fp8_mode,
-                    )
+                self._wait_for_retirements()
+                from inference.registry import get_predictor
+                new_pred = get_predictor(
+                    self.model, config=boot_cfg, ckpt=ckpt, window=window,
+                    full_max_frames=full_max_frames, devices=self.inference_devices,
+                    compile_mode=self.inference_compile_mode, fp8_mode=self.inference_fp8_mode)
             except Exception as e:  # noqa: BLE001
                 with self._load_cv:
                     if gen == self._load_gen:        # 仍是最新代才算失败：记异常、唤醒等待者、收工
@@ -1767,15 +1793,19 @@ class Store:
                 self._item_index[key] = eid
             return eid
 
-    def video_eid(self, path_abs: str, view: str = 'full') -> int:
+    def video_eid(self, path_abs: str, view: str = 'full', target_fps=None, frame_limit='default') -> int:
         """裸视频绝对路径 → eid（无真值项）。浏览目录时给每个视频登记，避免启动全盘扫描。"""
         path_abs = str(Path(path_abs).resolve())
         if view not in {'full', 'left', 'right'}:
             raise ValueError('Video view must be full, left or right')
-        return self._register(("video", path_abs, view),
+        identity = file_identity(path_abs)
+        fps = self.default_fps if target_fps is None else float(target_fps)
+        limit = self.max_frames if frame_limit == "default" else frame_limit
+        return self._register(("video", path_abs, view, digest(identity), fps, limit),
                               {"kind": "video", "path": path_abs,
-                               "fps": self.default_fps, "target_fps": self.default_fps,
-                               "video_view": view, "hand_frame": self.default_hand_frame})
+                               "fps": fps, "target_fps": fps, "frame_limit": limit,
+                               "video_view": view, "source_identity": identity,
+                               "hand_frame": self.default_hand_frame})
 
     def ensure_dataset(self, ds_dir) -> dict:
         """定位/枚举某 lerobot 数据集并缓存 {"eps":[...], "fps":float}（幂等、线程安全、懒加载）。"""
@@ -1910,9 +1940,12 @@ class Store:
         context = self.item_context(eid)
         safe_name = _re.sub(r"[^0-9A-Za-z._-]+", "_", context["source_name"]).strip("_") or "input"
         source_hash = hashlib.sha256(context["source_path"].encode("utf-8")).hexdigest()[:10]
-        return f"{safe_name[:48]}_{source_hash}"
+        version = self.item(eid).get("source_identity", {})
+        return f"{safe_name[:48]}_{source_hash}_{digest(version)[:10]}"
 
     def set_prog(self, eid: int, **kw) -> None:
+        if not self._generation_current():
+            return
         with self._prog_lock:
             self._prog[eid] = {**self._prog.get(eid, {}), **kw}
 
@@ -1967,65 +2000,54 @@ class Store:
             return dict(self._world_prog.get(key, {}))
 
     def swap_ckpt(self, ckpt: str) -> dict:
-        """选到新 ckpt：**立即**作废依赖 ckpt 的缓存 + 置未就绪、记下最新目标（代次 +1），然后**立刻返回**。
-        **不自动加载**——加载与推理已拆开，须由前端「加载模型」按钮调 start_load 显式触发。返回 {ckpt, tag, reload}。
-
-        若加载线程已在跑（上一个 ckpt 正在加载）时又选别的模型：把代次再 +1、更新目标；在跑的加载线程
-        本轮跑完后发现已非最新代 → 丢弃结果、直接去加载最新目标（torch 构建无法中途打断，故在途这次会先跑完）。
-        GT 相关缓存（_raw/_gtw）与 ckpt 无关，保留。config/loss 面板同步切到新 run。"""
+        """Publish a new generation immediately; retire the old model in the background."""
         with self._batch_start_lock:
             with self._batch_lock:
                 if self._batch["running"]:
                     raise RuntimeError("批量推理正在运行，不能切换 checkpoint；请先取消或等待完成")
-            cfg_used = ckpts.config_for_ckpt(ckpt, self.config_path)   # 优先该 run 自带 config
-            # 架构是否与当前模型一致：一致则**就地重载权重**（快）、不重建；否则整模型重建。
-            same_arch = False
-            if self.predictor is not None and getattr(self.predictor, "_raw_mcfg", None) is not None:
-                try:
-                    import yaml
-                    new_mcfg = (yaml.safe_load(open(cfg_used, encoding="utf-8")) or {}).get("model")
-                    same_arch = (new_mcfg == self.predictor._raw_mcfg)
-                except Exception:  # noqa: BLE001
-                    same_arch = False
-            can_reload = bool(
-                same_arch
-                and self.predictor is not None
-                and getattr(self.predictor, "supports_weight_reload", True)
-            )
+            with self._bench_lock:
+                if self._bench["running"]:
+                    raise RuntimeError("Benchmark 正在运行，不能切换 checkpoint")
+            cfg_used = ckpts.config_for_ckpt(ckpt, self.config_path)
             with self._load_cv:
-                self._load_gen += 1                         # 代次 +1：作废在途加载的提交资格
+                old, generation = self.predictor, self._load_gen
+                self._load_gen += 1
                 self.ckpt_path = ckpt
-                self.ckpt_tag = ckpts.ckpt_tag(ckpt)
+                self.ckpt_tag = ckpts.ckpt_tag(ckpt) + "_" + digest(file_identity(ckpts.checkpoint_weight_file(ckpt) or ckpt))[:10]
                 self._boot_cfg = cfg_used
-                self.loss_cfg = ckpts.load_loss_cfg(cfg_used)   # loss 面板跟随新 run
-                self._pred.clear(); self._prw.clear(); self._payload.clear(); self._mp4.clear()
-                self._world_mp4.clear(); self._world_prog.clear()
-                self._mujoco_mp4.clear(); self._mujoco_prog.clear()
-                self._retarget_mp4.clear(); self._retarget_prog.clear()
-                if can_reload:
-                    self._reload_ckpt = ckpt                # 架构不变：加载线程就地重载权重
-                else:
-                    old = self.predictor; self.predictor = None; self._reload_ckpt = None
-                    if old is not None:
-                        del old
-                        try:
-                            import torch
-                            torch.cuda.empty_cache()
-                        except Exception:  # noqa: BLE001
-                            pass
-                self._predictor_ready.clear()               # 未就绪：前端显示「未加载」，等手动点「加载模型」
+                self.loss_cfg = ckpts.load_loss_cfg(cfg_used)
+                # Old snapshots keep their own dictionaries; they can never write into the new generation.
+                for name in ('_pred', '_prw', '_payload', '_mp4', '_world_mp4', '_world_prog',
+                             '_mujoco_mp4', '_mujoco_prog', '_retarget_mp4', '_retarget_prog'):
+                    setattr(self, name, {})
+                self.predictor, self._reload_ckpt = None, None
+                self._predictor_ready.clear()
                 self._load_err = None
-                # 不自动起加载线程（加载与推理拆开）；若已有在跑的加载线程，它会自行跟到最新代。
-                if self._loading:
-                    self._load_cv.notify_all()
-            print(f"[ckpt] 选到 {ckpt}（{'就地重载权重' if can_reload else '重建模型'}，等待加载请求）", flush=True)
-            return {"ckpt": ckpt, "tag": self.ckpt_tag, "reload": can_reload}
+                self._retire_predictor_locked(old, generation)
+                self._load_cv.notify_all()
+            return {"ckpt": ckpt, "tag": self.ckpt_tag, "reload": False, "generation": self._load_gen}
 
     def _key_lock(self, name: str) -> threading.Lock:
+        if getattr(self, "_snapshot_parent", None) is not None:
+            name = f"g{self._snapshot_generation}:" + name
         with self._reg_lock:
             if name not in self._locks:
                 self._locks[name] = threading.Lock()
             return self._locks[name]
+
+    def _complete_overlay(self, renderer, output, *args, **kwargs):
+        frames = args[0]['frames'] if isinstance(args[0], dict) else args[0]
+        callback = kwargs.get('on_step')
+        def progress(done, total):
+            self._check_model_generation()
+            if self._service_closed:
+                from mint.inference.base import InferenceCancelled
+                raise InferenceCancelled('Service is stopping')
+            if callback is not None:
+                callback(done, total)
+        kwargs['on_step'] = progress
+        return _render_video_atomically(output,
+            lambda temporary: renderer(*args, temporary, **kwargs), expected_frames=len(frames))
 
     # ---- 分层缓存：raw → pred → world → payload ----
     @staticmethod
@@ -2070,7 +2092,15 @@ class Store:
         _check_cancel()
         return np.stack(images).astype(np.uint8)
 
+    def _validate_input_version(self, eid: int):
+        item = self._items[eid]
+        if item.get('kind') == 'video' and item.get('source_identity') != file_identity(item['path']):
+            from mint.inference.base import InputChanged
+            replacement = self.video_eid(item['path'], item.get('video_view', 'full'), item.get('target_fps'), item.get('frame_limit'))
+            raise InputChanged(replacement)
+
     def raw(self, eid: int, cancel_check=None) -> dict:
+        self._validate_input_version(eid)
         if eid not in self._raw:
             with self._key_lock(f"raw{eid}"):
                 if eid not in self._raw:
@@ -2084,9 +2114,10 @@ class Store:
                         from inference.base import InferenceCancelled
                         batch = read_video(
                             vp, target_fps=it.get('target_fps', it['fps']),
-                            max_frames=self.max_frames, on_step=cb,
+                            max_frames=it.get("frame_limit", self.max_frames), on_step=cb,
                             view=it.get('video_view', 'full'), cancel_check=cancel_check,
                             cancelled_error=InferenceCancelled)
+                        self._validate_input_version(eid)
                         frames = batch.frames_rgb
                         it['fps'] = batch.fps
                         self._raw[eid] = {"episode_index": eid, "T": int(frames.shape[0]),
@@ -2116,6 +2147,7 @@ class Store:
                             cancel_check=cancel_check)
         return self._raw[eid]
 
+    @model_request
     def pred(self, eid: int, cam_mode: str = DEFAULT_CAM_MODE,
              hand_mode: str = DEFAULT_HAND_MODE) -> dict:
         # full 没有手部拼窗，hard/blend 可共享；smooth 仍会执行后处理，必须独立缓存。
@@ -2133,13 +2165,23 @@ class Store:
                         self.set_prog(eid, stage="stream" if cam_mode == "streaming" else "full")
                     cb = lambda done, total: self.set_prog(   # noqa: E731  逐窗上报前向进度(流式仅手部阶段回调)
                         eid, stage="infer", done=int(done), total=int(total))
+                    raw = self.raw(eid, cancel_check=lambda: self.cancelled(eid))
+                    item = self.item(eid)
+                    source = item.get('path')
+                    identity = (video_identity(source, raw['source_indices'], item.get('video_view', 'full'), raw['fps'])
+                                if item['kind'] == 'video' else None)
                     self._pred[k] = self.predictor.predict(
-                        self.raw(eid, cancel_check=lambda: self.cancelled(eid))["frames"],
+                        raw["frames"], cache_identity=identity,
+                        task_parameters={'kind': item['kind'], 'source': source, 'video_view': item.get('video_view', 'full'),
+                            'target_fps': item.get('target_fps', 0), 'max_frames': item.get('frame_limit', self.max_frames),
+                            'checkpoint': self.ckpt_path, 'config': self._boot_cfg,
+                            'cam_mode': cam_mode, 'hand_mode': effective_hand_mode},
                         on_step=cb,
                         cancel_check=lambda: self.cancelled(eid),   # 「停止」→ 逐窗中断
                         cam_mode=cam_mode, hand_mode=effective_hand_mode)
         return self._pred[k]
 
+    @input_request
     def gt_world(self, eid: int, gt_betas_mean: bool = False) -> dict:
         k = (eid, gt_betas_mean)
         if k not in self._gtw:
@@ -2151,6 +2193,7 @@ class Store:
                     self._gtw[k] = compare.gt_to_world(r, betas_mean=gt_betas_mean)
         return self._gtw[k]
 
+    @model_request
     def pred_world(self, eid: int, cam_mode: str = DEFAULT_CAM_MODE,
                    hand_mode: str = DEFAULT_HAND_MODE,
                    pred_betas_mean: bool = False) -> dict | None:
@@ -2175,6 +2218,7 @@ class Store:
                             betas_mean=pred_betas_mean)
         return self._prw[k]
 
+    @model_request
     def payload(self, eid: int, cam_mode: str = DEFAULT_CAM_MODE,
                 hand_mode: str = DEFAULT_HAND_MODE,
                 gt_betas_mean: bool = False, pred_betas_mean: bool = False,
@@ -2232,14 +2276,19 @@ class Store:
                         print(f"[store] frame_numbers 失败(跳过数值面板): {e}", flush=True)
                         nums = None
                     self._raise_if_cancelled(eid)
-                    self._payload[k] = {"gt": gt, "pred": pl, "nframes": int(T),
+                    task = self.pred(eid, cam_mode, hand_mode).get("_task")
+                    self._payload[k] = {"task": task, "gt": gt, "pred": pl, "nframes": int(T),
                                         "fps": fps, "ep_idx": raw["episode_index"],
                                         **self.item_context(eid),
                                         "metrics": met, "metrics_error": metrics_error,
                                         "nums": nums}
+                    if task:
+                        from mint.inference.checkpoints import update_task
+                        update_task(task["id"], status="completed", stage="viewer_ready")
                     self.set_prog(eid, stage="done")
         return self._payload[k]
 
+    @input_request
     def payload_gt(self, eid: int) -> dict:
         """「仅原始 GT」payload：只解 GT 世界系（手 + 相机轨迹），**不调用 predictor、不跑推理**。
         用于没 ckpt / 模型仍在后台加载 / 只想看原数据时快速查看。pred/metrics 恒为 None。"""
@@ -2338,6 +2387,7 @@ class Store:
         self._world_mp4[key] = cached
         return cached
 
+    @model_request
     def world_video(self, eid: int, *, layout: str = "overlay",
                     views: dict | None = None,
                     coord_mode: str = "z_up",
@@ -2463,6 +2513,7 @@ class Store:
         self._mujoco_mp4[key] = cached
         return cached
 
+    @model_request
     def mujoco_video(self, eid: int, source: str = "pred",
                      cam_mode: str = DEFAULT_CAM_MODE,
                      hand_mode: str = DEFAULT_HAND_MODE,
@@ -2590,6 +2641,7 @@ class Store:
         self._retarget_mp4[key] = cached
         return cached
 
+    @model_request
     def retarget_video(self, eid: int, source: str = "pred",
                        cam_mode: str = DEFAULT_CAM_MODE,
                        hand_mode: str = DEFAULT_HAND_MODE,
@@ -2791,6 +2843,7 @@ class Store:
                 raise
         return output_path
 
+    @model_request
     def export_video(self, eid: int, sources: list[str], *, mode: str,
                      layout: str = "overlay", content: str = "both",
                      cam_mode: str = DEFAULT_CAM_MODE,
@@ -3032,6 +3085,7 @@ class Store:
              message="独立视频包已生成" if separate else "导出视频已生成")
         return output
 
+    @input_request
     def mp4_gt(self, eid: int, mode: str, on_step=None,
                betas_mean: bool = False) -> Path:
         """「仅原始 GT」2D overlay（GT 手 + GT 相机，单画面），不跑推理。缓存名带 _gt，与 ckpt 无关。"""
@@ -3058,14 +3112,11 @@ class Store:
                     if on_step is not None:
                         on_step(int(done), int(total))
 
-                compare.render_gt_overlay(raw, out_path, mode=mode, fps=self.item_fps(eid),
-                                          on_step=report_step,
-                                          betas_mean=betas_mean,
-                                          gt_world_data=self._gtw.get((eid, betas_mean)),
-                                          presence_text="")
+                self._complete_overlay(compare.render_gt_overlay, out_path, raw, mode=mode, fps=self.item_fps(eid), on_step=report_step, betas_mean=betas_mean, gt_world_data=self._gtw.get((eid, betas_mean)), presence_text='')
             self._mp4[key] = out_path
         return self._mp4[key]
 
+    @model_request
     def mp4_pred(self, eid: int, mode: str,
                   cam_mode: str = DEFAULT_CAM_MODE,
                   hand_mode: str = DEFAULT_HAND_MODE,
@@ -3108,15 +3159,11 @@ class Store:
                     eid, cam_mode, hand_mode, pred_betas_mean)
                 hand_frame = (self.item_hand_frame(eid)
                               if self.is_no_truth(eid) else "camera")
-                compare.render_pred_overlay(
-                    raw["frames"], pred, out_path,
-                    mode=mode, fps=self.item_fps(eid),
-                    hand_frame=hand_frame,
-                    betas_mean=pred_betas_mean, fov_mean=pred_fov_mean,
-                    pred_world_data=pred_world, on_step=report_step)
+                self._complete_overlay(compare.render_pred_overlay, out_path, raw['frames'], pred, mode=mode, fps=self.item_fps(eid), hand_frame=hand_frame, betas_mean=pred_betas_mean, fov_mean=pred_fov_mean, pred_world_data=pred_world, on_step=report_step)
             self._mp4[key] = out_path
         return self._mp4[key]
 
+    @model_request
     def mp4(self, eid: int, mode: str, layout: str = "overlay", content: str = "both",
             cam_mode: str = DEFAULT_CAM_MODE, hand_mode: str = DEFAULT_HAND_MODE,
             gt_betas_mean: bool = False,
@@ -3156,13 +3203,7 @@ class Store:
                         if on_step is not None:
                             on_step(int(done), int(total))
 
-                    compare.render_pred_overlay(raw["frames"], pr, out_path,
-                                                mode=mode, fps=self.item_fps(eid),
-                                                hand_frame=self.item_hand_frame(eid),
-                                                betas_mean=pred_betas_mean, fov_mean=pred_fov_mean,
-                                                pred_world_data=self._prw.get(
-                                                    (eid, cam_mode, hand_mode, pred_betas_mean)),
-                                                on_step=report_step)
+                    self._complete_overlay(compare.render_pred_overlay, out_path, raw['frames'], pr, mode=mode, fps=self.item_fps(eid), hand_frame=self.item_hand_frame(eid), betas_mean=pred_betas_mean, fov_mean=pred_fov_mean, pred_world_data=self._prw.get((eid, cam_mode, hand_mode, pred_betas_mean)), on_step=report_step)
                 else:
                     pk = self.prog2d_key(eid, mode, layout, content, raw=False,
                                          cam_mode=cam_mode, hand_mode=hand_mode, pkey=pkey)
@@ -3172,15 +3213,7 @@ class Store:
                         if on_step is not None:
                             on_step(int(done), int(total))
 
-                    compare.render_2d(raw, self.pred(eid, cam_mode, hand_mode), out_path,
-                                      mode=mode, fps=self.item_fps(eid),
-                                      progress=True, layout=layout, content=content,
-                                      gt_betas_mean=gt_betas_mean, pred_betas_mean=pred_betas_mean,
-                                      pred_fov_mean=pred_fov_mean,
-                                      gt_world_data=self._gtw.get((eid, gt_betas_mean)),
-                                      pred_world_data=self._prw.get(
-                                          (eid, cam_mode, hand_mode, pred_betas_mean)),
-                                      on_step=report_step)
+                    self._complete_overlay(compare.render_2d, out_path, raw, self.pred(eid, cam_mode, hand_mode), mode=mode, fps=self.item_fps(eid), progress=True, layout=layout, content=content, gt_betas_mean=gt_betas_mean, pred_betas_mean=pred_betas_mean, pred_fov_mean=pred_fov_mean, gt_world_data=self._gtw.get((eid, gt_betas_mean)), pred_world_data=self._prw.get((eid, cam_mode, hand_mode, pred_betas_mean)), on_step=report_step)
             self._mp4[key] = out_path
         return self._mp4[key]
 

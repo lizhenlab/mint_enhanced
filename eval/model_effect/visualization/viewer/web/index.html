@@ -30,6 +30,11 @@
     <span id="info">选择输入与参数后，点击“开始推理”运行模型。</span>
   </div>
 
+  <details class="control-card" id="taskHistory" data-i18n-ignore>
+    <summary>Tasks &amp; recovery / 任务记录与恢复 <span id="cacheUsage"></span></summary>
+    <button type="button" id="refreshTasks">Refresh / 刷新</button>
+    <div id="taskList">Loading / 加载中</div>
+  </details>
   <div class="control-grid">
     <section class="control-card source-card">
       <div class="control-title"><span>01</span> 模型与样本</div>
@@ -72,6 +77,11 @@
         <button data-hand-mode="hard">原始硬切</button><button data-hand-mode="blend">线性融合</button><button data-hand-mode="smooth" class="on" title="线性融合后，使用 ego_pipeline 数据清理链的相机系 UKF+RTS 双向平滑">融合 + UKF平滑</button>
       </span></div>
       <div id="ukfControls" class="ukf-controls">
+        <div class="field" data-i18n-ignore><label for="smoothingPreset">平滑预设 / Smoothing preset</label><select id="smoothingPreset">
+          <option value="viewer">Viewer · 较轻平滑（0.7 / 0.5 / 0.3）</option>
+          <option value="production">Production · 生产参数（0.6 / 0.6 / 2）</option>
+          <option value="custom">Custom · 自定义</option>
+        </select></div>
         <div class="ukf-inputs">
           <label title="过程噪声；越大越允许快速运动，平滑越弱"><span>q</span><input id="ukfQ" type="number" min="0.1" max="2" step="0.05" value="0.7"></label>
           <label title="观测噪声；越大越不跟随逐帧预测，平滑越强"><span>r</span><input id="ukfR" type="number" min="0.1" max="2" step="0.05" value="0.5"></label>
@@ -237,7 +247,8 @@
       <label class="batch-path"><span>输出根目录</span><input id="batchOutput" type="text" placeholder="服务器绝对路径；按输入相对层级镜像保存"></label>
       <label><span>文件名模板</span><input id="batchName" type="text" value="{stem}_pred" title="支持 {stem} {name} {ext} {parent} {index}，例如 {index:04d}_{stem}"></label>
       <label><span>渲染模式</span><select id="batchMode"><option value="mesh">网格 Mesh</option><option value="skeleton">骨架 Skeleton</option><option value="mesh_skel" selected>网格 + 骨架</option></select></label>
-      <label><span>相机推理</span><select id="batchCam" title="Full 超过安全上限会失败；批量长视频请选择最大窗分窗"><option value="chunked">分窗 · Chunked</option><option value="max_chunked" selected>最大窗分窗 · Max Chunked</option><option value="streaming">流式 · Streaming</option><option value="full">整段 · Full</option></select></label>
+      <label data-i18n-ignore>Video view / 视频视角 <select id="batchVideoView"><option value="full">Full / 完整画面</option><option value="left">Left eye / 左眼</option><option value="right">Right eye / 右眼</option></select></label>
+<label><span>相机推理</span><select id="batchCam" title="Full 超过安全上限会失败；批量长视频请选择最大窗分窗"><option value="chunked">分窗 · Chunked</option><option value="max_chunked" selected>最大窗分窗 · Max Chunked</option><option value="streaming">流式 · Streaming</option><option value="full">整段 · Full</option></select></label>
       <label><span>手部拼窗 / 后处理</span><select id="batchHand"><option value="hard">原始硬切</option><option value="blend">线性融合</option><option value="smooth" selected>融合 + UKF平滑</option></select></label>
       <label><span>预测手形</span><select id="batchBetas"><option value="per_frame">每帧</option><option value="mean">整段平均</option></select></label>
       <label><span>预测内参</span><select id="batchFov"><option value="per_frame">每帧</option><option value="mean">整段平均</option></select></label>
@@ -288,6 +299,7 @@
           <span id="bfRemoteJob" class="bf-remote-job"></span>
         </div>
         <div id="bfLocalExecutor" class="bf-local-executor">
+          <label data-i18n-ignore>GPU policy / 资源策略 <select id="bfResourcePolicy"><option value="shared">Shared / 负载感知共享</option><option value="idle">Idle only / 仅空闲卡</option><option value="dedicated">Dedicated / 固定卡测评</option></select></label>
           <span id="bfGpus" class="bf-gpus" title="勾选参与并行评测的显卡（多卡=按序列分片并行，各卡各加载一份模型）"></span>
         </div>
         <div id="bfAliyunExecutor" class="bf-aliyun-executor" hidden>

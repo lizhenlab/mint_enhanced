@@ -84,7 +84,7 @@ let state = { eid:0, fps:30, mode:'mesh_skel', nframes:1,
               inferenceDirty:true,                  // 输入/推理参数已改，须显式点「开始推理」才能应用
               modelReady:false,                      // 模型是否加载完毕（未就绪时禁用「推理」）
               modelLoading:false,                    // 模型是否正在后台加载（加载中禁止推理）
-              modelDevices:[],                       // 加载模型时发现并常驻副本的推理设备
+              modelDevices:[],                       // 当前调度可用设备（固定模式为已加载设备）
               analysis:{running:false, stage:'idle', phase:'待分析', input_dir:'', workers:32, analysis_type:'video',
                         diversity_root:'', diversity_choices:[], input_dirs:[], selected_datasets:[], sample_files:24,
                         discovered:0, total:0, done:0, failed:0, current:'', error:null,
@@ -207,8 +207,11 @@ async function pollModelReady(){
       if(dynamic){
         const available = (gpu_scheduler.eligible_devices || []).length;
         const running = (gpu_scheduler.running_devices || []).length;
-        gpuStatus.textContent = `${gpu_scheduler.policy === 'shared' ? 'GPU 共享' : 'GPU 空闲'} ${available}/${gpu_scheduler.max_workers} · 工作 ${running} · 排队 ${gpu_scheduler.queued}`
-          + (!available ? ' · 等待显存/负载余量' : '');
+        const english = window.ViewerI18n && window.ViewerI18n.language === 'en';
+        const policyLabel = gpu_scheduler.policy === 'shared'
+          ? (english ? 'GPU shared' : 'GPU 共享') : (english ? 'GPU idle' : 'GPU 空闲');
+        gpuStatus.textContent = `${policyLabel} ${available}/${gpu_scheduler.max_workers} · ${english ? 'active' : '工作'} ${running} · ${english ? 'queued' : '排队'} ${gpu_scheduler.queued}`
+          + (!available ? (english ? ' · Waiting for GPU headroom' : ' · 等待显存/负载余量') : '');
         gpuStatus.title = gpu_scheduler.probe_error || (gpu_scheduler.gpus || []).map(g=>
           `${g.device}: ${g.reason || '可用'}${g.foreign_pids.length ? ' PID '+g.foreign_pids.join(',') : ''}`).join('\n');
       }
@@ -229,6 +232,7 @@ async function pollModelReady(){
   finally { modelReadyPolling = false; }
   if(delay !== null) modelReadyTimer = setTimeout(pollModelReady, delay);
 }
+window.addEventListener('viewer:languagechange', () => pollModelReady());
 
 const _rel = (base, name) => base ? base + '/' + name : name;
 const _enc = p => p.split('/').map(encodeURIComponent).join('/');   // 逐段编码,保留 '/' 给 <path:...>

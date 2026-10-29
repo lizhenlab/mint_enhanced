@@ -15,7 +15,7 @@
 
 ```bash
 ./run_mint.sh viewer --host 127.0.0.1 --port 8011 \
-  --devices shared --no-open --max-frames 450 --full-max-frames 32
+  --devices shared --no-open --full-max-frames 32
 ```
 
 在页面中选择 `checkpoints/model.safetensors` 并点击加载模型，再在右侧浏览服务器视频、点击开始推理。
@@ -36,7 +36,7 @@ ssh -N -L 18011:127.0.0.1:8011 USER@SERVER
 ```
 
 将 `USER@SERVER` 替换为实际登录地址，浏览器打开 <http://127.0.0.1:18011/>。
-`450` 是当前部署使用的临时帧数上限，需要在启动参数中显式传入；启动脚本没有将其写成全局默认值。
+服务默认处理全部源帧，不设每个视频总帧数上限；`--full-max-frames 32` 只控制单次模型窗口。
 
 ## 新机器准备
 
@@ -56,7 +56,7 @@ bash scripts/download_assets.sh
 
 ```bash
 python -m mint viewer --host 127.0.0.1 --port 8011 \
-  --devices shared --no-open --max-frames 450 --full-max-frames 32
+  --devices shared --no-open --full-max-frames 32
 ```
 
 渲染手部网格和骨架还需要自行准备已授权的 MANO 文件：
@@ -75,22 +75,12 @@ assets/mano/mano_left/MANO_LEFT.pkl
 这些文件用于排查环境差异，安装入口仍以官方安装说明为准。
 服务器上的 Decord 0.6.0 使用了本地修复 wheel：修正兼容性标签并重新生成 RECORD，未改变可执行文件内容；原包与修复包哈希保留在来源记录中，二进制 wheel 未上传。
 
-## 视频输入与当前内存限制
+## 完整长视频
 
-当前版本会先解码并缓存所选视频帧，再把整段原始分辨率帧转成浮点数，之后才缩放。
-`Max Chunked` 对后续 GPU 推理分窗，不会限制此前的 CPU 内存占用。
-因此，高分辨率、长视频应先缩小分辨率并分段；450 帧只是临时部署限制，不能保证任意分辨率的视频都能处理。
-本仓库本次上传没有修复该内存分配方式。
-
-对于左右并排的双目输入，应先选择一个视角。以下命令提取左眼、前 15 秒并缩小至 640 像素宽；
-仅在输入确实是等宽左右双目布局时使用：
-
-```bash
-ffmpeg -i /absolute/path/stereo_video.mp4 -map 0:V:0 -t 15 \
-  -vf 'crop=iw/2:ih:0:0,scale=640:-2,fps=30' \
-  -an -c:v libx264 -pix_fmt yuv420p -movflags +faststart \
-  /absolute/path/left_15s.mp4
-```
+采用分块解码、RGB 磁盘映射和逐窗预处理处理完整视频，详见 [长视频说明](docs/long-video.md)。
+裸视频默认保留源帧率与所有源帧。普通单目选择 Full，等宽左右双目在前端选择 Left eye 或 Right eye。
+原片保留不变；左右眼分别缓存、推理和导出，时间范围不截短。
+当前服务器有足够磁盘空间供原始双目视频的完整单眼 RGB 缓存使用。
 
 ## 已完成验证与边界
 

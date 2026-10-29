@@ -25,8 +25,10 @@ def inference_main(argv: list[str] | None = None) -> int:
         "--config", default="configs/training/mint_step2.yaml"
     )
     parser.add_argument("--devices", default="shared", help="shared: conservatively share up to 8 GPUs; idle: idle GPUs only; auto: fixed replicas on all visible GPUs; or cpu / 0,1")
-    parser.add_argument("--max-frames", type=int, default=160)
-    parser.add_argument("--target-fps", type=float, default=15.0)
+    parser.add_argument("--max-frames", type=int, default=None, help="Optional explicit frame limit; default processes the full video")
+    parser.add_argument("--target-fps", type=float, default=0.0, help="0 preserves every source frame; positive values request timeline sampling")
+    parser.add_argument("--video-view", choices=('full', 'left', 'right'), default='full', help="Choose a view only for side-by-side stereo inputs")
+    parser.add_argument("--frame-cache-dir", default=None, help="Disk directory for decoded long-video frames")
     parser.add_argument("--window", type=int, default=None)
     parser.add_argument(
         "--window-batch-size", type=int, default=None,
@@ -55,7 +57,12 @@ def inference_main(argv: list[str] | None = None) -> int:
     source = Path(args.input).expanduser().resolve()
     output = Path(args.output).expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
-    video = read_video(source, max_frames=args.max_frames, target_fps=args.target_fps)
+    def decode_progress(done, total):
+        if done == total or done % max(1, total // 20) < 96:
+            print(f"[decode] {done}/{total}", flush=True)
+    video = read_video(source, max_frames=args.max_frames, target_fps=args.target_fps,
+                       view=args.video_view, cache_dir=args.frame_cache_dir,
+                       on_step=decode_progress)
     print(f"Decoded {len(video.frames_rgb)} frames at {video.fps:.2f} FPS from {source.name}")
 
     started = time.perf_counter()
@@ -87,6 +94,8 @@ def inference_main(argv: list[str] | None = None) -> int:
     elapsed = time.perf_counter() - started
 
     arrays = {key: np.asarray(value) for key, value in prediction.items() if not key.startswith("_")}
+    arrays['source_frame_indices'] = video.frame_indices
+    arrays['fps'] = np.asarray(video.fps)
     np.savez_compressed(output / "prediction.npz", **arrays)
     if not args.no_render:
         from mint.visualization.render import render_prediction
@@ -103,6 +112,12 @@ def inference_main(argv: list[str] | None = None) -> int:
         "input_name": source.name,
         "frames": len(video.frames_rgb),
         "fps": video.fps,
+        "source_frames": video.source_frames,
+        "source_fps": video.source_fps,
+        "video_view": video.view,
+        "frame_cache": str(video.frames_rgb.filename) if isinstance(video.frames_rgb, np.memmap) else None,
+        "source_first_frame": int(video.frame_indices[0]),
+        "source_last_frame": int(video.frame_indices[-1]),
         "duration_seconds": round(elapsed, 4),
         "model_load_seconds": round(load_seconds, 4),
         "inference_seconds": round(inference_seconds, 4),

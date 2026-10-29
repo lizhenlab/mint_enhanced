@@ -390,8 +390,8 @@ def viewer_main(argv: list[str] | None = None) -> int:
         "--warmup-passes", type=int, default=2,
         help="Compile/CUDA Graph warmup passes when acceleration is enabled",
     )
-    parser.add_argument("--max-frames", type=int, default=160)
-    parser.add_argument("--target-fps", type=float, default=15.0)
+    parser.add_argument("--max-frames", type=int, default=None)
+    parser.add_argument("--target-fps", type=float, default=0.0)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--open", action="store_true", dest="open_browser")

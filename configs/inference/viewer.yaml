@@ -5,8 +5,8 @@ model:
   checkpoint: checkpoints/model.safetensors
   devices: shared
 inference:
-  max_frames: 160
-  target_fps: 15.0
+  max_frames: null
+  target_fps: 0.0
   camera_mode: chunked
   hand_mode: smooth
   compile_mode: off

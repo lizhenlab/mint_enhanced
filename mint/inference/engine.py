@@ -7,6 +7,7 @@ import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -24,9 +25,10 @@ from .acceleration import (
 )
 from .base import FullSequenceTooLong, InferenceCancelled  # noqa: F401
 from mint.inference.idle_engine import IdleGpuMixin
+from mint.inference.window_frames import WindowFrames
 
 
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:False")
 
 REPO_DIR = Path(__file__).resolve().parents[2]
 MODEL_TRAIN = REPO_DIR / "model_train"
@@ -571,7 +573,8 @@ class StudentEngine(IdleGpuMixin):
             model_index, indices, clips_cpu = shard
             model, replica_device = models[model_index], devices[model_index]
             cuda_replica = replica_device.type == "cuda"
-            with locks[model_index], torch.inference_mode():
+            device_context = torch.cuda.device(replica_device) if cuda_replica else nullcontext()
+            with locks[model_index], device_context, torch.inference_mode():
                 cache_state = None
                 backbone = getattr(model, "backbone", None)
                 aggregator = getattr(backbone, "aggregator", None)
@@ -651,7 +654,6 @@ class StudentEngine(IdleGpuMixin):
                 preprocessed: bool = False) -> dict:
         import time
         import torch
-        from data.transforms import preprocess_frames
 
         from .hand_smoothing import parse_hand_smoothing_mode
         requested_hand_mode = str(hand_mode)
@@ -682,7 +684,7 @@ class StudentEngine(IdleGpuMixin):
                 )
             x = frames_uint8.contiguous()
         else:
-            x = preprocess_frames(frames_uint8, self.size_hw)   # [N,3,H,W] float[0,1]
+            x = WindowFrames(frames_uint8, self.size_hw, cancel_check, InferenceCancelled)
         preprocess_s = time.perf_counter() - preprocess_started
         N = x.shape[0]
         cuda = self.device.type == "cuda"
@@ -748,6 +750,8 @@ class StudentEngine(IdleGpuMixin):
                 "full_max_frames": self.full_max_frames,
                 **self.acceleration_metadata,
             }
+            if isinstance(x, WindowFrames):
+                res["_timings"].update(x.metadata)
             return res
 
 
@@ -766,7 +770,7 @@ class StudentEngine(IdleGpuMixin):
             t0 = time.perf_counter()
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=cuda):
                 sout = self.model.backbone.inference_streaming(
-                    x.unsqueeze(0).to(self.device),
+                    x.unsqueeze(0),
                     num_scale_frames=min(W, N),
                     output_device=torch.device("cpu"))
             if cuda:
@@ -871,6 +875,8 @@ class StudentEngine(IdleGpuMixin):
                 "hand_postprocess": "ukf_cam_rts" if hand_smoothed else "none",
                 **self.acceleration_metadata,
             }
+            if isinstance(x, WindowFrames):
+                res["_timings"].update(x.metadata)
             return res
 
 
@@ -1061,6 +1067,8 @@ class StudentEngine(IdleGpuMixin):
             "full_max_frames": self.full_max_frames,
             **self.acceleration_metadata,
         }
+        if isinstance(x, WindowFrames):
+            res["_timings"].update(x.metadata)
         return res
 
 

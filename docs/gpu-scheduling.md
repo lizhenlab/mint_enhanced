@@ -6,11 +6,11 @@
 
 ```bash
 ./run_mint.sh viewer --host 127.0.0.1 --port 8011 \
-  --devices shared --no-open --max-frames 450 --full-max-frames 32
+  --devices shared --no-open --full-max-frames 32
 
 ./run_mint.sh infer --input /path/to/short_video.mp4 \
   --checkpoint checkpoints/model.safetensors \
-  --output artifacts/prediction --devices shared --max-frames 450
+  --output artifacts/prediction --devices shared
 ```
 
 ## 调度行为
@@ -34,7 +34,7 @@
 
 ```bash
 CUDA_VISIBLE_DEVICES=2,3,5,7 ./run_mint.sh viewer --devices shared \
-  --host 127.0.0.1 --port 8011 --no-open --max-frames 450
+  --host 127.0.0.1 --port 8011 --no-open
 ```
 
 此时状态中的 `cuda:0` 对应可见列表中的第一张卡，具体物理 UUID 也会显示在状态接口中。
@@ -58,7 +58,7 @@ CUDA_VISIBLE_DEVICES=2,3,5,7 ./run_mint.sh viewer --devices shared \
 
 ```bash
 MINT_GPU_POLL_SECONDS=3 MINT_GPU_MIN_FREE_MIB=16000 \
-  ./run_mint.sh viewer --devices shared --no-open --max-frames 450
+  ./run_mint.sh viewer --devices shared --no-open
 ```
 
 ## 查看状态与停止
@@ -74,7 +74,7 @@ HTTP 接口：
 
 ## 内存边界
 
-动态调度不改变原有整段视频 CPU 解码和浮点预处理方式。高分辨率长视频仍应先缩小、分段；部署保留的 450 帧限制也不能保证任意分辨率都安全。
+长视频已改为分块解码、RGB 磁盘映射和逐窗预处理，默认不截断视频。详见 [完整长视频处理](long-video.md)。
 左右双目视频应先选取一个视角，参见 [部署说明](../DEPLOYMENT.md)。
 
 ## 验证

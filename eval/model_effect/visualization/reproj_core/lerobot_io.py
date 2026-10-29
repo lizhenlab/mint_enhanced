@@ -117,36 +117,13 @@ def _write_episode_cache(path: Path, table, signature: dict) -> None:
             pass
 
 
-def _read_frames_chunked(vr, indices, on_step=None, cancel_check=None) -> np.ndarray:
-    """单 reader 按 _DECODE_CHUNK 分批 get_batch 抽帧、逐批可选回调进度(done,total)，末尾 cat。
-
-    分批读既能给前端**平滑**的确定进度，又保留每批批量解码效率；只索引一次。
-    cancel_check()->bool 在每批解码前后检查；单个在途 get_batch 无法强制中断。
-    on_step/cancel_check 均为空（如离线 hand_reproj）时一次读完。"""
-    indices = list(indices)
-    T = len(indices)
-    _raise_if_cancelled(cancel_check, "视频解码")
-    if T == 0:
-        return np.empty((0, 0, 0, 3), dtype=np.uint8)
-    if (on_step is None and cancel_check is None) or T <= _DECODE_CHUNK:
-        arr = vr.get_batch(indices).asnumpy()
-        _raise_if_cancelled(cancel_check, "视频解码")
-        if on_step:
-            try: on_step(T, T)
-            except Exception: pass   # noqa: BLE001  进度回调不影响读帧
-        return arr
-    parts, done = [], 0
-    for i in range(0, T, _DECODE_CHUNK):
-        _raise_if_cancelled(cancel_check, "视频解码")
-        seg = indices[i:i + _DECODE_CHUNK]
-        parts.append(vr.get_batch(seg).asnumpy())
-        _raise_if_cancelled(cancel_check, "视频解码")
-        done += len(seg)
-        if on_step is not None:
-            try: on_step(done, T)
-            except Exception: pass   # noqa: BLE001
-    _raise_if_cancelled(cancel_check, "视频解码")
-    return np.concatenate(parts, axis=0)
+def _read_frames_chunked(vr, indices, on_step=None, cancel_check=None, source_path=None) -> np.ndarray:
+    """Decode in bounded blocks; large sequences use a reusable disk-backed array."""
+    from mint.inference.frame_store import read_frames
+    from inference.base import InferenceCancelled
+    return read_frames(vr, indices, source_path=source_path,
+                       on_step=on_step, cancel_check=cancel_check,
+                       cancelled_error=InferenceCancelled)
 
 
 def find_dataset(root: Path) -> Path | None:
@@ -449,7 +426,7 @@ def load_episode_raw(ep: dict, max_frames: int | None = None, on_step=None,
                 f"（episode {ep['episode_index']}；疑似视频截断或 video_key 与数据不匹配）。"
             )
         return _read_frames_chunked(
-            vr, vframes, on_step=on_step, cancel_check=cancel_check
+            vr, vframes, on_step=on_step, cancel_check=cancel_check, source_path=ep["video"]
         )
 
     # Parquet 和 H.264 位于不同文件，二者并行可隐藏小表读取/Arrow 解包的等待。
@@ -536,22 +513,9 @@ def load_episode_raw(ep: dict, max_frames: int | None = None, on_step=None,
 
 def read_video_frames(path: str, fps: float | None = None, max_frames: int | None = None,
                       on_step=None, cancel_check=None) -> np.ndarray:
-    """裸视频抽帧（无 GT 分支用）。fps 给定则按目标帧率均匀抽帧，否则取全部帧。
-
-    on_step(done,total)：可选，分批读时逐批上报进度（网页端加载进度条用）；
-    cancel_check()->bool：每个解码块前后检查。返回 (T,H0,W0,3) uint8 RGB。"""
-    from decord import VideoReader
-    _raise_if_cancelled(cancel_check, "视频解码")
-    vr = VideoReader(path, num_threads=_DECORD_THREADS)   # 单 reader（索引一次）+ 多线程解码
-    n = len(vr)
-    if fps and fps > 0:
-        src_fps = float(vr.get_avg_fps()) or 30.0
-        step = max(1, int(round(src_fps / float(fps))))
-        idx = list(range(0, n, step))
-    else:
-        idx = list(range(n))
-    if max_frames is not None:
-        idx = idx[: int(max_frames)]
-    return _read_frames_chunked(
-        vr, idx, on_step=on_step, cancel_check=cancel_check
-    )
+    """Read the full timeline with bounded decoding and optional explicit sampling."""
+    from mint.inference.video import read_video
+    from inference.base import InferenceCancelled
+    return read_video(path, max_frames=max_frames, target_fps=fps,
+                      on_step=on_step, cancel_check=cancel_check,
+                      cancelled_error=InferenceCancelled).frames_rgb

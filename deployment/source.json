@@ -5,7 +5,7 @@
   "recorded_date": "2026-10-29",
   "upstream_history_preserved": true,
   "core_algorithm_changes": false,
-  "launcher_sha256": "c227ad2f6680d8a5dc540fb183b4372c521c0b6d27ac78e09ff54fcf105fda11",
+  "launcher_sha256": "7c457d1f97872dd75ecb67fec1461e32df350b373584e3bf2c7e38bc7605bd9b",
   "checkpoint": {
     "repository": "ZZJAsher/mint_v1",
     "file": "model.safetensors",
@@ -20,6 +20,7 @@
     "wheel_included": false
   },
   "runtime_enhancements": [
-    "Dynamic idle/shared scheduling of up to 8 visible CUDA GPUs with cooperative leases, memory budgets and load-aware yielding"
+    "Dynamic idle/shared scheduling of up to 8 visible CUDA GPUs with cooperative leases, memory budgets and load-aware yielding",
+    "Full-video native-frame decoding with disk-backed RGB caches, per-window preprocessing and batched MANO"
   ]
 }

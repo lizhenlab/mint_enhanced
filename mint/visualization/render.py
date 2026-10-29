@@ -136,6 +136,9 @@ def render_prediction(
                 rendered, [("", left_present, right_present)]
             )
             writer.write(rendered)
+            if index % 64 == 63:
+                from mint.inference.frame_store import release_mapped_pages
+                release_mapped_pages(frames_rgb)
             if progress is not None:
                 progress(index + 1, frame_count)
     finally:

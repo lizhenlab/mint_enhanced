@@ -59,7 +59,7 @@ def main() -> int:
                         "episode（有 GT），进入普通目录→点视频文件加载（无真值，仅预测）")
     p.add_argument("--hand_frame", choices=["camera", "world"], default="camera",
                    help="裸视频项预测手的坐标系（当前 camera 系 ckpt 用 camera；老 world 系 ckpt 用 world；lerobot 项忽略）")
-    p.add_argument("--fps", type=float, default=30.0, help="裸视频项抽帧/回放帧率（默认 30；lerobot 项忽略，读各自 info.json）")
+    p.add_argument("--fps", type=float, default=0.0, help="裸视频默认 0=保留源视频全部帧及原帧率；正数为目标抽帧帧率；lerobot 读 info.json")
     p.add_argument("--model", default="lingbotmap", help="推理模型（inference.registry 注册名，如 lingbotmap / vggt）")
     p.add_argument("--config", default=None, help="训练 config（取 model 结构 + size_hw）；不给则用该模型默认")
     p.add_argument(
@@ -86,7 +86,7 @@ def main() -> int:
         "--fp8-mode", choices=("dynamic",), default=None,
         help="可选 torchao FP8 dynamic activation + weight，仅量化 aggregator 大 Linear",
     )
-    p.add_argument("--max-frames", type=int, default=None, help="每 episode 最多帧数（控显存/耗时，默认全量）")
+    p.add_argument("--max-frames", type=int, default=None, help="可选手动截取前 N 帧；不传则处理完整视频，不设默认总帧数上限")
     p.add_argument(
         "--cache-dir", default=os.environ.get("VIEWER_CACHE_DIR"),
         help="交互视频/预测缓存根目录；默认使用本机临时盘 /tmp/wuji-viewer-cache，"

@@ -183,8 +183,8 @@ function updateLoadBtn(){
     btn.title = state.modelReady ? '显式运行当前输入和设置；其他选择操作不会自动推理'
                                  : '请先点 [⬇ 加载模型] 载入模型后再推理';
   }
-  for(const id of ['#camMode','#gtBetas','#predBetas','#predFov','#ukfQ','#ukfR','#ukfBeta']){
-    const el=$(id); if(el) el.disabled=state.loading;
+  for(const id of ['#camMode','#gtBetas','#predBetas','#predFov','#ukfQ','#ukfR','#ukfBeta','#videoView']){
+    const el=$(id); if(el) el.disabled=state.loading || (id==='#videoView' && !state.no_truth);
   }
   document.querySelectorAll('#handModeSeg button').forEach(el=>{ el.disabled=state.loading; });
   if(typeof renderBatch === 'function') renderBatch();
@@ -245,6 +245,7 @@ let _dsScanToken = 0;         // 数据集枚举轮询代次：每次进目录 +
 // 按当前加载/选择项切换「模式相关」UI：无真值(裸视频)隐藏 布局/说明/仅看原始，固定 overlay；有真值全开并恢复偏好。
 function applyModeUI(nt){
   state.no_truth = nt;
+  const viewSelector=$('#videoView'); if(viewSelector) viewSelector.disabled=state.loading || !nt;
   state.layout = nt ? 'overlay' : state.layoutPref;
   const rawButton=$('#loadRawBtn'); if(rawButton) rawButton.style.display=nt?'none':'';
   const mw = $('#metricsWrap'); if(mw && nt) mw.style.display = 'none';   // 无真值无 loss；有真值时 loadEpisode 里按需显隐
@@ -317,8 +318,14 @@ async function resolveEid(){
     const {eid} = await getJSON('/api/lerobot_eid?path=' + _enc(curDatasetRel) + '&ep=' + ep);
     return eid;
   }
+  if(state.eid != null && state.no_truth && state.vidName){
+    const view = $('#videoView') ? $('#videoView').value : 'full';
+    const selected = await getJSON('/api/video_eid?eid='+state.eid+'&view='+encodeURIComponent(view));
+    return selected.eid;
+  }
   return state.eid;
 }
+if($('#videoView')) $('#videoView').addEventListener('change', () => queueInference('视频视角已修改，点击开始推理后生效；保留完整时间范围'));
 
 // 输入目录浏览器（**绝对路径**，可上溯任意系统路径）：面包屑各段可点回退 +「⬆ 上一级」；
 // 到 lerobot 目录经 onInputDir 出 Episode 选择器，普通目录列视频文件；点击只选中，不触发推理。

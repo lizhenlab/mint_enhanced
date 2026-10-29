@@ -234,6 +234,11 @@ def run_mano(trans: np.ndarray, rot: np.ndarray, hand_pose: np.ndarray,
     device = _get_device()
 
     T = trans.shape[0]
+    batch = max(1, int(os.environ.get('MINT_MANO_BATCH_SIZE', '128')))
+    if T > batch:
+        outputs = [run_mano(trans[i:i+batch], rot[i:i+batch], hand_pose[i:i+batch],
+                            betas[i:i+batch], is_right) for i in range(0, T, batch)]
+        return tuple(np.concatenate([part[j] for part in outputs], axis=0) for j in (0, 1))
     trans = np.nan_to_num(trans, nan=0.0)
     rot = np.nan_to_num(rot, nan=0.0)
     hand_pose = np.nan_to_num(hand_pose, nan=0.0)
@@ -262,6 +267,10 @@ def compute_J0_canon(betas: np.ndarray, is_right: bool) -> np.ndarray:
 
     b = np.nan_to_num(np.asarray(betas, dtype=np.float32), nan=0.0).reshape(-1, 10)
     N = b.shape[0]
+    batch = max(1, int(os.environ.get('MINT_MANO_BATCH_SIZE', '128')))
+    if N > batch:
+        return np.concatenate([compute_J0_canon(b[i:i+batch], is_right)
+                               for i in range(0, N, batch)], axis=0)
     with torch.no_grad():
         g = torch.eye(3, device=device).view(1, 1, 3, 3).expand(N, 1, 3, 3).contiguous()
         h = torch.eye(3, device=device).view(1, 1, 3, 3).expand(N, 15, 3, 3).contiguous()

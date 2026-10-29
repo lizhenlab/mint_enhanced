@@ -85,3 +85,5 @@ docs/dataset-card/
 .env.*
 !.env.example
 .DS_Store
+
+!tests/test_long_video.py

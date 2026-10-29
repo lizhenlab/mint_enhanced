@@ -214,6 +214,9 @@ def render_compare_overlay(raw: dict, pred: dict, out_path, *,
     vw = draw.H264PipeWriter(out_path, float(fps), (W * 2 + sep, H))
     step = max(1, T // 10)
     for i in range(T):
+        if i % 64 == 63:
+            from mint.inference.frame_store import release_mapped_pages
+            release_mapped_pages(frames)
         base_bgr = to_bgr(frames[i])
         # 左：GT（GT 相机 + GT 手，按逐帧 kept）
         gt_sides = panel_sides(gt_world, i, gt_kept[i, 0], gt_kept[i, 1])

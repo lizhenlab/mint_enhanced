@@ -12,6 +12,7 @@ import torch
 
 from mint.inference.engine import StudentEngine as CliEngine, _ensure_model_train_on_path
 from mint.inference.gpu_scheduler import GpuSample, IdleGpuScheduler
+from mint.inference.window_frames import WindowFrames
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'eval/model_effect'))
 from inference.engine import StudentEngine as ViewerEngine
@@ -58,6 +59,29 @@ def make_engine(cls):
 
 
 class EngineTests(unittest.TestCase):
+    def test_raw_video_over_450_frames_matches_existing_preprocessing_and_stitching(self):
+        from data.transforms import preprocess_frames
+        raw = np.arange(600 * 8 * 12 * 3, dtype=np.int64).astype(np.uint8).reshape(600, 8, 12, 3)
+        reference = preprocess_frames(raw, (2, 2))
+        for cls in [CliEngine, ViewerEngine]:
+            with self.subTest(engine=cls.__module__):
+                expected = make_engine(cls).predict(reference, preprocessed=True, hand_mode='blend')
+                actual = make_engine(cls).predict(raw, hand_mode='blend')
+                self.assertEqual(len(actual['hand']), 600)
+                for key in ['pose_enc', 'hand', 'hand_confidence']:
+                    np.testing.assert_allclose(actual[key], expected[key], rtol=1e-6, atol=1e-6)
+                self.assertEqual(actual['_timings']['preprocess_strategy'], 'per_window')
+                self.assertLessEqual(actual['_timings']['preprocess_peak_native_frames'], 4)
+
+    def test_native_conversion_chunk_respects_memory_budget(self):
+        from data.transforms import preprocess_frames
+        raw = np.arange(40 * 200 * 200 * 3, dtype=np.int64).astype(np.uint8).reshape(40, 200, 200, 3)
+        with mock.patch.dict('os.environ', {'MINT_PREPROCESS_MEMORY_MIB': '1'}):
+            source = WindowFrames(raw, (2, 2))
+            result = source[:]
+        np.testing.assert_allclose(result.numpy(), preprocess_frames(raw, (2, 2)).numpy(), rtol=1e-6, atol=1e-6)
+        self.assertEqual(source.metadata['preprocess_peak_native_frames'], 1)
+
     def test_mano_cpu_override_avoids_default_cuda_device(self):
         from mint.visualization import mano as cli_mano
         from visualization.reproj_core import mano as viewer_mano

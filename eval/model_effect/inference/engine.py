@@ -17,6 +17,7 @@ import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -32,9 +33,10 @@ from .acceleration import (
 )
 from .base import FullSequenceTooLong, InferenceCancelled  # noqa: F401
 from mint.inference.idle_engine import IdleGpuMixin
+from mint.inference.window_frames import WindowFrames
 
-# Viewer 通常在本模块之后才首次初始化 CUDA；可扩展 segment 能减少长序列不同尺寸临时张量造成的碎片。
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+# Fixed-size windows use standard allocations; avoid VMM remapping during replica eviction.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:False")
 
 REPO_DIR = Path(__file__).resolve().parents[3]   # inference/ -> model_effect -> eval -> <repo>
 MODEL_TRAIN = REPO_DIR / "model_train"
@@ -579,7 +581,8 @@ class StudentEngine(IdleGpuMixin):
             model_index, indices, clips_cpu = shard
             model, replica_device = models[model_index], devices[model_index]
             cuda_replica = replica_device.type == "cuda"
-            with locks[model_index], torch.inference_mode():
+            device_context = torch.cuda.device(replica_device) if cuda_replica else nullcontext()
+            with locks[model_index], device_context, torch.inference_mode():
                 cache_state = None
                 backbone = getattr(model, "backbone", None)
                 aggregator = getattr(backbone, "aggregator", None)
@@ -714,7 +717,7 @@ class StudentEngine(IdleGpuMixin):
                 )
             x = frames_uint8.contiguous()
         else:
-            x = preprocess_frames(frames_uint8, self.size_hw)   # [N,3,H,W] float[0,1]
+            x = WindowFrames(frames_uint8, self.size_hw, cancel_check, InferenceCancelled)
         preprocess_s = time.perf_counter() - preprocess_started
         N = x.shape[0]
         cuda = self.device.type == "cuda"
@@ -780,6 +783,8 @@ class StudentEngine(IdleGpuMixin):
                 "full_max_frames": self.full_max_frames,
                 **self.acceleration_metadata,
             }
+            if isinstance(x, WindowFrames):
+                res["_timings"].update(x.metadata)
             return res
 
         # ── cam_mode="streaming":相机走 backbone 原生流式(整段因果+KV cache,不分窗拼接),
@@ -799,7 +804,7 @@ class StudentEngine(IdleGpuMixin):
             t0 = time.perf_counter()
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=cuda):
                 sout = self.model.backbone.inference_streaming(
-                    x.unsqueeze(0).to(self.device),
+                    x.unsqueeze(0),
                     num_scale_frames=min(W, N),
                     output_device=torch.device("cpu"))
             if cuda:
@@ -901,6 +906,8 @@ class StudentEngine(IdleGpuMixin):
                 "hand_postprocess": "ukf_cam_rts" if hand_smoothed else "none",
                 **self.acceleration_metadata,
             }
+            if isinstance(x, WindowFrames):
+                res["_timings"].update(x.metadata)
             return res
 
         # blend/smooth 使用多帧重叠和完整末窗；hard 保留原始硬切。
@@ -1094,6 +1101,8 @@ class StudentEngine(IdleGpuMixin):
             "full_max_frames": self.full_max_frames,
             **self.acceleration_metadata,
         }
+        if isinstance(x, WindowFrames):
+            res["_timings"].update(x.metadata)
         return res
 
 

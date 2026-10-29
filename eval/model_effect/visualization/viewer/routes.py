@@ -573,6 +573,19 @@ def create_app(store) -> Flask:
     def api_logdiff_status():
         return jsonify(**store.logdiff_status())
 
+    @app.get('/api/video_eid')
+    def api_video_view():
+        eid = request.args.get('eid', type=int)
+        if eid is None or not 0 <= eid < store.n_items():
+            abort(400, 'Select a video first')
+        item = store.item(eid)
+        if item['kind'] != 'video':
+            return jsonify(eid=eid)
+        view = request.args.get('view', 'full')
+        if view not in {'full', 'left', 'right'}:
+            abort(400, 'Video view must be full, left or right')
+        return jsonify(eid=store.video_eid(item['path'], view=view), video_view=view)
+
     # ---- episode 元信息 / 世界系 payload / 进度 ----
     @app.get("/api/episode/<int:eid>")
     def api_episode(eid: int):
@@ -639,6 +652,7 @@ def create_app(store) -> Flask:
         # 前端在按钮旁显示「未加载/加载中/就绪」（默认不加载；须手动点[加载模型]才载入；加载中禁止推理）。
         return jsonify(ready=store.predictor_ready(), loading=store.loader_active(),
                        devices=store.predictor_devices(),
+                       max_frames=getattr(store, 'max_frames', None),
                        gpu_scheduler=getattr(getattr(store, "predictor", None), "gpu_scheduler_status", {"policy": "unloaded"}),
                        full_max_frames=getattr(
                            store, "predictor_full_max_frames", lambda: None

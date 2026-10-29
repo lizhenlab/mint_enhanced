@@ -191,7 +191,7 @@ class Store:
                  loss_cfg: dict | None = None, config_path: str | None = None,
                  window: int | None = None, full_max_frames: int | None = None,
                  ckpt_path: str | None = None,
-                 default_fps: float = 30.0, default_hand_frame: str = "camera",
+                 default_fps: float = 0.0, default_hand_frame: str = "camera",
                  init_config: str | None = None, model: str = "lingbotmap",
                  inference_devices="shared", inference_compile_mode=None,
                  inference_fp8_mode=None, batch_workers: int = 2):
@@ -1767,12 +1767,15 @@ class Store:
                 self._item_index[key] = eid
             return eid
 
-    def video_eid(self, path_abs: str) -> int:
+    def video_eid(self, path_abs: str, view: str = 'full') -> int:
         """裸视频绝对路径 → eid（无真值项）。浏览目录时给每个视频登记，避免启动全盘扫描。"""
         path_abs = str(Path(path_abs).resolve())
-        return self._register(("video", path_abs),
+        if view not in {'full', 'left', 'right'}:
+            raise ValueError('Video view must be full, left or right')
+        return self._register(("video", path_abs, view),
                               {"kind": "video", "path": path_abs,
-                               "fps": self.default_fps, "hand_frame": self.default_hand_frame})
+                               "fps": self.default_fps, "target_fps": self.default_fps,
+                               "video_view": view, "hand_frame": self.default_hand_frame})
 
     def ensure_dataset(self, ds_dir) -> dict:
         """定位/枚举某 lerobot 数据集并缓存 {"eps":[...], "fps":float}（幂等、线程安全、懒加载）。"""
@@ -1876,7 +1879,7 @@ class Store:
         return self._items[eid]["kind"] != "lerobot"
 
     def item_fps(self, eid: int) -> float:
-        return float(self._items[eid]["fps"])
+        return float(self._items[eid]["fps"] or 30.0)
 
     def item_hand_frame(self, eid: int) -> str:
         return self._items[eid].get("hand_frame", self.default_hand_frame)
@@ -1886,7 +1889,9 @@ class Store:
         item = self.item(eid)
         if item["kind"] == "video":
             source = Path(item["path"])
-            return {"source_path": str(source), "source_name": source.name,
+            view = item.get('video_view', 'full')
+            name = source.name if view == 'full' else source.name + f' [{view}]'
+            return {"source_path": str(source), "source_name": name, "video_view": view,
                     "episode_ordinal": None, "episode_total": None}
         if item["kind"] == "benchmark":
             return {
@@ -2075,11 +2080,19 @@ class Store:
                     it = self._items[eid]
                     if it["kind"] == "video":       # 裸视频：只抽帧，无 GT hands/相机
                         vp = it["path"]             # eid 由文件浏览时 video_eid 登记
-                        frames = lerobot_io.read_video_frames(
-                            vp, fps=it["fps"], max_frames=self.max_frames, on_step=cb,
-                            cancel_check=cancel_check)
+                        from mint.inference.video import read_video
+                        from inference.base import InferenceCancelled
+                        batch = read_video(
+                            vp, target_fps=it.get('target_fps', it['fps']),
+                            max_frames=self.max_frames, on_step=cb,
+                            view=it.get('video_view', 'full'), cancel_check=cancel_check,
+                            cancelled_error=InferenceCancelled)
+                        frames = batch.frames_rgb
+                        it['fps'] = batch.fps
                         self._raw[eid] = {"episode_index": eid, "T": int(frames.shape[0]),
                                           "frames": frames, "cam_pose_enc": None,
+                                          "fps": batch.fps, "source_frames": batch.source_frames,
+                                          "source_indices": batch.frame_indices, "video_view": batch.view,
                                           "video": vp, "hand_frame": it["hand_frame"]}
                     elif it["kind"] == "benchmark":
                         image_kwargs = {"on_step": cb}
@@ -2176,12 +2189,12 @@ class Store:
                 if k not in self._payload:
                     from ..reproj_core import geometry as geom
                     from ..render import world as worldpl
-                    fps = self.item_fps(eid)
                     self._raise_if_cancelled(eid)
                     self.ensure_assets()                                # MANO 权重（渲染/解算用）
                     self._raise_if_cancelled(eid)
                     self.set_prog(eid, stage="load", done=0, total=0)   # 读数据/抽帧
                     raw = self.raw(eid, cancel_check=lambda: self.cancelled(eid))
+                    fps = self.item_fps(eid)
                     self._raise_if_cancelled(eid)                       # load 后取消点（前向前）
                     T, H, W = raw["frames"].shape[:3]
                     # 无真值：无 GT 世界系；只出预测（相机也用预测的）。

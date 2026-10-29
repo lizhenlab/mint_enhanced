@@ -5,8 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-import cv2
 import numpy as np
+
+from .frame_store import read_frames, sample_indices
 
 
 @dataclass(frozen=True)
@@ -17,48 +18,34 @@ class VideoBatch:
     source_frames: int
     width: int
     height: int
+    frame_indices: np.ndarray | None = None
+    view: str = 'full'
 
 
-def read_video(path: str | Path, max_frames: int | None = None, target_fps: float | None = None) -> VideoBatch:
-    """Decode a video into RGB frames while enforcing explicit resource limits."""
+def read_video(path: str | Path, max_frames: int | None = None, target_fps: float | None = None,
+               *, view='full', cache_dir=None, on_step=None, cancel_check=None,
+               cancelled_error=None) -> VideoBatch:
+    """Decode the whole timeline; long RGB sequences remain on disk instead of RAM."""
+    from decord import VideoReader
     source = Path(path).expanduser().resolve()
     if not source.is_file():
         raise FileNotFoundError(f"Video does not exist: {source}")
-    capture = cv2.VideoCapture(str(source))
-    if not capture.isOpened():
-        raise ValueError(f"OpenCV cannot decode this video: {source.name}")
-
-    source_fps = float(capture.get(cv2.CAP_PROP_FPS) or 30.0)
-    source_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    requested_fps = source_fps if not target_fps or target_fps >= source_fps else float(target_fps)
-    stride = max(1, int(round(source_fps / requested_fps)))
-    output_fps = source_fps / stride
-
-    frames: list[np.ndarray] = []
-    source_index = 0
-    try:
-        while True:
-            ok, frame_bgr = capture.read()
-            if not ok:
-                break
-            if source_index % stride == 0:
-                frames.append(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
-                if max_frames is not None and len(frames) >= max_frames:
-                    break
-            source_index += 1
-    finally:
-        capture.release()
-
-    if not frames:
-        raise ValueError(f"No frames were decoded from {source.name}")
+    import os
+    reader = VideoReader(str(source), num_threads=int(os.environ.get('VIEWER_DECORD_THREADS', '8')))
+    source_fps = float(reader.get_avg_fps()) or 30.0
+    source_count = len(reader)
+    indices, output_fps = sample_indices(source_count, source_fps, target_fps, max_frames)
+    kwargs = {} if cancelled_error is None else {'cancelled_error': cancelled_error}
+    frames = read_frames(reader, indices, source_path=source, view=view, cache_dir=cache_dir,
+                         on_step=on_step, cancel_check=cancel_check, **kwargs)
     return VideoBatch(
-        frames_rgb=np.stack(frames),
+        frames_rgb=frames,
         fps=output_fps,
         source_fps=source_fps,
         source_frames=source_count,
-        width=width,
-        height=height,
+        width=frames.shape[2],
+        height=frames.shape[1],
+        frame_indices=indices,
+        view=view,
     )
 

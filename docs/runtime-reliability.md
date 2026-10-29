@@ -10,6 +10,8 @@ CLI 使用 `--smoothing-preset`，页面通过“平滑预设”选择；两者�
 
 任务固定输入文件版本、视角、源帧索引、checkpoint 版本、配置和推理参数。
 视频文件大小、修改/创建时间或 inode 变化后，会登记为新的输入；旧输入请求返回明确的 409。
+恢复与批量提交同时校验磁盘权重、解析后的配置和已加载 predictor 的身份。同一路径更新权重或配置也会重建模型。
+加载期间发生替换会拒绝发布该模型；任务恢复等待的是指定模型身份，加载失败会显示具体错误。
 更换模型会发布新的 generation，取消旧请求，并在其当前窗口结束后在后台关闭旧调度器。
 旧请求保留旧缓存字典，不会向新模型的缓存发布结果。
 
@@ -19,7 +21,15 @@ CLI 使用 `--smoothing-preset`，页面通过“平滑预设”选择；两者�
 
 ## 断点恢复
 
-原始窗口输出使用临时 NPZ、fsync 和原子替换写入 `.cache/window-predictions/<task-id>/`。
+原始窗口输出使用临时 NPZ、fsync 和原子替换写入 `.cache/window-predictions/.raw/<raw-id>/`；
+`.cache/window-predictions/<task-id>/task.json` 保存完整任务参数、计数和状态。
+原始缓存只保留模型、输入、具体窗口边界、预处理尺寸、精度设置与输出头；拼接及 UKF 参数保留在完整任务身份中。
+因此改变 q/r/beta，或在相同切窗的 blend/smooth 之间切换，可复用网络输出，只重新拼接和平滑。
+hard 模式的窗口范围不同，不能错误复用。旧版任务内的兼容窗口会在获得独占所有权后自动迁入共享原始缓存。
+
+同一组原始窗口使用跨进程独占执行锁，所有者记录 PID、创建身份及进度心跳。
+CLI 与网页重复提交时等待先前任务完成，再复用已保存窗口；等待可取消，不会覆盖所有者状态。
+进程退出会由操作系统释放锁，下一次请求可接管并只计算缺失窗口。
 恢复时核对身份、数组形状与有限值，损坏或不匹配的窗口重新计算，然后重新按序拼接和全序列平滑。
 取消、失败、推理完成和最终输出状态记录到私有 task.json；服务重启后，失去进程的任务显示为 interrupted。
 
@@ -38,6 +48,10 @@ CLI 使用 `--smoothing-preset`，页面通过“平滑预设”选择；两者�
 | `MINT_FRAME_CACHE_MAX_GIB` | 256 | 解码 RGB 缓存总预算；部署机器可按磁盘余量配置 |
 | `MINT_CACHE_MIN_FREE_GIB` | 16 | 磁盘空闲空间保护线 |
 | `MINT_WINDOW_CACHE_MAX_GIB` | 16 | 窗口恢复数据预算 |
+| `MINT_RENDER_CACHE_DIR` | `.cache/rendered-results` | 跨进程、跨重启的完整视频及合成导出索引 |
+| `MINT_RENDER_CACHE_MAX_GIB` | 64 | 完整视频缓存预算 |
+| `MINT_DECODE_PIPELINE` | 1 | Viewer 默认启用单视频解码与推理重叠；0 使用完整预解码 |
+| `MINT_DECODE_PREFETCH_MIB` | 128 | 原生 RGB 预读目标；换算后限制在 32～512 帧，最多额外一个解码块 |
 | `MINT_GPU_PREFETCH_WINDOWS` | GPU 数量×4 | 每次推理的窗口在途数量上限 |
 | `MINT_VIEWER_CACHED_INPUTS` | 4 | Viewer 保留的非活动输入数预算 |
 | `MINT_HTTP_WORKERS` | 4 | 活动重计算/渲染请求数量上限 |
@@ -51,7 +65,14 @@ CLI 使用 `--smoothing-preset`，页面通过“平滑预设”选择；两者�
 
 二维视频先写临时路径，编码器关闭成功且视频帧数正确后才原子发布。
 渲染异常或取消会关闭编码器并清理临时文件；重试不会命中失败产物。
+完整产物使用输入身份、已加载模型、推理设置、渲染参数和代码版本生成稳定 ID，并记录帧数和文件身份。
+前端先调用 `/api/media/resolve/<kind>/<eid>`，再播放 `/results/<64位ID>.mp4`。
+后者支持 Range 和浏览器私有缓存；旧的含 eid 的视频地址不允许浏览器缓存。过期页面的输入或模型上下文不符时返回 409。
+新进程命中已验证产物后直接返回，不重新解码或渲染；损坏的缓存重新生成。
+2D、固定世界、MuJoCo、重定向和多画面 MP4 合成都使用持久索引；视频下载期间持有缓存读租约。
 CLI summary schema 2 的 `duration_seconds` 包括解码、加载、推理、预测写盘与视频编码；`stages` 给出阶段时间。
+启用解码流水后，解码与推理的墙钟区间重叠，不能相加；`decode_pipeline.decode_seconds` 包含预读背压等待。
+`decode_setup_seconds` 是创建解码生产者的前台耗时，`read_before_decode_complete` 可确认推理是否提前开始读取。
 窗口预处理同时记录工作线程累计时间与实际覆盖的墙钟时间；滚动队列的 `forward_worker_seconds` 不能当作端到端耗时。
 
 Benchmark 页面可显式选择 Shared、Idle only、Dedicated。资源策略进入测评记录和缓存身份，吞吐量只能在相同资源条件下比较。
@@ -61,7 +82,9 @@ Shared/Idle 遵守显存与负载监测。固定片段单次前向协议仍需�
 
 端口被占用时明确报错，不向占用者发送信号。
 `python -m mint.service --state PATH --log PATH -- ./run_mint.sh viewer ...` 可监督自己创建的 Viewer 子进程，崩溃后有限次退避重启。
-监督进程只对自己创建且 PID 身份仍匹配的子进程组进行关闭；任务窗口检查点在进程退出后仍可恢复。
+Viewer CLI 通过 exec 替换自身，监督器直接持有实际 Viewer 的 PID。
+监督进程仅清理自己创建的会话中、UID 和 PID 创建身份匹配的成员；启动器先退出时，也会先回收所属残留进程再重启。
+任务窗口检查点在进程退出后仍可恢复。
 
 已有 `.venv` 的服务器可运行：
 

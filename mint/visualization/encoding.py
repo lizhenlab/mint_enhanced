@@ -5,7 +5,26 @@ import json
 import os
 import subprocess
 import tempfile
+import shutil
 from pathlib import Path
+
+
+def link_video(source, destination):
+    source, destination = Path(source), Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix='.' + destination.stem, suffix='.mp4', dir=destination.parent)
+    os.close(fd)
+    temporary = Path(name)
+    try:
+        temporary.unlink()
+        try:
+            os.link(source, temporary)
+        except OSError:
+            shutil.copyfile(source, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
 
 
 def atomic_video_file(path, render, expected_frames=None):

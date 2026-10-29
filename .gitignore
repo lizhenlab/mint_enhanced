@@ -90,5 +90,6 @@ docs/dataset-card/
 
 !tests/test_runtime_reliability.py
 !tests/test_service_runtime.py
+!tests/test_followup_reliability.py
 /.venv-features/
 /model/

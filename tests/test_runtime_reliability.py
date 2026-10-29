@@ -192,7 +192,7 @@ def test_interrupted_inference_resumes_only_missing_windows(tmp_path, monkeypatc
     with pytest.raises(InferenceCancelled):
         engine.predict(frames, preprocessed=True, hand_mode='blend', window_batch_size=1,
             cache_identity={'fixture': 'same-source'}, cancel_check=cancelled.is_set, on_step=progress)
-    assert len(list((tmp_path / 'windows').glob('*/*.npz'))) == 3
+    assert len(list((tmp_path / 'windows').glob('**/*.npz'))) == 3
     resumed = make_engine(StudentEngine)
     resumed._cache_model_identity = 'test-checkpoint'
     result = resumed.predict(frames, preprocessed=True, hand_mode='blend', window_batch_size=1,
@@ -210,7 +210,7 @@ def test_checkpoint_identity_and_corruption_are_not_reused(tmp_path):
         values = {'pose_enc': np.zeros((1, 2, 9), np.float32)}
         task.save(0, values)
         assert task.load(0) is not None
-        (task.folder / '00000000.npz').write_bytes(b'broken archive')
+        task._path(0).write_bytes(b'broken archive')
         assert task.load(0) is None
         other = WindowCheckpoint({'model': 'B', 'input': 'v1'}, [(0, 2)], directory=tmp_path)
         try: assert other.id != task.id and other.load(0) is None

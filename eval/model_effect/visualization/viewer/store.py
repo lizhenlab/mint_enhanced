@@ -15,6 +15,7 @@ import os
 import threading
 import time
 import zipfile
+import uuid
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from pathlib import Path
 
@@ -22,7 +23,8 @@ import numpy as np
 
 from . import ckpts
 from .lifecycle import ModelLifecycle, model_request, input_request, serialized_start
-from mint.runtime import digest, file_identity, video_identity, StageTimer
+from mint.runtime import digest, file_identity, video_identity, model_identity, StageTimer
+from mint.visualization.artifacts import VideoArtifacts, persistent_video, render_version
 from .const import (
     DEFAULT_CAM_MODE, DEFAULT_HAND_MODE, MODEL_TRAIN_ROOT, REPO_DIR,
     ROBOT_RENDER_WIDTH,
@@ -231,6 +233,7 @@ class Store(ModelLifecycle):
         self._load_cv = threading.Condition(self._ckpt_lock)   # 与 _ckpt_lock 同锁：等/通知「模型就绪或失败」
         # 模型（4.6G 骨干）后台懒加载：网页秒开，首次推理前等就绪。predictor=None 时用 init_config 现建。
         self._boot_cfg = init_config or config_path
+        self._requested_model_identity = None
         self._reload_ckpt = None                  # 非 None=换 ckpt 但架构不变，ensure 时就地重载而非重建
         self._predictor_ready = threading.Event()
         if predictor is not None:
@@ -247,6 +250,8 @@ class Store(ModelLifecycle):
         self.max_frames = max_frames
         self.scene = scene
         self.cache_dir = cache_dir
+        self.session_id = uuid.uuid4().hex
+        self._artifacts = VideoArtifacts()
         # 依赖推理的缓存 key 带上 cam_mode + hand_mode，模式切换不互相命中。
         # GT 相关（_raw/_gtw/_payload_gt）与推理无关，key 仍只用 eid。
         self._raw: dict[int, dict] = {}
@@ -429,9 +434,8 @@ class Store(ModelLifecycle):
                     return {"ok": False, "error": "已有批量推理任务正在运行"}
 
             requested_ckpt = str(Path(checkpoint).resolve()) if checkpoint else self.ckpt_path
-            if checkpoint and (not self.ckpt_path
-                               or Path(self.ckpt_path).resolve() != Path(requested_ckpt)):
-                self.swap_ckpt(requested_ckpt)
+            if requested_ckpt:
+                self.select_model(requested_ckpt)
             if not requested_ckpt and not self.predictor_ready():
                 return {"ok": False, "error": "未选择批量模型，请先选择 Run 和 Step"}
 
@@ -461,6 +465,7 @@ class Store(ModelLifecycle):
                 "hand_mode": hand_mode, "pred_betas_mean": bool(pred_betas_mean),
                 "pred_fov_mean": bool(pred_fov_mean), "overwrite": bool(overwrite),
                 "devices": devices, "ckpt_tag": ckpt_tag, "ckpt_path": ckpt_path, "video_view": video_view,
+                "expected_model_identity": self._requested_model_identity,
             }
             threading.Thread(target=self._batch_inference_worker, kwargs=kwargs,
                              name="batch-inference", daemon=True).start()
@@ -590,7 +595,8 @@ class Store(ModelLifecycle):
                                 hand_mode: str, pred_betas_mean: bool,
                                 pred_fov_mean: bool, overwrite: bool,
                                 devices: list[str], ckpt_tag: str,
-                                ckpt_path: str | None, video_view: str = 'full') -> None:
+                                ckpt_path: str | None, video_view: str = 'full',
+                                expected_model_identity: str | None = None) -> None:
         import datetime
         import traceback
 
@@ -623,6 +629,9 @@ class Store(ModelLifecycle):
             if ckpt_path and (not self.ckpt_path
                               or Path(self.ckpt_path).resolve() != Path(ckpt_path).resolve()):
                 raise RuntimeError("批量模型在任务启动期间发生变化，已停止以避免使用错误权重")
+            if expected_model_identity and (getattr(self.predictor, '_cache_model_identity', None) != expected_model_identity
+                    or model_identity(ckpt_path, self._boot_cfg) != expected_model_identity):
+                raise RuntimeError('批量任务的模型版本已变化，请重新提交任务')
             if not bool(getattr(self.predictor, "has_hand", True)):
                 raise RuntimeError("所选模型没有 hand 输出，无法渲染批量手部结果")
             devices = self.predictor_devices()
@@ -801,7 +810,9 @@ class Store(ModelLifecycle):
 
     def _release_item_cache(self, eid: int) -> None:
         """Drop per-video tensors after a batch item while keeping its stable eid registration."""
-        self._raw.pop(eid, None)
+        raw = self._raw.pop(eid, None)
+        if raw and hasattr(raw.get('frames'), 'wait_complete'):
+            raw['frames'].close()
         self._payload_gt.pop(eid, None)
         for cache in (self._pred, self._gtw, self._prw, self._payload, self._mp4):
             for key in list(cache):
@@ -1702,6 +1713,7 @@ class Store(ModelLifecycle):
                 boot_cfg, ckpt, window = self._boot_cfg, self.ckpt_path, self.window
                 full_max_frames = self.full_max_frames
                 reload_ckpt, base = self._reload_ckpt, self.predictor
+                requested_identity = self._requested_model_identity
             # Wait for cancelled old requests and retire their resources before building a new model.
             try:
                 self._wait_for_retirements()
@@ -1710,6 +1722,10 @@ class Store(ModelLifecycle):
                     self.model, config=boot_cfg, ckpt=ckpt, window=window,
                     full_max_frames=full_max_frames, devices=self.inference_devices,
                     compile_mode=self.inference_compile_mode, fp8_mode=self.inference_fp8_mode)
+                if requested_identity and (getattr(new_pred, '_cache_model_identity', None) != requested_identity
+                        or model_identity(ckpt, boot_cfg) != requested_identity):
+                    new_pred.close()
+                    raise RuntimeError('Checkpoint or configuration changed while loading; reload the selected version')
             except Exception as e:  # noqa: BLE001
                 with self._load_cv:
                     if gen == self._load_gen:        # 仍是最新代才算失败：记异常、唤醒等待者、收工
@@ -1747,6 +1763,7 @@ class Store(ModelLifecycle):
         """确保「最新代」predictor 就绪（供 benchmark / --preload 阻塞等待、按需触发加载）。本函数不持锁做重活：
         无加载线程则起一个，然后等就绪；加载失败则抛出异常（与旧行为一致，pred 侧上报 500）。
         注意：viewer 前台推理**不**走此函数隐式加载（加载与推理已拆开，见 start_load / require_predictor）。"""
+        self.select_model(self.ckpt_path)
         if self._predictor_ready.is_set():
             return self.predictor
         with self._load_cv:
@@ -1757,9 +1774,10 @@ class Store(ModelLifecycle):
                 self._load_cv.wait()
             return self.predictor
 
-    def start_load(self) -> dict:
+    def start_load(self, expected_identity=None) -> dict:
         """显式启动后台加载「当前选中 ckpt」的模型（幂等、立即返回，不阻塞）。
         选 ckpt 不再自动加载 → 由前端「加载模型」按钮调此。就绪后前端据 /api/model_ready 显示。"""
+        self.select_model(self.ckpt_path, expected_identity)
         with self._load_cv:
             if self._predictor_ready.is_set():
                 return {"ok": True, "ready": True}
@@ -1768,6 +1786,28 @@ class Store(ModelLifecycle):
             self._ensure_loader_locked()
             self._load_cv.notify_all()
         return {"ok": True, "ready": False}
+
+    def select_model(self, checkpoint, expected_identity=None):
+        """Select a version, including same-path replacements, before scheduling work."""
+        if not checkpoint:
+            return None
+        parent = getattr(self, '_snapshot_parent', None)
+        if parent is not None:
+            return parent.select_model(checkpoint, expected_identity)
+        checkpoint = str(Path(checkpoint).resolve())
+        configuration = ckpts.config_for_ckpt(checkpoint, self.config_path)
+        selected = model_identity(checkpoint, configuration)
+        if expected_identity is not None and selected != expected_identity:
+            raise ValueError('Checkpoint or configuration changed; select it as a new task')
+        with self._batch_start_lock:
+            loaded = getattr(self.predictor, '_cache_model_identity', None)
+            same_path = self.ckpt_path and Path(self.ckpt_path).resolve() == Path(checkpoint)
+            if (not same_path or (self.predictor_ready() and loaded != selected)
+                    or (self._requested_model_identity not in (None, selected))):
+                self.swap_ckpt(checkpoint)
+            self._requested_model_identity = selected
+            self.ckpt_tag = ckpts.ckpt_tag(checkpoint) + '_' + selected[:10]
+        return selected
 
     def require_predictor(self):
         """viewer 前台推理专用：**不触发加载、不阻塞等待**。模型未就绪即抛清晰错误（加载与推理拆开：
@@ -1904,6 +1944,22 @@ class Store(ModelLifecycle):
     def item(self, eid: int) -> dict:
         return self._items[eid]
 
+    def media_context(self, eid):
+        item = self.item(eid)
+        if item['kind'] == 'video':
+            source = {k: item.get(k) for k in ('source_identity', 'video_view', 'target_fps', 'frame_limit', 'hand_frame')}
+        elif item['kind'] == 'lerobot':
+            episode = item['ep']
+            source = {'episode': episode, 'files': [file_identity(episode[k]) for k in ('video', 'parquet') if episode.get(k)],
+                      'info': file_identity(Path(item['ds_dir']) / 'meta/info.json'), 'limit': self.max_frames}
+        else:
+            source = {'images': [file_identity(p) for p in item.get('image_paths', [])]}
+        loaded = getattr(self.predictor, '_cache_model_identity', None)
+        return {'input_id': digest(source), 'model_id': loaded or 'session-' + self.session_id,
+                'inference_id': digest({'window': self.window, 'full_max_frames': self.full_max_frames,
+                    'acceleration': getattr(self.predictor, 'acceleration_metadata', None)}),
+                'render_version': render_version()}
+
     def is_no_truth(self, eid: int) -> bool:
         """Only LeRobot entries use the Viewer-specific GT rendering contract."""
         return self._items[eid]["kind"] != "lerobot"
@@ -2015,6 +2071,7 @@ class Store(ModelLifecycle):
                 self.ckpt_path = ckpt
                 self.ckpt_tag = ckpts.ckpt_tag(ckpt) + "_" + digest(file_identity(ckpts.checkpoint_weight_file(ckpt) or ckpt))[:10]
                 self._boot_cfg = cfg_used
+                self._requested_model_identity = model_identity(ckpt, cfg_used)
                 self.loss_cfg = ckpts.load_loss_cfg(cfg_used)
                 # Old snapshots keep their own dictionaries; they can never write into the new generation.
                 for name in ('_pred', '_prw', '_payload', '_mp4', '_world_mp4', '_world_prog',
@@ -2101,12 +2158,20 @@ class Store(ModelLifecycle):
 
     def raw(self, eid: int, cancel_check=None) -> dict:
         self._validate_input_version(eid)
+        cached = self._raw.get(eid)
+        if cached is not None and getattr(cached['frames'], 'failed', False):
+            cached['frames'].close()
+            self._raw.pop(eid, None)
         if eid not in self._raw:
             with self._key_lock(f"raw{eid}"):
                 if eid not in self._raw:
                     from ..reproj_core import lerobot_io
                     # 抽帧进度回调（分批读逐批上报）：前端「加载数据 x/y 帧」+ 确定进度条。
-                    cb = lambda d, t: self.set_prog(eid, stage="load", done=int(d), total=int(t))
+                    def cb(done, total):
+                        if self.get_prog(eid).get('stage') == 'infer':
+                            self.set_prog(eid, decoded_frames=int(done), decode_total=int(total))
+                        else:
+                            self.set_prog(eid, stage='load', done=int(done), total=int(total))
                     it = self._items[eid]
                     if it["kind"] == "video":       # 裸视频：只抽帧，无 GT hands/相机
                         vp = it["path"]             # eid 由文件浏览时 video_eid 登记
@@ -2116,6 +2181,7 @@ class Store(ModelLifecycle):
                             vp, target_fps=it.get('target_fps', it['fps']),
                             max_frames=it.get("frame_limit", self.max_frames), on_step=cb,
                             view=it.get('video_view', 'full'), cancel_check=cancel_check,
+                            pipeline=os.environ.get('MINT_DECODE_PIPELINE', '1') != '0',
                             cancelled_error=InferenceCancelled)
                         self._validate_input_version(eid)
                         frames = batch.frames_rgb
@@ -2277,7 +2343,7 @@ class Store(ModelLifecycle):
                         nums = None
                     self._raise_if_cancelled(eid)
                     task = self.pred(eid, cam_mode, hand_mode).get("_task")
-                    self._payload[k] = {"task": task, "gt": gt, "pred": pl, "nframes": int(T),
+                    self._payload[k] = {"task": task, "media_context": self.media_context(eid), "gt": gt, "pred": pl, "nframes": int(T),
                                         "fps": fps, "ep_idx": raw["episode_index"],
                                         **self.item_context(eid),
                                         "metrics": met, "metrics_error": metrics_error,
@@ -2309,7 +2375,7 @@ class Store(ModelLifecycle):
                     gt = worldpl.build_world_payload(
                         self.gt_world(eid), raw["kept"], raw["cam_c2w"], fps=fps)
                     self._raise_if_cancelled(eid)
-                    self._payload_gt[eid] = {"gt": gt, "pred": None, "nframes": T,
+                    self._payload_gt[eid] = {"media_context": self.media_context(eid), "gt": gt, "pred": None, "nframes": T,
                                              "fps": fps, "ep_idx": raw["episode_index"],
                                              **self.item_context(eid),
                                              "metrics": None, "metrics_error": None,
@@ -2388,6 +2454,7 @@ class Store(ModelLifecycle):
         return cached
 
     @model_request
+    @persistent_video
     def world_video(self, eid: int, *, layout: str = "overlay",
                     views: dict | None = None,
                     coord_mode: str = "z_up",
@@ -2514,6 +2581,7 @@ class Store(ModelLifecycle):
         return cached
 
     @model_request
+    @persistent_video
     def mujoco_video(self, eid: int, source: str = "pred",
                      cam_mode: str = DEFAULT_CAM_MODE,
                      hand_mode: str = DEFAULT_HAND_MODE,
@@ -2642,6 +2710,7 @@ class Store(ModelLifecycle):
         return cached
 
     @model_request
+    @persistent_video
     def retarget_video(self, eid: int, source: str = "pred",
                        cam_mode: str = DEFAULT_CAM_MODE,
                        hand_mode: str = DEFAULT_HAND_MODE,
@@ -2720,6 +2789,16 @@ class Store(ModelLifecycle):
 
     def _compose_export(self, inputs: list[tuple[str, Path]], *,
                         tile_size: tuple[int, int] = _EXPORT_TILE_SIZE) -> Path:
+        from mint.visualization.artifacts import artifact_identity
+        from mint.visualization.encoding import validate_video
+        identity = {'kind': 'composed-export', 'render_version': render_version(), 'tile_size': tile_size,
+                    'sources': [(source, artifact_identity(path)) for source, path in inputs]}
+        return self._artifacts.resolve(identity,
+            lambda: self._compose_export_uncached(inputs, tile_size=tile_size),
+            expected_frames=lambda: min(int(validate_video(path)['nb_frames']) for _, path in inputs))
+
+    def _compose_export_uncached(self, inputs: list[tuple[str, Path]], *,
+                                tile_size: tuple[int, int] = _EXPORT_TILE_SIZE) -> Path:
         """Fit every source into equal source-sized tiles, up to four per row."""
         import subprocess
 
@@ -3086,6 +3165,7 @@ class Store(ModelLifecycle):
         return output
 
     @input_request
+    @persistent_video
     def mp4_gt(self, eid: int, mode: str, on_step=None,
                betas_mean: bool = False) -> Path:
         """「仅原始 GT」2D overlay（GT 手 + GT 相机，单画面），不跑推理。缓存名带 _gt，与 ckpt 无关。"""
@@ -3117,6 +3197,7 @@ class Store(ModelLifecycle):
         return self._mp4[key]
 
     @model_request
+    @persistent_video
     def mp4_pred(self, eid: int, mode: str,
                   cam_mode: str = DEFAULT_CAM_MODE,
                   hand_mode: str = DEFAULT_HAND_MODE,
@@ -3164,6 +3245,7 @@ class Store(ModelLifecycle):
         return self._mp4[key]
 
     @model_request
+    @persistent_video
     def mp4(self, eid: int, mode: str, layout: str = "overlay", content: str = "both",
             cam_mode: str = DEFAULT_CAM_MODE, hand_mode: str = DEFAULT_HAND_MODE,
             gt_betas_mean: bool = False,

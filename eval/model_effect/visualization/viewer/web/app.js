@@ -38,8 +38,6 @@ const FRAME_CAPTURE_SOURCES = [
   {id:'mujoco_3d', label:'MuJoCo · 仿真', file:'mujoco_3d'},
   {id:'wuji_retarget_3d', label:'Wuji Hand · Retargeting', file:'wuji_retarget_3d'},
 ];
-const MUJOCO_RENDER_TAG = 'shared_wuji_camera_v13_canonical_origin';
-const RETARGET_RENDER_TAG = 'shared_wuji_camera_v13_no_presence_hud';
 // 固定世界默认 3/4 俯视（弧度）：正对首帧相机光轴的正视图读不出纵深。
 // 与 render/fixed_world_video.py 的 DEFAULT_AZ/DEFAULT_EL 必须一致，否则网页与导出视频不同视角。
 const VIEW_AZ0 = -0.61, VIEW_EL0 = 0.31;
@@ -59,7 +57,7 @@ let state = { eid:0, fps:30, mode:'mesh_skel', nframes:1,
               handMode:'smooth',                     // hard / blend / smooth(blend + UKF/RTS 后处理)
               ukf:{q:0.7,r:0.5,beta:0.3},            // 轻于生产默认 0.6/0.6/2.0；仅 smooth 生效
               gtBetas:'per_frame', predBetas:'per_frame', predFov:'per_frame',  // 手形/内参 每帧 vs 整段平均
-              gt:null, pred:null, metrics:null, metricsError:null, nums:null,
+              gt:null, pred:null, metrics:null, metricsError:null, nums:null, mediaContext:null,
                                                         // nums=逐帧数值(每块下方面板)
               layout:'side',                         // 生效布局：'side'(默认，GT/PRED 左右并排) | 'overlay'(同画面叠加)
               layoutPref:'side',                     // 用户点选的布局偏好；裸视频被迫 overlay 时不改它
@@ -132,6 +130,11 @@ function syncHandModeUI(){
     ['q','r','beta'].every(key=>Number(SMOOTHING_PRESETS[name][key])===Number(state.ukf[key])))||'custom';
 }
 function appendHandMode(params){ params.set('hand_mode',effectiveHandMode()); return params; }
+function mediaResolveURL(kind,eid,query){
+  const params=new URLSearchParams(query);
+  for(const [key,value] of Object.entries(state.mediaContext||{})) params.set(key,value);
+  return `/api/media/resolve/${kind}/${eid}?${params}`;
+}
 function syncFullLimit(value){
   const limit = Math.max(0, Math.floor(+value||0));
   if(limit) state.fullMaxFrames = limit;
@@ -717,6 +720,7 @@ async function loadEpisode(eid, {explicitInference=false, restoredHandMode=null}
       state.epTotal = d.episode_total;
       state.sourceName = d.source_name || null;
       state.sourcePath = d.source_path || null;
+      state.mediaContext = d.media_context || null;
       state.gt = d.gt; state.pred = d.pred; state.metrics = d.metrics || null;
       state.metricsError = d.metrics_error || null;
       state.nums = d.nums || null;
@@ -752,16 +756,21 @@ function _manualRenderBadge(pan,badge,message,buttonText='重试渲染'){
   if(button) button.onclick=event=>{ event.preventDefault(); event.stopPropagation(); pan.startRender(true); };
 }
 
-function _loadServerVideo(pan,badge,retry){
+async function _loadServerVideo(pan,badge,retry){
   if(pan.loadRequested) return;
   pan.loadRequested=true;
   pan.renderStarted=true; pan.autoLoadFailed=false;
   badge.classList.remove('rendering','error');
   badge.style.display=''; badge.style.pointerEvents='none';
   badge.textContent=retry?`${pan.label}已重新提交，正在排队渲染…`:`${pan.label}正在自动排队渲染…`;
-  const separator=pan.videoUrl.includes('?')?'&':'?';
-  pan.video.src=pan.videoUrl+separator+'request='+Date.now();
-  pan.video.load();
+  try{
+    const result=await getJSON(pan.resolveUrl);
+    if(pan.isActive&&!pan.isActive()) return;
+    pan.video.src=U(result.url); pan.video.load();
+  }catch(error){
+    if(pan.isActive&&!pan.isActive()) return;
+    pan.video.dispatchEvent(new Event('error'));
+  }
   updateExportButton();
 }
 
@@ -964,12 +973,17 @@ function buildPanels(preserveTime){
       const rawq = state.rawOnly ? '&raw=1' : '';
       const camq = state.rawOnly ? '' :
         `&cam_mode=${encodeURIComponent(state.camMode)}&hand_mode=${encodeURIComponent(effectiveHandMode())}&gt_betas=${state.gtBetas}&pred_betas=${state.predBetas}&pred_fov=${state.predFov}`;
-      const bust = state.rawOnly ? 'gt'
-        : encodeURIComponent((CKPT_TAG||'x')+':'+state.camMode+':'+effectiveHandMode()+':'+state.gtBetas+state.predBetas+state.predFov);
       const vq = `mode=${encodeURIComponent(state.mode)}&layout=${state.layout}&content=${P.content}${rawq}${camq}`;
-      pan.video.src = U(`/video/${state.eid}?${vq}&_=${bust}`);
-      pan.video.load();
       state.panels[id] = pan;
+      const resolveUrl=mediaResolveURL('video',state.eid,vq);
+      getJSON(resolveUrl).then(result=>{
+        if(state.panels[id]!==pan) return;
+        pan.video.src=U(result.url); pan.video.load();
+      }).catch(error=>{
+        if(state.panels[id]!==pan) return;
+        pan.video.dispatchEvent(new Event('error'));
+        if(badge) badge.textContent=error.message;
+      });
       const eidNow = state.eid;
       (async ()=>{ while(!vdone && state.panels[id]===pan){
         try{ const p = await getJSON('/api/progress2d/'+eidNow+'?'+vq);
@@ -1034,7 +1048,6 @@ function buildPanels(preserveTime){
       const isMujoco=P.kind==='mujoco';
       const methodLabel=isMujoco?'MuJoCo':'Wuji Hand';
       const endpoint=isMujoco?'mujoco':'retarget';
-      const renderTag=isMujoco?MUJOCO_RENDER_TAG:RETARGET_RENDER_TAG;
       const videoClass=isMujoco?'mujoco-video':'retarget-video';
       const compare=!state.no_truth&&!state.rawOnly;
       const sources=compare?['gt','pred']:[state.rawOnly?'gt':'pred'];
@@ -1060,11 +1073,10 @@ function buildPanels(preserveTime){
         const betas=source==='gt'?state.gtBetas:state.predBetas;
         const fov=source==='gt'?'per_frame':state.predFov;
         const query=`source=${source}&cam_mode=${encodeURIComponent(state.camMode)}&hand_mode=${encodeURIComponent(effectiveHandMode())}&betas=${betas}&fov=${fov}`;
-        const bust=`${source==='gt'?'gt':CKPT_TAG}:${renderTag}`;
         const child={id:`${id}_${source}`,panelId:id,kind:P.kind,video,source,
           label:`${methodLabel} ${source.toUpperCase()}`,renderDone:false,
           renderStarted:false,loadRequested:false,failed:false,
-          videoUrl:U(`/${endpoint}/${state.eid}?${query}&_=${encodeURIComponent(bust)}`),
+          resolveUrl:mediaResolveURL(endpoint,state.eid,query),
           progressUrl:`/api/${endpoint}/progress/${state.eid}?${query}`,
           isActive:()=>state.panels[id]===parent,onStatusChange:updateParent};
         video.controls=false; video.disablePictureInPicture=true; video.tabIndex=-1;
@@ -5067,7 +5079,11 @@ async function resumeSavedTask(id){
     while(true){
       const ready=await getJSON('/api/model_ready');
       state.modelReady=ready.ready;
-      if(ready.ready) break;
+      if(ready.error) throw new Error(ready.error);
+      if(ready.ready){
+        if(ready.model_identity!==prepared.model_identity) throw new Error('模型版本已变化，请重新选择任务');
+        break;
+      }
       if(Date.now()>deadline) throw new Error('模型仍在加载，请稍后重试恢复');
       await new Promise(resolve=>setTimeout(resolve,700));
     }

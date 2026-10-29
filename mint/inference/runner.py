@@ -13,7 +13,8 @@ from .acceleration import COMPILE_MODES, FP8_MODES
 from .engine import StudentEngine
 from .video import read_video
 from mint.runtime import StageTimer, atomic_json, atomic_npz, video_identity
-from mint.visualization.encoding import atomic_video_file
+from mint.visualization.encoding import atomic_video_file, link_video
+from mint.visualization.artifacts import VideoArtifacts, render_version
 from .checkpoints import update_task
 from .options import SMOOTHING_PRESETS
 from .hand_smoothing import canonical_hand_mode, encode_hand_smoothing_mode
@@ -58,6 +59,7 @@ def inference_main(argv: list[str] | None = None) -> int:
     parser.add_argument("--render-mode", choices=("mesh", "skeleton", "mesh_skel"), default="mesh_skel")
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--no-resume", action="store_true", help="Recompute windows instead of reusing saved predictions")
+    parser.add_argument("--no-decode-pipeline", action="store_true", help="Decode fully before inference for controlled comparisons")
     args = parser.parse_args(argv)
     if args.hand_mode == 'smooth':
         args.hand_mode = canonical_hand_mode(encode_hand_smoothing_mode(SMOOTHING_PRESETS[args.smoothing_preset]))
@@ -73,7 +75,8 @@ def inference_main(argv: list[str] | None = None) -> int:
     timer = StageTimer()
     with timer.stage('decode_seconds'):
         video = read_video(source, max_frames=args.max_frames, target_fps=args.target_fps,
-                           view=args.video_view, cache_dir=args.frame_cache_dir, on_step=decode_progress)
+                           view=args.video_view, cache_dir=args.frame_cache_dir, on_step=decode_progress,
+                           pipeline=not args.no_decode_pipeline)
     engine = None
     try:
         with timer.stage('model_load_seconds'):
@@ -92,11 +95,20 @@ def inference_main(argv: list[str] | None = None) -> int:
                     'target_fps': args.target_fps, 'max_frames': args.max_frames, 'checkpoint': str(Path(args.checkpoint).resolve()),
                     'config': str(Path(args.config).resolve()), 'cam_mode': args.camera_mode, 'hand_mode': args.hand_mode})
         acceleration = engine.acceleration_metadata
+        loaded_model = engine._cache_model_identity
+    except BaseException:
+        if hasattr(video.frames_rgb, 'wait_complete'):
+            video.frames_rgb.close()
+        raise
     finally:
         if engine is not None:
             with timer.stage('model_release_seconds'):
                 engine.close()
     task_id = prediction.get('_task', {}).get('id')
+    pipeline = getattr(video.frames_rgb, 'metadata', None)
+    if pipeline:
+        timer.seconds['decode_setup_seconds'] = timer.seconds['decode_seconds']
+        timer.seconds['decode_seconds'] = pipeline['decode_seconds']
     arrays = {key: np.asarray(value) for key, value in prediction.items() if not key.startswith("_")}
     arrays['source_frame_indices'] = video.frame_indices
     arrays['fps'] = np.asarray(video.fps)
@@ -107,9 +119,17 @@ def inference_main(argv: list[str] | None = None) -> int:
 
         try:
             with timer.stage('render_and_video_write_seconds'):
-                atomic_video_file(output / 'prediction.mp4',
-                    lambda temporary: render_prediction(video.frames_rgb, prediction, temporary, video.fps,
-                                                         mode=args.render_mode), len(video.frames_rgb))
+                def produce():
+                    return atomic_video_file(output / 'prediction.mp4',
+                        lambda temporary: render_prediction(video.frames_rgb, prediction, temporary, video.fps,
+                                                             mode=args.render_mode), len(video.frames_rgb))
+                artifact = VideoArtifacts().resolve({'kind': 'cli', 'model': loaded_model,
+                    'input': video_identity(source, video.frame_indices, video.view, video.fps),
+                    'task': task_id, 'window': args.window, 'camera_mode': args.camera_mode,
+                    'hand_mode': args.hand_mode, 'render_mode': args.render_mode,
+                    'acceleration': acceleration, 'render_version': render_version()}, produce,
+                    expected_frames=len(video.frames_rgb))
+                link_video(artifact, output / 'prediction.mp4')
         except Exception as exc:
             update_task(task_id, status='failed', stage='render', error=str(exc))
             raise
@@ -118,13 +138,15 @@ def inference_main(argv: list[str] | None = None) -> int:
         "schema_version": 2,
         "stages": timer.snapshot(),
         "task": prediction.get("_task"),
+        "model_identity": loaded_model,
+        "decode_pipeline": pipeline,
         "input_name": source.name,
         "frames": len(video.frames_rgb),
         "fps": video.fps,
         "source_frames": video.source_frames,
         "source_fps": video.source_fps,
         "video_view": video.view,
-        "frame_cache": str(video.frames_rgb.filename) if isinstance(video.frames_rgb, np.memmap) else None,
+        "frame_cache": str(getattr(video.frames_rgb, 'filename', None)) if getattr(video.frames_rgb, 'filename', None) else None,
         "source_first_frame": int(video.frame_indices[0]),
         "source_last_frame": int(video.frame_indices[-1]),
         "duration_seconds": round(elapsed, 4),
@@ -142,6 +164,8 @@ def inference_main(argv: list[str] | None = None) -> int:
     atomic_json(output / "summary.json", summary)
     update_task(task_id, status="completed", stage="completed", outputs={"directory": str(output)}, stages=timer.snapshot())
     print(f"Artifacts written to {output}")
+    if hasattr(video.frames_rgb, 'wait_complete'):
+        video.frames_rgb.close()
     return 0
 
 

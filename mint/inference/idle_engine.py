@@ -136,6 +136,9 @@ class IdleGpuMixin:
                 )[0]
             else:
                 result = self._predict(frames_uint8, **kwargs)
+            if hasattr(frames_uint8, 'wait_complete'):
+                frames_uint8.wait_complete()
+                result.setdefault('_timings', {})['decode_pipeline'] = frames_uint8.metadata
             if scheduler is not None:
                 status = scheduler.status()
                 result.setdefault('_timings', {})['gpu_scheduler'] = status
@@ -146,6 +149,8 @@ class IdleGpuMixin:
                 result['_task'] = task.metadata
             return result
         except Exception as exc:
+            if hasattr(frames_uint8, 'close') and hasattr(frames_uint8, 'wait_complete'):
+                frames_uint8.close()
             task = self._prediction_context.task
             if task is not None:
                 task.finish('cancelled' if isinstance(exc, cancelled_error) else 'failed', error=str(exc))

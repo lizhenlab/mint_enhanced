@@ -345,6 +345,9 @@ class StudentEngine(IdleGpuMixin):
                 print("[inference] checkpoint has no hand-presence head; feature disabled")
             print(f"[inference] checkpoint={os.path.basename(wf)} "
                   f"tensors={len(sd)} missing={len(missing)} unexpected={len(unexpected)}")
+            from mint.runtime import model_identity
+            if model_identity(wf, _abs(config_path)) != self._cache_model_identity:
+                raise RuntimeError('Checkpoint or configuration changed while loading; select the current version and retry')
         if idle_requested:
             self._initialize_idle_scheduler(model.eval(), resolved_devices, policy=devices)
             return
@@ -925,7 +928,9 @@ class StudentEngine(IdleGpuMixin):
             checkpoint = WindowCheckpoint({'model': self._cache_model_identity, 'input': source_identity,
                 'size_hw': self.size_hw, 'camera_mode': cam_mode, 'hand_mode': requested_hand_mode,
                 'acceleration': self.acceleration_metadata, 'hand_blending': blend_hands,
-                'output_heads': [self.has_hand, self.has_hand_presence]}, win_bounds, task_parameters)
+                'output_heads': [self.has_hand, self.has_hand_presence]}, win_bounds, task_parameters,
+                cancel_check=cancel_check, cancelled_error=InferenceCancelled,
+                on_wait=getattr(frames_uint8, 'allow_complete', None))
             self._prediction_context.task = checkpoint
         forward_batches = 0
         dispatch_started = time.perf_counter()

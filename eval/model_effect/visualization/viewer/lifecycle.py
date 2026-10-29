@@ -145,3 +145,6 @@ class ModelLifecycle:
             self._retire_predictor_locked(self.predictor, previous)
             self.predictor = None
         self._wait_for_retirements()
+        for raw in list(self._raw.values()):
+            if hasattr(raw.get('frames'), 'wait_complete'):
+                raw['frames'].close()

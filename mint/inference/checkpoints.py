@@ -17,12 +17,19 @@ from .cache_budget import CacheBudget, file_lock
 TASK_SCHEMA = 1
 
 
+def raw_identity(identity):
+    """Network outputs depend on concrete windows, not downstream stitching or UKF."""
+    return {key: value for key, value in identity.items()
+            if key not in {'schema', 'hand_mode', 'hand_blending', 'camera_mode'}}
+
+
 def task_root():
     return Path(os.environ.get('MINT_WINDOW_CACHE_DIR') or Path(__file__).resolve().parents[2] / '.cache/window-predictions')
 
 
 class WindowCheckpoint:
-    def __init__(self, identity, bounds, parameters=None, directory=None):
+    def __init__(self, identity, bounds, parameters=None, directory=None, *, cancel_check=None,
+                 cancelled_error=RuntimeError, on_wait=None):
         self.identity = {**identity, 'schema': TASK_SCHEMA, 'bounds': bounds}
         self.id = digest(self.identity)
         self.directory = Path(directory or task_root())
@@ -33,15 +40,61 @@ class WindowCheckpoint:
         self.lock = threading.RLock()
         self.reused = self.written = 0
         self.completed = set()
-        self.budget = CacheBudget(self.directory, pattern='*/*.npz', pin_parent=True,
+        self.raw_id = digest(raw_identity(self.identity))
+        self.raw_folder = self.directory / '.raw' / self.raw_id
+        self.raw_folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.budget = CacheBudget(self.directory, pattern='**/*.npz', pin_parent=True,
             max_gib=float(os.environ.get('MINT_WINDOW_CACHE_MAX_GIB', '16')))
         self.cache_warning = None
-        self._pin = (self.folder / '.active.pin').open('a')
+        self._pin = self._raw_pin = None
+        self._execution = (self.raw_folder / '.run.lock').open('a')
         import fcntl
-        fcntl.flock(self._pin, fcntl.LOCK_SH)
-        self.update(status='running', stage='inference', identity=self.identity,
-                    parameters=parameters or {}, total_windows=len(bounds), frames=max(end for _, end in bounds),
-                    pid=os.getpid(), pid_token=__import__('mint.inference.cache_budget', fromlist=['_token'])._token(os.getpid()), started_at=time.time())
+        started = time.monotonic()
+        try:
+            while True:
+                if cancel_check is not None and cancel_check():
+                    raise cancelled_error('Cancelled while waiting for the existing prediction task')
+                try:
+                    fcntl.flock(self._execution, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if on_wait is not None:
+                        on_wait()
+                    time.sleep(.1)
+            self.wait_seconds = time.monotonic() - started
+            self._raw_pin = (self.raw_folder / '.active.pin').open('a')
+            fcntl.flock(self._raw_pin, fcntl.LOCK_SH)
+            self._import_legacy()
+            self._pin = (self.folder / '.active.pin').open('a')
+            fcntl.flock(self._pin, fcntl.LOCK_SH)
+            from .cache_budget import _token
+            self.owner = {'pid': os.getpid(), 'pid_token': _token(os.getpid()), 'task_id': self.id}
+            self._heartbeat('running')
+            self.update(status='running', stage='inference', identity=self.identity, raw_id=self.raw_id,
+                        parameters=parameters or {}, total_windows=len(bounds), frames=max(end for _, end in bounds),
+                        **{key: value for key, value in self.owner.items() if key != 'task_id'}, started_at=time.time())
+        except BaseException:
+            self.close()
+            raise
+
+    def _heartbeat(self, status):
+        atomic_json(self.raw_folder / 'owner.json', {**self.owner, 'status': status, 'updated_at': time.time()})
+
+    def _import_legacy(self):
+        """Move compatible v1 checkpoints into the shared raw store without recomputing."""
+        with file_lock(self.directory / '.budget.lock'):
+            for manifest in self.directory.glob('*/task.json'):
+                try:
+                    previous = json.loads(manifest.read_text())
+                    if digest(raw_identity(previous.get('identity', {}))) != self.raw_id:
+                        continue
+                    with file_lock(manifest.parent / '.active.pin', blocking=False):
+                        for source in manifest.parent.glob('*.npz'):
+                            destination = self.raw_folder / source.name
+                            if not destination.exists():
+                                os.replace(source, destination)
+                except (OSError, ValueError):
+                    continue
 
     def update(self, **values):
         with self.lock, file_lock(self.folder / '.manifest.lock'):
@@ -53,7 +106,7 @@ class WindowCheckpoint:
             atomic_json(self.manifest, state)
 
     def _path(self, index):
-        return self.folder / f'{index:08d}.npz'
+        return self.raw_folder / f'{index:08d}.npz'
 
     def load(self, index):
         try:
@@ -71,6 +124,7 @@ class WindowCheckpoint:
             with self.lock:
                 self.completed.add(index)
                 self.reused += 1
+            os.utime(self._path(index), None)
             return result
         except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile):
             return None
@@ -104,19 +158,24 @@ class WindowCheckpoint:
             self.written += 1
             self.update(completed_windows=len(self.completed), reused_windows=self.reused,
                         new_windows=self.written)
+            self._heartbeat('running')
 
     def finish(self, status, **values):
         self.update(status=status, completed_windows=len(self.completed), reused_windows=self.reused,
                     new_windows=self.written, cache_warning=self.cache_warning, **values)
+        self._heartbeat(status)
 
     def close(self):
-        if self._pin is not None:
-            self._pin.close()
-            self._pin = None
+        for name in ('_pin', '_raw_pin', '_execution'):
+            stream = getattr(self, name, None)
+            if stream is not None:
+                stream.close()
+                setattr(self, name, None)
 
     @property
     def metadata(self):
-        return {'id': self.id, 'reused_windows': self.reused, 'new_windows': self.written,
+        return {'id': self.id, 'raw_id': self.raw_id, 'wait_seconds': self.wait_seconds,
+                'reused_windows': self.reused, 'new_windows': self.written,
                 'total_windows': len(self.bounds), 'manifest': str(self.manifest), 'cache_warning': self.cache_warning}
 
 
@@ -151,25 +210,12 @@ def update_task(task_id, **values):
 
 def prune_tasks(directory=None):
     """Bound checkpoint storage; active inference sessions always keep their directory."""
-    import shutil
     root = Path(directory or task_root())
     maximum = int(float(os.environ.get('MINT_WINDOW_CACHE_MAX_GIB', '16')) * 2**30)
     if maximum <= 0:
         raise ValueError('MINT_WINDOW_CACHE_MAX_GIB must be positive')
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     with file_lock(root / '.budget.lock'):
-        folders = [p for p in root.iterdir() if p.is_dir()]
-        sizes = {p: sum(x.stat().st_size for x in p.glob('*.npz')) for p in folders}
-        used = sum(sizes.values())
-        for folder in sorted(folders, key=lambda p: (p / 'task.json').stat().st_mtime if (p / 'task.json').exists() else 0):
-            if used <= maximum:
-                break
-            try:
-                with file_lock(folder / '.active.pin', blocking=False):
-                    # Keep task metadata for history; only raw prediction blobs are evicted.
-                    for path in folder.glob('*.npz'):
-                        path.unlink(missing_ok=True)
-                    used -= sizes[folder]
-            except BlockingIOError:
-                continue
-        return {'used_bytes': used, 'limit_bytes': maximum, 'tasks': len(folders)}
+        budget = CacheBudget(root, pattern='**/*.npz', pin_parent=True, max_gib=maximum / 2**30)
+        used, _ = budget._evict(0, sum(v['bytes'] for v in budget._reservations().values()))
+        return {'used_bytes': used, 'limit_bytes': maximum, 'tasks': len(list(root.glob('*/task.json')))}

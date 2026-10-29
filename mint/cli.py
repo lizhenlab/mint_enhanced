@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import os
 import sys
 from pathlib import Path
 
@@ -59,7 +60,8 @@ def main(argv: list[str] | None = None) -> int:
 
         return inference_main(remainder)
     if command == "viewer":
-        return _run_script("eval/model_effect/visualization/viewer_web.py", remainder)
+        # The service supervisor owns the actual Viewer PID, without an intermediate launcher.
+        os.execv(sys.executable, [sys.executable, str(PROJECT_DIR / 'eval/model_effect/visualization/viewer_web.py'), *remainder])
     from .doctor import doctor_main
 
     return doctor_main(remainder)

@@ -88,7 +88,7 @@ def _cache_lock(path, cancel_check, cancelled_error):
 
 def read_frames(reader, indices, *, source_path=None, view='full', cache_dir=None,
                 on_step=None, cancel_check=None, cancelled_error=InferenceCancelled,
-                memory_mib=None, decode_mib=None):
+                memory_mib=None, decode_mib=None, pipeline=False, _stream=None):
     """Return an ndarray or read-only .npy memmap; temporaries are bounded by bytes."""
     indices = np.asarray(indices, dtype=np.int64)
     _check(cancel_check, cancelled_error)
@@ -98,6 +98,13 @@ def read_frames(reader, indices, *, source_path=None, view='full', cache_dir=Non
     if first.dtype != np.uint8 or first.ndim != 4 or first.shape[-1] != 3:
         raise ValueError('Decoder must return uint8 RGB frames')
     shape = (len(indices), *first.shape[1:])
+    if pipeline:
+        from .decode_pipeline import DecodedFrames
+        return DecodedFrames(shape, lambda stream: read_frames(reader, indices,
+            source_path=source_path, view=view, cache_dir=cache_dir, on_step=on_step,
+            cancel_check=stream.cancelled, cancelled_error=cancelled_error,
+            memory_mib=memory_mib, decode_mib=decode_mib, _stream=stream),
+            cancel_check=cancel_check, cancelled_error=cancelled_error)
     frame_bytes = int(np.prod(shape[1:]))
     # Decode budget uses native width: a cropped view still first decodes both eyes.
     native_frame_bytes = frame_bytes * (2 if view != 'full' else 1)
@@ -115,10 +122,14 @@ def read_frames(reader, indices, *, source_path=None, view='full', cache_dir=Non
         for start in range(0, len(indices), chunk):
             _check(cancel_check, cancelled_error)
             stop = min(len(indices), start + chunk)
+            if _stream is not None:
+                _stream.before(start)
             decoded = reader.get_batch(indices[start:stop].tolist()).asnumpy()
             _check(cancel_check, cancelled_error)
             output[start:stop] = select_view(decoded, view)
             del decoded
+            if _stream is not None:
+                _stream.advance(stop)
             progress(stop)
             if isinstance(output, np.memmap) and ((start // chunk) % max(1, (512 * 2**20 // max(1, chunk * frame_bytes))) == 0):
                 output.flush()
@@ -127,6 +138,8 @@ def read_frames(reader, indices, *, source_path=None, view='full', cache_dir=Non
 
     if len(indices) * frame_bytes <= memory_mib * 2**20:
         output = np.empty(shape, dtype=np.uint8)
+        if _stream is not None:
+            _stream.bind(output)
         fill(output)
         return output
 
@@ -167,11 +180,14 @@ def read_frames(reader, indices, *, source_path=None, view='full', cache_dir=Non
             with budget.reserve(destination, len(indices) * frame_bytes + 4096):
                 mapped = np.lib.format.open_memmap(temporary, mode='w+', dtype=np.uint8, shape=shape)
                 temporary.chmod(0o600)
+                if _stream is not None:
+                    _stream.bind(mapped)
                 fill(mapped)
                 if file_identity(source) != source_identity:
                     raise RuntimeError('Video changed during decoding; retry after the recording is complete')
                 mapped.flush()
-                mapped._mmap.close()
+                if _stream is None:
+                    mapped._mmap.close()
                 mapped = None
                 metadata_temp.write_text(json.dumps(identity, sort_keys=True))
                 os.replace(temporary, destination)
@@ -179,7 +195,7 @@ def read_frames(reader, indices, *, source_path=None, view='full', cache_dir=Non
                 return pin_mapping(np.load(destination, mmap_mode='r', allow_pickle=False), destination)
 
         finally:
-            if mapped is not None:
+            if mapped is not None and _stream is None:
                 mapped._mmap.close()
             temporary.unlink(missing_ok=True)
             metadata_temp.unlink(missing_ok=True)

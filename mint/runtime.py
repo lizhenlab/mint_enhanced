@@ -60,6 +60,20 @@ def video_identity(path, indices, view, fps):
             'indices': hashlib.sha256(np.asarray(indices, dtype=np.int64).tobytes()).hexdigest()}
 
 
+def model_identity(checkpoint, config):
+    """Fingerprint the exact weight file and parsed configuration a loader will use."""
+    import yaml
+    path = Path(checkpoint).expanduser().resolve()
+    if path.is_dir():
+        for pattern in ('model.safetensors', 'pytorch_model.bin', '*.safetensors', 'pytorch_model*.bin', '*.pt', '*.pth', '*.ckpt'):
+            hits = sorted(p for p in path.glob(pattern) if p.is_file())
+            if hits:
+                path = hits[0]
+                break
+    configuration = config if isinstance(config, dict) else yaml.safe_load(Path(config).read_text())
+    return digest({'weights': file_identity(path), 'config': configuration})
+
+
 class StageTimer:
     def __init__(self):
         self.started = time.perf_counter()

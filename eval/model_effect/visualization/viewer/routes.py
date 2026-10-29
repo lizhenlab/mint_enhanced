@@ -77,7 +77,7 @@ def create_app(store) -> Flask:
 
     @app.before_request
     def admit_heavy_request():
-        if request.endpoint in {"api_world", "video", "world_video", "mujoco_video", "retarget_video"}:
+        if request.endpoint in {"api_world", "video", "world_video", "mujoco_video", "retarget_video", "resolve_media"}:
             if not heavy_slots.acquire(blocking=False):
                 return jsonify(error="系统正在处理其他任务，请稍后重试"), 429, {"Retry-After": "2"}
             request._mint_heavy_slot = True
@@ -97,11 +97,10 @@ def create_app(store) -> Flask:
 
     @app.after_request
     def _no_cache(resp):
-        """页面/API 禁缓存；带参数的视频允许浏览器复用已下载的 Range 分块。"""
-        if request.endpoint in {"video", "world_video", "mujoco_video", "retarget_video", "export_file"} \
+        """Only versioned artifacts and content-addressed exports may be cached."""
+        if request.endpoint in {"artifact_file", "export_file"} \
                 and resp.status_code in (200, 206):
-            # 视频 URL 已带 ckpt/渲染参数；允许浏览器复用 Range 分块，避免长视频
-            # 播放或回看时反复从 CPFS 拉取同一段。private 防止共享代理串内容。
+            # Result IDs include input, loaded model, parameters and renderer version.
             resp.headers["Cache-Control"] = "private, max-age=3600"
             resp.headers.pop("Pragma", None)
             resp.headers["Accept-Ranges"] = "bytes"
@@ -109,6 +108,48 @@ def create_app(store) -> Flask:
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         resp.headers["Pragma"] = "no-cache"
         return resp
+
+    def media_response(path):
+        if request.endpoint == 'resolve_media':
+            result_id = Path(path).stem
+            return jsonify(url=f'results/{result_id}.mp4', result_id=result_id)
+        return send_file(path, mimetype='video/mp4', conditional=True)
+
+    def send_result(result_id, **options):
+        from mint.inference.cache_budget import file_lock
+        from werkzeug.wsgi import ClosingIterator
+        context = file_lock(store._artifacts.directory / (result_id + '.pin'), shared=True)
+        if len(result_id) != 64 or any(c not in '0123456789abcdef' for c in result_id):
+            abort(404)
+        context.__enter__()
+        path = store._artifacts.lookup(result_id)
+        if path is None:
+            context.__exit__(None, None, None)
+            abort(404, 'Cached result expired; resolve the media again')
+        try:
+            response = send_file(path, mimetype='video/mp4', conditional=True, **options)
+            response.response = ClosingIterator(response.response, lambda: context.__exit__(None, None, None))
+            return response
+        except BaseException:
+            context.__exit__(None, None, None)
+            raise
+
+    @app.get('/results/<result_id>.mp4')
+    def artifact_file(result_id):
+        return send_result(result_id)
+
+    @app.get('/api/media/resolve/<kind>/<int:eid>')
+    def resolve_media(kind, eid):
+        if not 0 <= eid < store.n_items():
+            abort(404)
+        context = store.media_context(eid)
+        for key in context:
+            if request.args.get(key) and request.args[key] != context[key]:
+                return jsonify(error='Input or model version changed; reload the selected sample'), 409
+        names = {'video': 'video', 'world': 'world_video', 'mujoco': 'mujoco_video', 'retarget': 'retarget_video'}
+        if kind not in names:
+            abort(404)
+        return app.view_functions[names[kind]](eid)
 
     @app.get('/api/tasks')
     def task_history():
@@ -149,12 +190,15 @@ def create_app(store) -> Flask:
         if task.get('identity', {}).get('model') != expected:
             return jsonify(error='Checkpoint or configuration changed; select it as a new task.'), 409
         params = {**params, 'config': str(config.resolve())}
-        if not store.ckpt_path or Path(store.ckpt_path).resolve() != checkpoint.resolve():
-            store.swap_ckpt(str(checkpoint))
-        store.start_load()
+        try:
+            store.select_model(str(checkpoint), expected_identity=expected)
+            store.start_load(expected_identity=expected)
+        except (RuntimeError, ValueError) as exc:
+            return jsonify(error=str(exc)), 409
         eid = store.video_eid(source, params.get('video_view', 'full'),
             params.get('target_fps', 0), params.get('max_frames'))
-        return jsonify(eid=eid, parameters=params, ready=store.predictor_ready(), ckpt_tag=store.ckpt_tag)
+        return jsonify(eid=eid, parameters=params, ready=store.predictor_ready(), ckpt_tag=store.ckpt_tag,
+                       model_identity=expected)
 
     # ---- 静态资源（前端单页）----
     @app.get("/")
@@ -726,6 +770,8 @@ def create_app(store) -> Flask:
     def api_model_ready():
         # 前端在按钮旁显示「未加载/加载中/就绪」（默认不加载；须手动点[加载模型]才载入；加载中禁止推理）。
         return jsonify(ready=store.predictor_ready(), loading=store.loader_active(),
+                       model_identity=getattr(getattr(store, 'predictor', None), '_cache_model_identity', None),
+                       error=str(store._load_err) if getattr(store, '_load_err', None) else None,
                        devices=store.predictor_devices(),
                        max_frames=getattr(store, 'max_frames', None),
                        gpu_scheduler=getattr(getattr(store, "predictor", None), "gpu_scheduler_status", {"policy": "unloaded"}),
@@ -842,7 +888,7 @@ def create_app(store) -> Flask:
             path = store.world_video(eid, **_world_query_options())
         except (OSError, RuntimeError, ValueError) as exc:
             abort(400, str(exc))
-        return send_file(path, mimetype="video/mp4", conditional=True)
+        return media_response(path)
 
     @app.get("/mujoco/<int:eid>")
     def mujoco_video(eid: int):
@@ -868,7 +914,7 @@ def create_app(store) -> Flask:
             abort(503, f"MuJoCo 依赖不可用: {exc}")
         except (RuntimeError, ValueError) as exc:
             abort(400, str(exc))
-        return send_file(path, mimetype="video/mp4", conditional=True)
+        return media_response(path)
 
     @app.get("/api/retarget/progress/<int:eid>")
     def api_retarget_progress(eid: int):
@@ -914,7 +960,7 @@ def create_app(store) -> Flask:
             abort(503, f"Wuji retargeting 依赖不可用: {exc}")
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             abort(400, str(exc))
-        return send_file(path, mimetype="video/mp4", conditional=True)
+        return media_response(path)
 
     @app.post("/api/export/<int:eid>")
     def api_export_video(eid: int):
@@ -1039,6 +1085,9 @@ def create_app(store) -> Flask:
         if exported is None or not exported[0].is_file():
             abort(404, "导出视频不存在或已过期")
         path, filename = exported
+        artifacts = getattr(store, '_artifacts', None)
+        if artifacts is not None and path.parent == artifacts.directory:
+            return send_result(path.stem, as_attachment=True, download_name=filename)
         return send_file(
             path, as_attachment=True, download_name=filename, conditional=True)
 
@@ -1074,6 +1123,6 @@ def create_app(store) -> Flask:
             mp4 = store.mp4(eid, mode, layout, content, cam_mode, hand_mode, gtb, pdb, pdf)
         if not mp4.exists():
             abort(404)
-        return send_file(mp4, mimetype="video/mp4", conditional=True)   # conditional=支持 Range seek
+        return media_response(mp4)
 
     return app

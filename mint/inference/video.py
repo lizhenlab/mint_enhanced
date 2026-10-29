@@ -24,7 +24,7 @@ class VideoBatch:
 
 def read_video(path: str | Path, max_frames: int | None = None, target_fps: float | None = None,
                *, view='full', cache_dir=None, on_step=None, cancel_check=None,
-               cancelled_error=None) -> VideoBatch:
+               cancelled_error=None, pipeline=False) -> VideoBatch:
     """Decode the whole timeline; long RGB sequences remain on disk instead of RAM."""
     from decord import VideoReader
     source = Path(path).expanduser().resolve()
@@ -37,7 +37,7 @@ def read_video(path: str | Path, max_frames: int | None = None, target_fps: floa
     indices, output_fps = sample_indices(source_count, source_fps, target_fps, max_frames)
     kwargs = {} if cancelled_error is None else {'cancelled_error': cancelled_error}
     frames = read_frames(reader, indices, source_path=source, view=view, cache_dir=cache_dir,
-                         on_step=on_step, cancel_check=cancel_check, **kwargs)
+                         on_step=on_step, cancel_check=cancel_check, pipeline=pipeline, **kwargs)
     return VideoBatch(
         frames_rgb=frames,
         fps=output_fps,

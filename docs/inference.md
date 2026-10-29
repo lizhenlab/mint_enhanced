@@ -52,7 +52,7 @@ python -m mint infer \
   --output artifacts/example
 ```
 
-The command decodes a bounded number of frames, runs windowed camera-and-hand
+The command processes every source frame by default, overlaps bounded decoding with windowed camera-and-hand
 prediction, saves `prediction.npz`, and renders `prediction.mp4`. No annotation
 file or ground-truth column is opened. Use `--no-render` when MANO assets are
 unavailable or only numeric output is needed.
@@ -61,6 +61,12 @@ The one-video CLI keeps acceleration off by default because compiling a fresh
 process can cost more than one short inference. Use `--compile-mode auto`,
 `--fp8-mode auto`, and `--warmup-passes 2` only for repeated or sufficiently
 large headless workloads.
+
+Long videos use a disk-backed RGB cache with bounded decode and preprocessing buffers.
+Only an explicit `--max-frames` or target FPS limits or samples the input timeline.
+See [long-video operation](long-video.md) and [runtime reliability](runtime-reliability.md)
+for task recovery, shared raw-window reuse when tuning smoothing, persistent video results,
+and resource/cache budgets.
 
 ## Browser startup
 

@@ -76,3 +76,10 @@ wandb/
 
 # Dataset cards are uploaded to Hugging Face / ModelScope by hand, not tracked here
 docs/dataset-card/
+
+# Local deployment state and credentials
+/.deployment/
+/.tmp/
+.env.*
+!.env.example
+.DS_Store

@@ -1,0 +1,22 @@
+{
+  "repository": "https://github.com/lizhenlab/mint_enhanced",
+  "upstream": "https://github.com/wuji-technology/wuji-ego-mint",
+  "upstream_commit": "1bd21e4edd6d5d2d59789ce64ee5450de24a7c2b",
+  "recorded_date": "2026-10-29",
+  "upstream_history_preserved": true,
+  "core_algorithm_changes": false,
+  "launcher_sha256": "c227ad2f6680d8a5dc540fb183b4372c521c0b6d27ac78e09ff54fcf105fda11",
+  "checkpoint": {
+    "repository": "ZZJAsher/mint_v1",
+    "file": "model.safetensors",
+    "sha256": "7b2f0aa5dfd00c271bb2f12c841ccfcc70e81e4052d413eacb5fb42a1bcc36c8",
+    "included": false
+  },
+  "decord_note": {
+    "version": "0.6.0",
+    "official_wheel_sha256": "51997f20be8958e23b7c4061ba45d0efcd86bffd5fe81c695d0befee0d442976",
+    "local_repaired_wheel_sha256": "45e5fe8dbcda8da111424fa6357f0f7dc20862e8e52e6f9030f839c3c581ceae",
+    "repair": "Corrected WHEEL compatibility tag and regenerated RECORD; executable payload unchanged.",
+    "wheel_included": false
+  }
+}

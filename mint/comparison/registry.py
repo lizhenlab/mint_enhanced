@@ -89,7 +89,7 @@ def backend_spec(algorithm):
             missing.append(str(root / name))
     implementation = {name: hashlib.sha256((PROJECT / 'mint/comparison' / name).read_bytes()).hexdigest()
                       for name in ('contracts.py', 'registry.py', 'normalizers.py', 'prepare.py', 'native.py', 'worker.py',
-                                   'native_pool.py','native_process.py','native_tasks.py','hawor_parallel.py','read_only.py')}
+                                   'native_pool.py','native_process.py','native_tasks.py','hawor_parallel.py','hawor_slam.py','read_only.py')}
     identity['adapter'] = implementation
     return {**{k: v for k, v in spec.items() if k not in {'sources', 'assets', 'root_env', 'default_root'}},
             'id': algorithm, 'root': str(root), 'python': str(python), 'ready': not missing,

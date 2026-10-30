@@ -198,6 +198,7 @@ class NativePool:
         items = list(items)
         self.maximum = min(self.maximum, max(1, len(items)))
         started = time.perf_counter()
+        started_at = time.time()
         done = [0]
         stop = threading.Event()
         def monitor():
@@ -205,8 +206,12 @@ class NativePool:
                 if self.ctx.cancelled(): return
                 status = self.scheduler.status()
                 atomic_json(self.ctx.work/(self.kind+'-gpu-state.json'),{'updated_at':time.time(),'gpus':status['gpus']})
-                self.ctx.progress(stage=stage, done=done[0], total=len(items),
-                    gpu_scheduler={**status, 'max_workers': self.maximum}, native_kind=self.kind)
+                values = {'stage': stage, 'done': done[0], 'total': len(items)}
+                if self.kind == 'hawor_slam':
+                    from .hawor_slam import read_slam_progress
+                    values.update(read_slam_progress(self.ctx, started_at))
+                self.ctx.progress(**values, gpu_scheduler={**status, 'max_workers': self.maximum},
+                    native_kind=self.kind, completed_tasks=done[0], total_tasks=len(items))
         thread = threading.Thread(target=monitor, daemon=True); thread.start()
         try:
             values = []

@@ -46,7 +46,7 @@ def native_args(ctx,plan):
 
 def adopt_stages(ctx):
     """Reuse only verified, input/native-version-compatible MINT-owned checkpoints."""
-    from .native import publish_stage
+    from .native import publish_stage,stage_cached
     if os.environ.get('MINT_NATIVE_REUSE_STAGES','1')=='0':return
     reuse_root=Path(os.environ.get('MINT_NATIVE_REUSE_ROOT',str(ctx.directory.parent.parent)))
     database=reuse_root/'jobs.sqlite'
@@ -64,9 +64,14 @@ def adopt_stages(ctx):
                for name,identity in after.get(kind,{}).items()):continue
         old=reuse_root/'runs'/run_id/'native'
         copied=[]
-        for name in ('frames','detection','motion'):
-            if name not in os.environ.get('MINT_NATIVE_REUSE_STAGE_LIMIT','frames,detection,motion').split(','):continue
-            if (ctx.work/(name+'.complete.json')).exists():continue
+        for name in ('frames','detection','motion','slam_geometry'):
+            if name not in os.environ.get('MINT_NATIVE_REUSE_STAGE_LIMIT','frames,detection,motion,slam_geometry').split(','):continue
+            if name=='slam_geometry':
+                # A SLAM checkpoint is valid only with the exact motion/masks
+                # adopted in this pass, and the same numerical adapter release.
+                if request['algorithm']!='hawor_full' or 'motion' not in copied:continue
+                if not slam_adapters_compatible(before.get('adapter',{}),after.get('adapter',{})):continue
+            if stage_cached(ctx,name):continue
             try:
                 state=json.loads((old/(name+'.complete.json')).read_text())
                 if state['run_id']!=run_id or any(file_identity(p)!=identity for p,identity in state['files'].items()):continue
@@ -74,9 +79,14 @@ def adopt_stages(ctx):
                 for source in state['files']:
                     src=Path(source);relative=src.relative_to(old);dst=ctx.work/relative
                     dst.parent.mkdir(parents=True,exist_ok=True)
-                    if not dst.exists():
-                        if name=='frames':dst.symlink_to(src)
-                        else:shutil.copy2(src,dst)
+                    if src.resolve()!=dst.resolve():
+                        temporary=dst.with_name('.'+dst.name+'.reuse')
+                        temporary.unlink(missing_ok=True)
+                        try:
+                            if name=='frames':temporary.symlink_to(src)
+                            else:shutil.copy2(src,temporary)
+                            os.replace(temporary,dst)
+                        finally:temporary.unlink(missing_ok=True)
                     destinations.append(dst)
                 publish_stage(ctx,name,destinations);copied.append(name)
             except (OSError,ValueError,KeyError):continue
@@ -84,6 +94,18 @@ def adopt_stages(ctx):
             ctx.metadata['reused_native_stages_from']={'run_id':run_id,'stages':copied,
                 'validation':'Exact sample/native source/assets and camera options; original files unchanged'}
             return
+
+
+def slam_adapters_compatible(before,after):
+    if before==after:return True
+    # Reviewed predecessor: the new SLAM path keeps all frames, equations,
+    # eight-keyframe batches, thresholds, and 7+12 BA steps. Other numerical
+    # dependencies must still match exactly. Drop this migration when changing
+    # those semantics; do not broaden it to arbitrary historical releases.
+    legacy='6deeda2b7bdf0ed58719ecf53dfffe271f8a03561e66424dd672706b9f6742af'
+    numerical=('contracts.py','normalizers.py','prepare.py','native.py','worker.py','native_tasks.py','read_only.py')
+    return before.get('hawor_parallel.py')==legacy and all(
+        key in before and before[key]==after.get(key) for key in numerical)
 
 
 def materialize_frames(ctx,size,homography):
@@ -241,6 +263,8 @@ def stage_runner(kind,ctx):
             import torch
             import lib.pipeline.masked_droid_slam as native
             import droid
+            from .hawor_slam import SlamProgress,install_runtime,write_slam_geometry
+            report=SlamProgress(ctx)
             files=[str(sequence/'extracted_images'/f'{i:06d}.jpg') for i in range(n)]
             masks=torch.from_numpy(np.load(sequence/f'tracks_0_{n}/model_masks.npy',allow_pickle=False))
             events=[];base=droid.DepthVideo
@@ -252,18 +276,62 @@ def stage_runner(kind,ctx):
                     self.video.ensure_capacity(self.video.counter.value+64)
                     grow_factor_graph(self.frontend.graph,self.video)
                     tick=time.perf_counter();value=super().track(*a,**kw)
-                    ctx.cooperate(tick);return value
+                    ctx.cooperate(tick);report.track_seconds+=time.perf_counter()-tick
+                    report('slam_tracking',int(a[0])+1,n,keyframes=self.video.counter.value)
+                    return value
                 def terminate(self,*a,**kw):
                     self.video.ensure_capacity(self.video.counter.value+64)
+                    original_backend=self.backend
+                    def backend(steps=12):
+                        report('slam_global_ba',report.ba_steps,19,pass_steps=steps,force=True)
+                        before=report.ba_steps
+                        original_ba=self.video.ba
+                        def ba(*args,**kwargs):
+                            value=original_ba(*args,**kwargs)
+                            report.ba_steps+=1
+                            report('slam_global_ba',report.ba_steps,19,pass_steps=steps,force=True)
+                            return value
+                        self.video.ba=ba;started=time.perf_counter()
+                        try:value=original_backend(steps)
+                        finally:self.video.ba=original_ba
+                        if report.ba_steps==before:report.ba_steps+=steps
+                        report.ba_seconds+=time.perf_counter()-started
+                        report('slam_global_ba',report.ba_steps,19,pass_steps=steps,force=True)
+                        return value
+                    self.backend=backend
+                    original_filler=self.traj_filler
+                    def fill(stream):
+                        started=time.perf_counter()
+                        def tracked_stream():
+                            for t,image,intrinsics in stream:
+                                report('slam_trajectory',int(t),n,keyframes=self.video.counter.value)
+                                yield t,image,intrinsics
+                        value=original_filler(tracked_stream())
+                        report.fill_seconds=time.perf_counter()-started
+                        report('slam_trajectory',n,n,force=True)
+                        return value
+                    self.traj_filler=fill
                     return super().terminate(*a,**kw)
-            native.Droid=GrowingDroid
-            calib=np.array(native.est_calib(files));calib[:2]=plan['focal']
-            model,traj=native.run_slam(files,masks=masks,calib=calib)
+            native.Droid=GrowingDroid;restore=install_runtime(native,droid,report)
+            try:
+                calib=np.array(native.est_calib(files));calib[:2]=plan['focal']
+                model,traj=native.run_slam(files,masks=masks,calib=calib)
+            finally:
+                restore();native.Droid=original_droid;droid.DepthVideo=base
             count=model.video.counter.value
             path=ctx.work/'slam_geometry.npz'
-            atomic_npz(path,traj=np.asarray(traj),tstamp=model.video.tstamp[:count].cpu().int().numpy(),
+            report('slam_checkpoint',0,1,keyframes=count,force=True)
+            started=time.perf_counter()
+            encoding=write_slam_geometry(path,traj=np.asarray(traj),tstamp=model.video.tstamp[:count].cpu().int().numpy(),
                 disps=model.video.disps_up[:count].cpu().numpy(),calib=calib)
             atomic_json(ctx.work/'slam-capacity.json',{'events':events,'keyframes':count,'final_capacity':model.video.poses.shape[0]})
+            atomic_json(ctx.work/'slam-runtime.json',{'track_compute_seconds':report.track_seconds,
+                'global_ba_seconds':report.ba_seconds,'trajectory_seconds':report.fill_seconds,
+                'checkpoint_seconds':time.perf_counter()-started,'checkpoint_encoding':encoding,
+                'solver':'Unmodified native DROID-SLAM','frames':n,'keyframes':count,
+                'native_ba_iterations':[7,12],'native_keyframe_batch':8,
+                'tracking_image_prefetch':4 if os.environ.get('MINT_HAWOR_SLAM_ACCELERATE','1')!='0' else 0})
+            report('slam_checkpoint',1,1,force=True)
             return path
         return slam
     if kind=='hawor_depth':
@@ -342,7 +410,9 @@ def run_hawor_parallel(ctx):
     try:
         if not stage_cached(ctx,'slam_geometry'):
             with NativePool(ctx,'hawor_slam',maximum=1,min_free_mib=28000) as pool:pool.run([{'index':0}],stage='slam_scale')
-            publish_stage(ctx,'slam_geometry',[ctx.work/'slam_geometry.npz',ctx.work/'slam-capacity.json'])
+            publish_stage(ctx,'slam_geometry',[ctx.work/'slam_geometry.npz',ctx.work/'slam-capacity.json',ctx.work/'slam-runtime.json'])
+        if (ctx.work/'slam-runtime.json').is_file():
+            ctx.metadata['slam_runtime']=json.loads((ctx.work/'slam-runtime.json').read_text())
         with np.load(ctx.work/'slam_geometry.npz',allow_pickle=False) as z:
             stamps=z['tstamp'].copy();disps=z['disps'].copy();traj=z['traj'].copy();calib=z['calib'].copy()
         missing=[]
@@ -360,6 +430,7 @@ def run_hawor_parallel(ctx):
         scales=[];low,high=.4,.7
         for index,stamp in enumerate(stamps):
             ctx.check_cancel()
+            ctx.progress(stage='metric_scale',done=index,total=len(stamps))
             with np.load(ctx.work/'metric-depth'/f'{stamp:06d}.npz',allow_pickle=False) as z:depth=z['depth'].copy()
             scale=est_scale_hybrid(1/disps[index],depth,sigma=.5,msk=masks[stamp].astype(np.uint8),near_thresh=low,far_thresh=high)
             for attempt in range(64):

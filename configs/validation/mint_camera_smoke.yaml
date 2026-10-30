@@ -1,0 +1,45 @@
+# Functional validation only. Select a converted camera dataset in the platform.
+# Small images and one optimizer step do not establish production model quality.
+model:
+  name: split_fov_head
+  pretrained: null
+  enable_hand: true
+  hand_head: {name: refine, dim: 512, num_queries: 4, num_iterations: 2, trunk_depth: 1, rotation_refine_mode: compose_axis_angle, rotation_delta_frame: local, rotation_delta_max_angle_deg: 30.0}
+  enable_hand_presence: true
+  hand_presence_head: {dim: 256, num_heads: 4}
+  fov_head: {dim: 512, num_heads: 8, trunk_depth: 2, initial_fov_deg: [60.0, 75.0], min_fov_rad: 0.0001}
+  backbone: {img_size: 518, patch_size: 14, embed_dim: 1024, use_sdpa: true, use_gradient_checkpoint: false, camera_num_iterations: 4, enable_camera: true, enable_depth: false, enable_point: false, enable_local_point: false}
+  freeze: ["backbone.aggregator*", "backbone.fov_head*", "hand_head*", "hand_presence_head*"]
+data:
+  name: lerobot_v3
+  root: data/lerobot/platform_camera_validation
+  sample_seed: 42
+  camera_translation_normalization: {enabled: false}
+  clip_len: 4
+  clip_stride: 4
+  size_hw: [112, 112]
+  batch_size: 1
+  num_workers: 0
+  shuffle: false
+  require_mano_gt: false
+  require_kpt21_gt: false
+loss:
+  camera:
+    weight: 2.0
+    terms: [{name: trans_l1, weight: 1.0}, {name: rot_geo, weight: 1.0}, {name: trans_vel_l1, weight: 0.5}, {name: rot_vel_geo, weight: 0.5}]
+train:
+  run_name: platform_camera_validation
+  init_from: checkpoints/model.safetensors
+  reproducibility: {enabled: true, seed: 42, deterministic_algorithms: false}
+  epochs: 0
+  max_steps: 1
+  log_every: 1
+  ckpt_every: 1
+  grad_clip: 0.0
+  grad_value_clip: 1.0
+  grad_accum: 1
+  mixed_precision: bf16
+  wandb: {enabled: false}
+optim:
+  lr: 0.000001
+  param_groups: [{match: backbone.camera_head, lr: 0.000001, grad_value_clip: 1.0}]

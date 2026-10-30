@@ -3,6 +3,7 @@
 > 本仓库补充现有 `run_mint.sh`、服务器依赖快照及部署记录，并支持[最多 8 张 GPU 动态共享调度](docs/gpu-scheduling.md)；使用入口、Mac 访问方式和[完整长视频处理](docs/long-video.md)见 [DEPLOYMENT.md](DEPLOYMENT.md)，可靠性、断点恢复与缓存预算见[运行说明](docs/runtime-reliability.md)。模型权重、MANO、用户原始视频和运行缓存需在本地准备。
 >
 > 新增 [MINT / HaWoR / ACE 统一比较平台](docs/comparison-platform.md)：独立原生环境、同输入时间轴、2D/3D 与轨迹对照、显式结果导入、相机来源组合、持久任务恢复和同步导出；页面入口 `/compare`。
+> [任务与研究闭环](docs/platform-lifecycle.md)：持久导出恢复、提交预检、资源与阶段观测、结果目录、问题帧复核、数据版本、独立训练、检查点续跑及模型评测/别名回滚。
 
 <div align="center">
 
@@ -482,6 +483,7 @@ mint/
 | [Training](docs/training.md) | the two-stage recipe |
 | [LeRobot training data format](docs/lerobot-training-data.md) | what a compatible dataset must contain |
 | [Inference and viewer](docs/inference.md) | Viewer panels, exports, benchmark tools |
+| [Platform lifecycle](docs/platform-lifecycle.md) | task recovery, reviewed datasets, training and evaluated model versions |
 | [Privacy and release checklist](docs/privacy.md) | consent, review, redistribution |
 | [Security policy](SECURITY.md) | how to report a vulnerability |
 | [Third-party notices](THIRD_PARTY_NOTICES.md) | upstream licenses — read before distributing |

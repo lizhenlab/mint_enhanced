@@ -43,15 +43,30 @@ def run_mint(ctx):
         ckpt=spec.get('checkpoint', str(root / 'checkpoints/model.safetensors')), devices=devices, compile_mode='off', fp8_mode='off')
     ctx.timings['model_load_seconds'] = time.perf_counter() - started
     try:
+        import threading
+        monitor_stop = threading.Event()
+        counter = {'done': 0, 'total': None}
+        def monitor():
+            while not monitor_stop.wait(.75):
+                if ctx.cancelled():
+                    return
+                ctx.progress(stage='inference', **counter.copy(), gpu_scheduler=getattr(engine, 'gpu_scheduler_status', {}))
+        monitor_thread = threading.Thread(target=monitor, name='mint-comparison-progress', daemon=True)
+        monitor_thread.start()
         started = time.perf_counter()
         def step(done, total):
             ctx.check_cancel()
+            counter.update(done=done, total=total)
             ctx.progress(stage='inference', done=done, total=total,
                          gpu_scheduler=getattr(engine, 'gpu_scheduler_status', {}))
-        prediction = engine.predict(ctx.frames, cam_mode=options['mode'], hand_mode=options['hand_mode'],
-            cache_identity={'comparison_sample': sample['id'], 'frames': sample['source_frame_indices']},
-            task_parameters={'kind': 'comparison', 'run_id': ctx.run_id},
-            cancel_check=ctx.cancelled, on_step=step)
+        try:
+            prediction = engine.predict(ctx.frames, cam_mode=options['mode'], hand_mode=options['hand_mode'],
+                resume=ctx.request.get('execution', {}).get('cache') != 'fresh',
+                cache_identity={'comparison_sample': sample['id'], 'frames': sample['source_frame_indices']},
+                task_parameters={'kind': 'comparison', 'run_id': ctx.run_id},
+                cancel_check=ctx.cancelled, on_step=step)
+        finally:
+            monitor_stop.set(); monitor_thread.join(timeout=2)
         ctx.timings['native_inference_seconds'] = time.perf_counter() - started
         atomic_npz(ctx.work / 'mint_native.npz', **{k: np.asarray(v) for k, v in prediction.items() if not k.startswith('_')})
         ctx.metadata.update(native_timings=prediction.get('_timings'), checkpoint_task=prediction.get('_task'),

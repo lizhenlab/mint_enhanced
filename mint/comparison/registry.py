@@ -61,6 +61,19 @@ def root_for(algorithm):
     return Path(os.environ.get(spec['root_env'], spec['default_root'])).expanduser().resolve()
 
 
+def inference_configuration(config, checkpoint):
+    """Only configuration fields consumed by StudentEngine inference, including its actual window."""
+    import yaml
+    config = Path(config)
+    if not config.is_file():
+        return None
+    cfg = yaml.safe_load(config.read_text())
+    from mint.inference.engine import _clip_len_from_ckpt
+    window = _clip_len_from_ckpt(str(checkpoint)) or cfg.get('data', {}).get('clip_len') or 16
+    model = {key: value for key, value in cfg['model'].items() if not key.startswith('_') and key not in {'pretrained', 'freeze'}}
+    return {'model': model, 'size_hw': cfg.get('data', {}).get('size_hw', [378, 518]), 'window': int(window)}
+
+
 def backend_spec(algorithm, *, checkpoint=None, config=None):
     if algorithm not in ALGORITHMS:
         raise ValueError('Unknown algorithm: ' + str(algorithm))
@@ -97,6 +110,23 @@ def backend_spec(algorithm, *, checkpoint=None, config=None):
             if target.is_file() and target.suffix in {'.py', '.yaml', '.yml', '.cu', '.cpp', '.h'}:
                 identity['sources'][str(target.relative_to(root))] = hashlib.sha256(target.read_bytes()).hexdigest()
     identity['interpreter'] = file_identity(python)
+    # Installing a different framework does not change the Python executable.
+    # Hash small package records without importing frameworks or starting CUDA.
+    packages = ('torch-', 'torchvision-', 'numpy-', 'scipy-', 'smplx-', 'decord-', 'einops-',
+                'opencv_python', 'safetensors-', 'PyYAML-', 'pyyaml-', 'joblib-')
+    environment = {}
+    for site in (root / '.venv/lib').glob('python*/site-packages'):
+        for distribution in site.glob('*.dist-info'):
+            if distribution.name.startswith(packages):
+                for filename in ('METADATA', 'WHEEL', 'direct_url.json'):
+                    record = distribution / filename
+                    if record.is_file():
+                        environment[str(record.relative_to(site))] = hashlib.sha256(record.read_bytes()).hexdigest()
+    identity['environment'] = environment
+    if algorithm == 'mint':
+        identity['inference_configuration'] = inference_configuration(
+            selected.get('config', root / 'configs/training/mint_step2.yaml'),
+            selected.get('checkpoint', root / 'checkpoints/model.safetensors'))
     # Native decoders and their licensed MANO assets are also part of the result identity.
     for name in (['assets/mano/mano_left/MANO_LEFT.pkl', 'assets/mano/mano_right/MANO_RIGHT.pkl'] if algorithm == 'mint' else
                  ['_DATA/data/mano/MANO_RIGHT.pkl', '_DATA/data_left/mano_left/MANO_LEFT.pkl'] if algorithm.startswith('hawor') else
@@ -153,3 +183,29 @@ def normalize_options(algorithm, options=None):
             raise ValueError('HaWoR analysis_width must be 0 for native resolution, or 320..1920')
         result['analysis_width'] = width
     return result
+
+
+def parameter_schema(algorithm):
+    """The same capability declaration drives single, batch and evaluation forms."""
+    def choice(name, label, values, default, scope='numerical'):
+        return {'name': name, 'label': label, 'choices': values, 'default': default, 'scope': scope}
+    def number(name, label, default, minimum=None, maximum=None, step=1, scope='numerical'):
+        return {'name': name, 'label': label, 'default': default, 'minimum': minimum, 'maximum': maximum, 'step': step, 'scope': scope}
+    fields = []
+    if algorithm == 'mint':
+        fields += [choice('mode', '相机模式', [['max_chunked', 'Max chunked'], ['chunked', 'Chunked']], 'max_chunked'),
+            choice('hand_mode', '手部后处理', [['smooth', 'Production · 0.6 / 0.6 / 2'], ['smooth@0.7,0.5,0.3', 'Viewer · 0.7 / 0.5 / 0.3'], ['blend', '线性融合'], ['hard', '原始硬切']], 'smooth')]
+    elif algorithm.startswith('ace'):
+        fields += [choice('mode', '序列策略', [['independent81', '独立 81 帧 · 覆盖全片'], ['native_tiled', '原生整段 VAE · 4k+1 截尾']], 'independent81'),
+            choice('encode_width', '编码宽度', [['832', '832'], ['640', '640'], ['512', '512']], '832'),
+            choice('stride', '独立片段步长', [['80', '80'], ['40', '40']], '80'),
+            choice('merge', '片段合并', [['center', 'Center · 保留完整原生预测'], ['keep', 'Keep'], ['blend', 'Blend · SO(3) 融合']], 'center')]
+    elif algorithm.startswith('hawor'):
+        fields += [number('analysis_width', '工作宽度（0=原尺寸）', 832, 0, 1920),
+                   number('focal', '样本像素焦距（留空用原生假定）', '', .0001, None, 'any')]
+    if not ALGORITHMS[algorithm].get('import_only'):
+        fields += [number('max_gpus', '最多 GPU（按阶段自动调度）', 8, 1, 8, scope='runtime'),
+            choice('resource_policy', '资源策略', [['shared', 'Shared · 适度共享'], ['idle', 'Idle · 等待空闲'], ['dedicated', 'Dedicated · 独占对照']], 'shared', scope='runtime')]
+    return {'fields': fields, 'accepts_checkpoint': algorithm == 'mint',
+            'minimum_frames_by_mode': {'independent81': 81, 'native_tiled': 5} if algorithm.startswith('ace') else {},
+            'world': ALGORITHMS[algorithm]['world'], 'requires_calibration': ALGORITHMS[algorithm]['camera_required']}

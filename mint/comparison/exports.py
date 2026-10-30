@@ -1,6 +1,7 @@
 """Bounded CPU exports. Full numerical results remain independent of display size."""
 from __future__ import annotations
 
+import atexit
 import json
 import math
 import os
@@ -13,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from mint.runtime import atomic_json, digest, file_identity
-from mint.inference.cache_budget import CacheBudget, file_lock
+from mint.inference.cache_budget import CacheBudget, file_lock, _token
 from .contracts import CONNECTIONS, load_result
 
 
@@ -119,13 +120,135 @@ def overlay_frame(frame_rgb, arrays, source_frame, size, label, *, include_absen
 
 
 class ComparisonExports:
-    def __init__(self, manager):
+    def __init__(self, manager, *, autostart=True):
         self.manager = manager
         self.directory = manager.root / 'exports'
         self.directory.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._threads = {}
-        self._slot = threading.BoundedSemaphore(1)
+        self._stop = threading.Event()
+        self._recover()
+        if autostart:
+            self._coordinator = threading.Thread(target=self._loop, name='comparison-exports', daemon=True)
+            self._coordinator.start()
+        atexit.register(self.close)
+
+    def _read(self, export_id):
+        path = self.directory / (export_id + '.json')
+        return json.loads(path.read_text()) if path.is_file() else {'id': export_id, 'status': 'absent'}
+
+    def _write(self, export_id, **values):
+        with file_lock(self.directory / (export_id + '.state.lock')):
+            state = self._read(export_id)
+            atomic_json(self.directory / (export_id + '.json'), {**state, **values, 'updated_at': time.time()})
+
+    @staticmethod
+    def _alive(state):
+        return bool(state.get('owner_pid') and state.get('owner_token') and
+                    _token(state['owner_pid']) == state['owner_token'])
+
+    def _recover(self):
+        for path in self.directory.glob('*.json'):
+            if len(path.stem) != 64:
+                continue
+            with file_lock(self.directory / (path.stem + '.state.lock')):
+                try:
+                    state = self._read(path.stem)
+                except (OSError, ValueError):
+                    continue
+                if state.get('status') not in {'queued', 'rendering', 'running', 'cancelling'} or self._alive(state):
+                    continue
+                recoverable = (self.directory / (path.stem + '.request.json')).is_file()
+                cancelled = (self.directory / (path.stem + '.cancel')).exists()
+                if state['status'] == 'queued' and recoverable and not cancelled:
+                    continue
+                attempts = state.get('attempts', [])
+                if attempts and not attempts[-1].get('finished_at'):
+                    attempts[-1].update(finished_at=state.get('updated_at', time.time()), outcome='interrupted')
+                recovered_files = list(state.get('recovered_partial_files', []))
+                for temporary in self.directory.glob('.' + path.stem + '.*.mp4'):
+                    # Dead-owner partial encodes are reversible cache artifacts.
+                    # Make them visible to the ordinary bounded MP4 LRU budget.
+                    destination = self.directory / ('interrupted-' + temporary.name[1:])
+                    temporary.rename(destination)
+                    recovered_files.append(str(destination))
+                atomic_json(path, {**state, 'status': 'cancelled' if cancelled else 'queued' if recoverable else 'interrupted',
+                    'attempts': attempts, 'recovered_partial_files': recovered_files,
+                    'owner_pid': None, 'owner_token': None, 'updated_at': time.time(),
+                    'recovery': 'Replay the durable request from frame zero; publish atomically' if recoverable else
+                                'Legacy export has no durable request; submit the export again'})
+
+    def _loop(self):
+        while not self._stop.wait(.5) and not self.manager._stopping.is_set():
+            self._recover()
+            queued, selected = [], None
+            try:
+                # One encoder across all web processes sharing this cache.
+                with file_lock(self.directory / '.execution.lock', blocking=False):
+                    for path in self.directory.glob('*.json'):
+                        if len(path.stem) == 64:
+                            try:
+                                state = self._read(path.stem)
+                                if state.get('id') != path.stem:
+                                    continue
+                                if state.get('status') == 'queued' and not self._alive(state):
+                                    queued.append(state)
+                            except (OSError, ValueError):
+                                continue
+                    if queued:
+                        selected = min(queued, key=lambda s: s.get('created_at', 0))
+                        self._execute(selected['id'])
+            except BlockingIOError:
+                pass
+            except Exception as error:
+                if selected:
+                    self._write(selected['id'], status='failed', error=str(error), owner_pid=None, owner_token=None)
+
+    def _execute(self, export_id):
+        self.status(export_id)  # Validate the path-bearing ID before opening a request.
+        with file_lock(self.directory / (export_id + '.state.lock')):
+            state = self._read(export_id)
+            if state['status'] != 'queued' or self._alive(state):
+                return
+            request_path = self.directory / (export_id + '.request.json')
+            request = json.loads(request_path.read_text())
+            if digest(request['identity']) != export_id:
+                raise ValueError('Export request identity changed')
+            identity, render = request['identity'], request['render']
+            if (render['sample']['id'] != identity['sample'] or [r['id'] for r in render['runs']] != identity['runs'] or
+                any(render.get(key) != identity.get(key) for key in ('include_absent', 'geometry', 'baseline_run')) or
+                Path(render['sample']['frames_path']).resolve() != (self.manager.root / 'inputs' / identity['sample'] / 'frames.npy').resolve()):
+                raise ValueError('Export render request differs from its frozen identity')
+            attempts = list(state.get('attempts', []))
+            attempts.append({'number': len(attempts) + 1, 'started_at': time.time(), 'owner_pid': os.getpid()})
+            atomic_json(self.directory / (export_id + '.json'), {**state, 'status': 'rendering', 'error': None,
+                'attempts': attempts, 'owner_pid': os.getpid(), 'owner_token': _token(os.getpid()), 'updated_at': time.time()})
+        self._render(export_id, **request['render'])
+
+    def cancel(self, export_id):
+        state = self.status(export_id)
+        if state['status'] in {'queued', 'rendering', 'running', 'cancelling'}:
+            (self.directory / (export_id + '.cancel')).touch()
+            self._write(export_id, status='cancelling' if self._alive(state) else 'cancelled')
+        return self.status(export_id)
+
+    def resume(self, export_id):
+        state = self.status(export_id)
+        if state['status'] == 'absent':
+            raise KeyError('Export not found')
+        if state['status'] == 'completed' or self._alive(state):
+            return state
+        if not (self.directory / (export_id + '.request.json')).is_file():
+            raise ValueError('Legacy export has no replayable request; submit the comparison export again')
+        (self.directory / (export_id + '.cancel')).unlink(missing_ok=True)
+        self._write(export_id, status='queued', error=None, owner_pid=None, owner_token=None)
+        return self.status(export_id)
+
+    def close(self):
+        self._stop.set()
+        thread = getattr(self, '_coordinator', None)
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=5)
 
     def start(self, comparison_id, *, include_absent=False, run_ids=None, geometry='skeleton', baseline_run=None):
         if not isinstance(include_absent, bool):
@@ -147,21 +270,25 @@ class ComparisonExports:
                     'baseline_identity': file_identity(self.manager.root / 'runs' / baseline_run / 'result/result.json') if baseline_run else None,
                     'results': [file_identity(self.manager.root / 'runs' / r['id'] / 'result/result.json') for r in runs]}
         export_id = digest(identity)
-        with self._lock:
+        with self._lock, file_lock(self.directory / (export_id + '.state.lock')):
             state = self.status(export_id)
-            if state['status'] == 'completed' or export_id in self._threads and self._threads[export_id].is_alive():
+            if state['status'] == 'completed' or self._alive(state) or state['status'] == 'queued':
                 return state
-            atomic_json(self.directory / (export_id + '.json'), {'id': export_id, 'status': 'queued'})
-            thread = threading.Thread(target=self._render, args=(export_id, comparison['sample'], runs, include_absent, geometry, baseline_run), daemon=True)
-            self._threads[export_id] = thread
-            thread.start()
+            atomic_json(self.directory / (export_id + '.request.json'), {'identity': identity,
+                'comparison_id': comparison_id, 'render': {'sample': comparison['sample'], 'runs': runs,
+                    'include_absent': include_absent, 'geometry': geometry, 'baseline_run': baseline_run}})
+            (self.directory / (export_id + '.cancel')).unlink(missing_ok=True)
+            atomic_json(self.directory / (export_id + '.json'), {**state, 'id': export_id, 'status': 'queued',
+                'comparison_id': comparison_id, 'created_at': state.get('created_at', time.time()),
+                'updated_at': time.time(), 'error': None, 'owner_pid': None, 'owner_token': None,
+                'recovery_policy': 'automatic_replay', 'attempts': state.get('attempts', [])})
         return self.status(export_id)
 
     def status(self, export_id):
         if len(export_id) != 64 or any(c not in '0123456789abcdef' for c in export_id):
             raise KeyError('Invalid export ID')
         path = self.directory / (export_id + '.json')
-        state = json.loads(path.read_text()) if path.is_file() else {'id': export_id, 'status': 'absent'}
+        state = self._read(export_id)
         if state['status'] == 'completed':
             if not (self.directory / (export_id + '.mp4')).is_file():
                 state['status'] = 'evicted'
@@ -176,19 +303,25 @@ class ComparisonExports:
         state_path = path.with_suffix('.json')
         started = time.perf_counter()
         def progress(**values):
-            atomic_json(state_path, {'id': export_id, 'updated_at': time.time(), **values})
+            self._write(export_id, **values)
         try:
-            with self._slot, file_lock(path.with_suffix('.lock')):
+            with file_lock(path.with_suffix('.lock')):
                 if self.status(export_id)['status'] == 'completed':
                     return
+                request = json.loads((self.directory / (export_id + '.request.json')).read_text())
+                identity = request['identity']
+                current = [file_identity(self.manager.root / 'runs' / r['id'] / 'result/result.json') for r in runs]
+                if current != identity['results'] or (baseline_run and
+                    file_identity(self.manager.root / 'runs' / baseline_run / 'result/result.json') != identity['baseline_identity']):
+                    raise ValueError('Published result changed since this export was requested')
                 from .prepare import prepare_sample
                 sample = prepare_sample(sample['request'], Path(sample['frames_path']).parent,
-                    cancel=self.manager._stopping.is_set)
+                    cancel=lambda: self._cancelled(export_id))
                 columns = min(3, len(runs)); rows = math.ceil(len(runs) / columns)
                 width = min(640, sample['width']); width += width % 2
                 height = round(sample['height'] * width / sample['width']); height += height % 2
                 size = (width * columns, (height + 58) * rows)
-                budget = CacheBudget(self.directory, pattern='*.mp4', max_gib=float(os.environ.get('MINT_COMPARISON_EXPORT_MAX_GIB', '16')))
+                budget = CacheBudget(self.directory, pattern='*.mp4', preserve_metadata=True, max_gib=float(os.environ.get('MINT_COMPARISON_EXPORT_MAX_GIB', '16')))
                 expected = max(2**20, int(size[0] * size[1] * sample['frames'] * .25 / 8))
                 with file_lock(Path(sample['frames_path']).parent / '.active.pin', shared=True), budget.reserve(path, expected):
                     if file_identity(sample['frames_path']) != sample['frames_identity']:
@@ -200,8 +333,8 @@ class ComparisonExports:
                         writer = H264PipeWriter(destination, sample['fps'], size, preset='veryfast')
                         try:
                             for i, frame in enumerate(frames):
-                                if self.manager._stopping.is_set():
-                                    raise InterruptedError('Comparison service stopping')
+                                if self._cancelled(export_id):
+                                    raise InterruptedError('Export interrupted at a frame boundary')
                                 canvas = np.zeros((size[1], size[0], 3), np.uint8)
                                 for j, (run, arrays) in enumerate(zip(runs, results)):
                                     panel = overlay_frame(frame, arrays, sample['source_frame_indices'][i], (width, height), run['label'], include_absent=include_absent,
@@ -210,7 +343,7 @@ class ComparisonExports:
                                     canvas[y:y + height + 58, x:x + width] = panel
                                 writer.write(canvas)
                                 if i % 48 == 0:
-                                    progress(status='rendering', done=i, total=sample['frames'])
+                                    progress(status='rendering', done=i + 1, total=sample['frames'])
                                     if shutil.disk_usage(self.directory).free < budget.minimum_free or destination.exists() and destination.stat().st_size > budget.maximum:
                                         raise OSError('Comparison export reached disk-space reserve or configured quota')
                         finally:
@@ -225,4 +358,15 @@ class ComparisonExports:
                     geometry=geometry, baseline_run=baseline_run, run_ids=[run['id'] for run in runs],
                     note='All sample frames; camera K from each run; independent 3D snapshot and numerical exports are available')
         except BaseException as exc:
-            progress(status='failed', error=str(exc))
+            cancelled = (self.directory / (export_id + '.cancel')).exists()
+            stopping = self._stop.is_set() or self.manager._stopping.is_set()
+            progress(status='cancelled' if cancelled else 'queued' if stopping else 'failed', error=str(exc))
+        finally:
+            state = self._read(export_id)
+            attempts = state.get('attempts', [])
+            if attempts:
+                attempts[-1].update(finished_at=time.time(), outcome=state['status'])
+            progress(owner_pid=None, owner_token=None, attempts=attempts)
+
+    def _cancelled(self, export_id):
+        return self._stop.is_set() or self.manager._stopping.is_set() or (self.directory / (export_id + '.cancel')).exists()

@@ -65,3 +65,9 @@ test('language module starts independently, shares preference and preserves untr
   assert.equal(nodes[0].nodeValue,'Data & input');assert.equal(nodes[1].nodeValue,'/data1/中文目录/video.mp4');assert.equal(nodes[2].nodeValue,'未翻译诊断原文');
   select.value='zh';listeners.change();assert.equal(nodes[0].nodeValue,'数据与输入');assert.equal(storage.get('wuji-viewer-language'),'zh');
 });
+
+test('compatible result reuse keeps original resource evidence and declares no new forward',()=>{
+  const protocol=runProtocol({...runs[0],reuse:{source_run:'original'},options:{mode:'max_chunked',max_gpus:2,resource_policy:'shared'}});
+  assert.match(protocol.short,/复用结果/);
+  assert.match(protocol.rows.find(([label])=>label==='结果复用')[1],/本次未执行网络/);
+});

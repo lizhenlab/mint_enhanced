@@ -2,6 +2,7 @@
 set -euo pipefail
 MINT_PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$MINT_PROJECT_DIR"
+export PYTHONPATH="$MINT_PROJECT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:False}"
 export TMPDIR="$MINT_PROJECT_DIR/.tmp"

@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import time
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +18,31 @@ class WorkspaceServices:
     def __init__(self, manager, collections, tools, legacy=None, analysis=None):
         self.manager, self.collections, self.tools = manager, collections, tools
         self.legacy, self.analysis = legacy, analysis
+        from .task_index import TaskIndex
+        from .observability import ResourceMonitor
+        self.index = TaskIndex(manager)
+        self.resources = ResourceMonitor(manager.root)
+        self._index_lock = threading.Lock()
+        self._indexed_at = 0
+        self._run_cache = {}
+        self.workflows = None
+
+    def start(self):
+        if getattr(self, '_watcher', None):
+            return
+        self.index.recover_legacy()
+        def watch():
+            while not self.manager._stopping.is_set():
+                try:
+                    self.refresh_index()
+                except Exception:
+                    # An index failure cannot stop a source executor; API reads
+                    # expose their errors independently and retry on the next tick.
+                    import logging
+                    logging.getLogger(__name__).exception('Workspace index refresh failed')
+                self.manager._stopping.wait(5)
+        self._watcher = threading.Thread(target=watch, name='workspace-index', daemon=True)
+        self._watcher.start()
 
     def cached_predictions(self):
         if self.legacy is None:
@@ -83,22 +110,44 @@ class WorkspaceServices:
                     'scope': 'Existing prediction; render-only shape/FoV averaging is not reapplied'}, ensure_ascii=False)},
             comparison_key='legacy:' + snapshot_id)
 
-    def tasks(self, *, limit=100, offset=0, query='', status='all'):
+    def _snapshot_tasks(self):
         from mint.inference.checkpoints import list_tasks
         rows, seen = [], set()
         with self.manager.db() as db:
             comparisons = db.execute('SELECT id,payload,created FROM comparisons ORDER BY created DESC').fetchall()
+            run_rows = {v['id']: dict(v) for v in db.execute('SELECT * FROM runs')}
+        parents = {}
+        for parent in comparisons:
+            for key in json.loads(parent['payload'])['run_ids']:
+                parents.setdefault(key, []).append(parent['id'])
         for parent in comparisons:
             comparison = json.loads(parent['payload'])
             for run_id in comparison['run_ids']:
                 if run_id in seen:
                     continue
                 seen.add(run_id)
-                run = self.manager.run(run_id)
+                record = run_rows.get(run_id)
+                if not record:
+                    continue
+                folder = self.manager.root / 'runs' / run_id
+                signature = (record['updated'], file_identity(folder / 'progress.json'), file_identity(folder / 'result/result.json'))
+                cached = self._run_cache.get(run_id)
+                if cached and cached[0] == signature and time.monotonic() - cached[1] < 30:
+                    run = cached[2]
+                else:
+                    run = self.manager._run_record(record, summary=True)
+                    self._run_cache[run_id] = signature, time.monotonic(), run
+                progress = dict(run['progress'])
+                if run['status'] == 'completed' and run['result']:
+                    progress.update(done=run['result']['frames'], total=run['result']['frames'], unit='frames')
                 rows.append({'id': run_id, 'kind': 'inference', 'label': run['label'],
                     'source': comparison['sample_request']['source']['path'], 'status': run['status'],
-                    'updated': run.get('updated', parent['created']), 'comparison_id': parent['id'],
-                    'progress': run['progress'], 'error': run.get('error'), 'has_result': bool(run['result']),
+                    'updated': run.get('updated', parent['created']), 'created': run.get('created'), 'comparison_id': parent['id'],
+                    'owner_pid': run.get('owner_pid'), 'worker_pid': run.get('worker_pid'), 'priority': run.get('priority'),
+                    'parent_ids': parents[run_id],
+                    'execution_summary': {k: run['result'].get(k) for k in ('timings', 'orchestration', 'parallel_stages',
+                        'peak_rss_gib', 'peak_gpu_allocated_gib', 'observed_phase_wall_seconds', 'host_resource_usage')} if run['result'] else None,
+                    'progress': progress, 'error': run.get('error'), 'has_result': bool(run['result']),
                     'url': f'/compare?id={parent["id"]}&run={run_id}'})
         for collection in self.collections.history(limit=None):
             rows.append({'id': collection['id'], 'kind': collection['kind'], 'label': collection['title'],
@@ -125,9 +174,14 @@ class WorkspaceServices:
                 snapshots.append(('dataset_analysis', '数据集分析', self.analysis.status(), '/?tool=analysis-video'))
             for kind, label, snapshot, url in snapshots:
                 if snapshot.get('running') or snapshot.get('done') or snapshot.get('error') or snapshot.get('results'):
-                    rows.append({'id': kind, 'kind': kind, 'label': label,
+                    identity = snapshot.get('started_at') or snapshot.get('out') or snapshot.get('output_dir') or 'latest'
+                    from mint.inference.cache_budget import _token
+                    rows.append({'id': digest({'kind': kind, 'started': identity}), 'kind': kind, 'label': label,
                         'status': 'running' if snapshot.get('running') else 'failed' if snapshot.get('error') else 'completed',
-                        'updated': snapshot.get('updated_at', time.time()), 'progress': {k: snapshot.get(k) for k in ('phase', 'stage', 'done', 'total')},
+                        'owner_pid': os.getpid(), 'owner_token': _token(os.getpid()),
+                        'parameters': {k: snapshot.get(k) for k in ('selection', 'models', 'input_dir', 'output_dir', 'started_at') if k in snapshot},
+                        'recovery_policy': 'resubmit_saved_parameters_in_original_tool',
+                        'updated': snapshot.get('updated_at'), 'progress': {k: snapshot.get(k) for k in ('phase', 'stage', 'done', 'total')},
                         'error': snapshot.get('error'), 'url': url})
         exports = self.manager.root / 'exports'
         for path in exports.glob('*.json'):
@@ -139,16 +193,24 @@ class WorkspaceServices:
                 export_status = 'evicted' if job['status'] == 'completed' and not video.is_file() else job['status']
                 url = f'/api/comparison/exports/{job["id"]}/download' if export_status == 'completed' else None
                 rows.append({'id': job['id'], 'kind': 'export', 'label': '同步视频导出', 'status': export_status,
-                    'updated': path.stat().st_mtime, 'progress': {k: job.get(k) for k in ('done', 'total')},
+                    'updated': job.get('updated_at', path.stat().st_mtime), 'attempts': job.get('attempts', []),
+                    'owner_pid': job.get('owner_pid'), 'comparison_id': job.get('comparison_id'),
+                    'recovery_policy': job.get('recovery_policy'), 'progress': {k: job.get(k) for k in ('done', 'total')},
                     'error': job.get('error'), 'url': url})
             except (OSError, ValueError):
                 continue
-        query = str(query).lower().strip()
-        rows = [row for row in rows if (not query or query in json.dumps(row, ensure_ascii=False).lower()) and
-                (status == 'all' or (status == 'active' and row['status'] not in TERMINAL | {'evicted'}) or
-                 (status == 'attention' and row['status'] in {'failed', 'partial', 'cancelled', 'interrupted', 'evicted'}) or row['status'] == status)]
-        rows.sort(key=lambda row: row.get('updated') or 0, reverse=True)
-        offset, limit = max(0, int(offset)), max(1, min(200, int(limit)))
+        if self.workflows is not None:
+            rows.extend(self.workflows.task_rows())
+        return rows
+
+    def refresh_index(self):
+        with self._index_lock:
+            self.index.sync(self._snapshot_tasks())
+            self._indexed_at = time.monotonic()
+
+    def tasks(self, *, limit=100, offset=0, query='', status='all'):
+        self.refresh_index()
+        page = self.index.page(limit=limit, offset=offset, query=query, status=status)
         scheduler = getattr(getattr(self.legacy, 'predictor', None), 'gpu_scheduler_status', {}) if self.legacy else {}
-        return {'tasks': rows[offset:offset + limit], 'total': len(rows), 'offset': offset,
-                'resource': scheduler, 'cached_predictions': self.cached_predictions()}
+        return {**page, 'resource': scheduler, 'resources': self.resources.snapshot(),
+                'cached_predictions': self.cached_predictions()}

@@ -18,7 +18,7 @@ def training_inputs(config, root=None):
     roots = cfg.get('data', {}).get('root', [])
     if isinstance(roots, str): roots = [roots]
     for value in roots:
-        path = absolute(value)
+        path = absolute(value['root'] if isinstance(value, dict) else value)
         checks.append(Check('training data', (path/'meta/info.json').is_file(), str(path)))
     for name, value in (('pretrained backbone', cfg.get('model', {}).get('pretrained')),
                         ('initialization', cfg.get('train', {}).get('init_from'))):

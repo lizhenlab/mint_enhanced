@@ -19,6 +19,9 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
     exports_instance = []
     collection_instance = []
     tool_instance = []
+    workspace_instance = []
+    research_instance = []
+    workflow_instance = []
     def manager():
         with lock:
             if not manager_instance:
@@ -51,13 +54,34 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
 
     def workspace():
         from .workspace import WorkspaceServices
-        return WorkspaceServices(manager(), collections(), tools(), legacy_store, dataset_analysis)
+        values = (manager(), collections(), tools())
+        with lock:
+            if not workspace_instance:
+                workspace_instance.append(WorkspaceServices(*values, legacy_store, dataset_analysis))
+            return workspace_instance[0]
+
+    def research():
+        from .research import ResearchRegistry
+        value = manager()
+        with lock:
+            if not research_instance:
+                research_instance.append(ResearchRegistry(value))
+            return research_instance[0]
+
+    def workflows():
+        from .workflows import WorkflowManager
+        value, registry, hub = manager(), research(), workspace()
+        with lock:
+            if not workflow_instance:
+                workflow_instance.append(WorkflowManager(value, registry))
+                hub.workflows = workflow_instance[0]
+            return workflow_instance[0]
 
     @blueprint.record_once
     def register_services(state):
         # The viewer calls this after construction. Recovery must not depend on a
         # browser opening a task page after a process restart.
-        state.app.extensions['mint_comparison_start'] = lambda: (manager(), collections(), tools())
+        state.app.extensions['mint_comparison_start'] = lambda: (manager(), collections(), tools(), exports(), workspace(), workflows(), workspace().start())
 
     def body():
         value = request.get_json(silent=True)
@@ -89,6 +113,7 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
         return jsonify(error=str(error)), 400
 
     @blueprint.errorhandler(KeyError)
+    @blueprint.errorhandler(FileNotFoundError)
     def missing(error):
         return jsonify(error=str(error)), 404
 
@@ -102,7 +127,8 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
 
     @blueprint.get('/api/algorithms')
     def algorithms():
-        specs = [backend_spec(name) for name in ALGORITHMS]
+        from .registry import parameter_schema
+        specs = [{**backend_spec(name), 'parameters': parameter_schema(name)} for name in ALGORITHMS]
         # The read-only capability inventory must not load frameworks or create workers.
         return jsonify(algorithms=[{k: v for k, v in value.items() if k not in {'identity', 'python'}} for value in specs])
 
@@ -120,10 +146,111 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
     @blueprint.post('/api/comparisons')
     def create():
         data = body()
-        allowed = {'source', 'selections', 'view', 'target_fps', 'max_frames', 'start_frame', 'camera', 'title', 'dataset'}
+        allowed = {'source', 'selections', 'view', 'target_fps', 'max_frames', 'start_frame', 'camera', 'title', 'dataset', 'execution'}
         if set(data) - allowed:
             raise ValueError('Unknown comparison fields')
+        from .preflight import inspect_request
+        check = inspect_request(manager(), **data)
+        if not check['ready']:
+            return jsonify(error='；'.join(check['errors']), preflight=check), 400
         return jsonify(manager().create(**data)), 201
+
+    @blueprint.post('/api/comparison/preflight')
+    def comparison_preflight():
+        from .preflight import inspect_request
+        data = body()
+        if set(data) - {'source', 'selections', 'view', 'target_fps', 'max_frames', 'start_frame', 'camera', 'title', 'dataset', 'execution'}:
+            raise ValueError('Unknown preflight fields')
+        return jsonify(inspect_request(manager(), **data))
+
+    @blueprint.get('/api/comparison/tasks/<kind>/<task_id>')
+    def task_detail(kind, task_id):
+        workspace().refresh_index()
+        return jsonify(workspace().index.detail(kind, task_id))
+
+    @blueprint.get('/api/comparison/registry/<kind>')
+    def registry_page(kind):
+        if kind == 'artifact':
+            research().index_artifacts()
+        return jsonify(research().page(kind, query=request.args.get('query', ''),
+            offset=request.args.get('offset', 0), limit=request.args.get('limit', 50)))
+
+    @blueprint.get('/api/comparison/registry/record/<record_id>')
+    def registry_record(record_id):
+        return jsonify(research().get(record_id))
+
+    @blueprint.post('/api/comparison/registry/<kind>')
+    def registry_create(kind):
+        methods = {'artifact': 'register_raw', 'protocol': 'protocol', 'evaluation': 'evaluate', 'review': 'review',
+                   'dataset': 'dataset_version', 'model': 'register_model', 'experiment': 'experiment', 'deployment': 'deployment'}
+        if kind not in methods:
+            raise ValueError('Unknown registry operation')
+        return jsonify(json_values(getattr(research(), methods[kind])(**body()))), 201
+
+    @blueprint.post('/api/comparison/registry/artifacts/<record_id>/import')
+    def registry_import(record_id):
+        return jsonify(research().import_artifact(record_id)), 201
+
+    @blueprint.get('/api/comparison/models/aliases')
+    def model_aliases():
+        return jsonify(aliases=research().aliases())
+
+    @blueprint.post('/api/comparison/models/promote')
+    def model_promote():
+        return jsonify(research().promote(**body()))
+
+    @blueprint.post('/api/comparison/models/rollback')
+    def model_rollback():
+        data = body()
+        if set(data) != {'alias'}:
+            raise ValueError('Choose one alias to roll back')
+        return jsonify(research().rollback(data['alias']))
+
+    @blueprint.post('/api/comparison/quality')
+    def create_quality():
+        from .quality import QualityService
+        return jsonify(QualityService(manager()).create(**body())), 201
+
+    @blueprint.get('/api/comparison/quality/<quality_id>')
+    def get_quality(quality_id):
+        from .quality import QualityService
+        return jsonify(QualityService(manager()).get(quality_id,
+            offset=request.args.get('offset', 0), limit=request.args.get('limit', 50)))
+
+    @blueprint.get('/api/comparison/quality/<quality_id>/download')
+    def download_quality(quality_id):
+        from .quality import QualityService
+        service = QualityService(manager())
+        service.get(quality_id, limit=1)
+        return send_file(service.root / (quality_id + '.npz'), as_attachment=True, download_name='quality-' + quality_id[:12] + '.npz')
+
+    @blueprint.post('/api/comparison/workflows/preflight')
+    def workflow_preflight():
+        return jsonify(workflows().preflight(**body()))
+
+    @blueprint.post('/api/comparison/workflows')
+    def create_workflow():
+        return jsonify(workflows().create(**body())), 201
+
+    @blueprint.get('/api/comparison/workflows/<workflow_id>')
+    def get_workflow(workflow_id):
+        return jsonify(workflows().get(workflow_id))
+
+    @blueprint.post('/api/comparison/workflows/<workflow_id>/<action>')
+    def workflow_action(workflow_id, action):
+        if action not in {'cancel', 'resume'}:
+            raise ValueError('Unknown workflow action')
+        return jsonify(getattr(workflows(), action)(workflow_id))
+
+    @blueprint.get('/api/comparison/workflows/<workflow_id>/log')
+    def workflow_log(workflow_id):
+        workflows().get(workflow_id)
+        path = workflows().root / workflow_id / 'worker.log'
+        if not path.exists():
+            return jsonify(text='Worker has not started')
+        with path.open('rb') as stream:
+            stream.seek(max(0, path.stat().st_size - 24000))
+            return jsonify(text=stream.read().decode(errors='replace'))
 
     @blueprint.get('/api/comparison/dataset')
     def dataset_catalog():
@@ -142,6 +269,7 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
 
     @blueprint.get('/api/comparison/workspace')
     def workspace_index():
+        workflows()
         return jsonify(json_values(workspace().tasks(limit=request.args.get('limit', 100),
             offset=request.args.get('offset', 0), query=request.args.get('query', ''), status=request.args.get('status', 'all'))))
 
@@ -173,20 +301,38 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
         env = os.environ.copy()
         env.update(PYTHONPATH=str(PROJECT), PYTHONDONTWRITEBYTECODE='1', CUDA_VISIBLE_DEVICES='', MINT_MANO_DEVICE='cpu',
                    MPLCONFIGDIR=str(PROJECT / '.cache/diagnostics/matplotlib'), OMP_NUM_THREADS='2')
-        try:
-            result = subprocess.run([sys.executable, '-c', script, data.get('profile', 'full')], cwd=PROJECT,
-                                    env=env, capture_output=True, text=True, timeout=90)
-        except subprocess.TimeoutExpired:
-            return jsonify(error='Diagnostic process exceeded 90 seconds; no inference or training was started'), 504
-        if result.returncode:
-            return jsonify(error=result.stderr[-2000:] or 'Diagnostic process failed'), 400
-        checks = json.loads(result.stdout)
-        if data.get('profile') == 'train':
+        from .workflows import owned_environment
+        requested = data.get('profile', 'full')
+        profiles = ['inference', 'train', 'data'] if requested == 'full' else [requested]
+        checks, environments = [], []
+        for profile in profiles:
+            python = owned_environment(profile if profile == 'train' else 'pipeline') if profile != 'inference' else Path(sys.executable)
+            installed = python.is_file()
+            try:
+                result = subprocess.run([str(python) if installed else sys.executable, '-c', script, profile], cwd=PROJECT,
+                                        env=env, capture_output=True, text=True, timeout=90)
+            except subprocess.TimeoutExpired:
+                return jsonify(error='Diagnostic process exceeded 90 seconds; no inference or training was started'), 504
+            if result.returncode:
+                return jsonify(error=result.stderr[-2000:] or 'Diagnostic process failed'), 400
+            group = [{**row, 'profile': profile} for row in json.loads(result.stdout)]
+            if not installed:
+                group.append({'name': 'isolated ' + profile + ' environment', 'ok': False,
+                              'detail': str(python), 'required': True, 'profile': profile})
+            environments.append({'profile': profile, 'python': str(python), 'installed': installed,
+                                 'ready': all(c['ok'] for c in group if c['required'])})
+            checks.extend(group)
+        environment_ready = all(e['ready'] for e in environments)
+        input_checks = []
+        if 'train' in profiles:
             from dataclasses import asdict
             from mint.readiness import training_inputs
             for config in ('configs/training/mint_step1.yaml', 'configs/training/mint_step2.yaml'):
-                checks.extend({**asdict(check), 'configuration': config} for check in training_inputs(config))
-        return jsonify(checks=checks, ready=all(check['ok'] for check in checks if check['required']))
+                input_checks.extend({**asdict(check), 'configuration': config, 'profile': 'train'} for check in training_inputs(config))
+        checks.extend(input_checks)
+        return jsonify(checks=checks, environments=environments, environment_ready=environment_ready,
+            inputs_ready=all(c['ok'] for c in input_checks if c['required']),
+            ready=all(check['ok'] for check in checks if check['required']))
 
     @blueprint.get('/api/comparison/legacy-results')
     def legacy_results():
@@ -209,7 +355,16 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
         data = body()
         if set(data) - {'kind', 'items', 'selections', 'options', 'title'}:
             raise ValueError('Unknown batch/evaluation fields')
+        from .preflight import inspect_collection
+        check = inspect_collection(manager(), **data)
+        if not check['ready']:
+            return jsonify(error='；'.join(check['errors'][:20]), preflight=check), 400
         return jsonify(collections().create(**data)), 201
+
+    @blueprint.post('/api/comparison/collections/preflight')
+    def collection_preflight():
+        from .preflight import inspect_collection
+        return jsonify(inspect_collection(manager(), **body()))
 
     @blueprint.get('/api/comparison/collections')
     def collection_history():
@@ -272,7 +427,7 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
     @blueprint.post('/api/comparison/import')
     def import_result():
         data = body()
-        allowed = {'source', 'selections', 'view', 'target_fps', 'max_frames', 'start_frame', 'camera', 'title', 'import_entry'}
+        allowed = {'source', 'selections', 'view', 'target_fps', 'max_frames', 'start_frame', 'camera', 'title', 'import_entry', 'execution'}
         if set(data) - allowed or 'import_entry' not in data or len(data.get('selections', [])) != 1:
             raise ValueError('Import one explicit algorithm result with an import_entry and frame_map')
         return jsonify(manager().create(**data)), 201
@@ -388,6 +543,14 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
     @blueprint.get('/api/comparison/exports/<export_id>')
     def export_status(export_id):
         return jsonify(exports().status(export_id))
+
+    @blueprint.post('/api/comparison/exports/<export_id>/cancel')
+    def export_cancel(export_id):
+        return jsonify(exports().cancel(export_id))
+
+    @blueprint.post('/api/comparison/exports/<export_id>/resume')
+    def export_resume(export_id):
+        return jsonify(exports().resume(export_id))
 
     @blueprint.get('/api/comparison/exports/<export_id>/download')
     def export_download(export_id):

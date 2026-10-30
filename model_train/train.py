@@ -209,6 +209,8 @@ def main():
                     help="Build the model and print its structure without training")
     ap.add_argument("--max-steps", type=int, default=None,
                     help="Override train.max_steps from the configuration")
+    ap.add_argument("--output-dir", default=None,
+                    help="Explicit owned output directory for logs and complete checkpoints")
     ap.add_argument("--resume", default=None,
                     help="Accelerate checkpoint directory to resume")
     ap.add_argument("--init-from", default=None,
@@ -218,6 +220,9 @@ def main():
     resume_dir = _abs(args.resume) if args.resume else None
     if resume_dir and not os.path.isdir(resume_dir):
         ap.error(f"resume directory does not exist: {resume_dir}")
+    if resume_dir:
+        from engine.checkpoint import validate_checkpoint
+        validate_checkpoint(resume_dir)
 
 
 
@@ -256,7 +261,10 @@ def main():
     if cfg["model"].get("pretrained"):
         cfg["model"]["pretrained"] = _abs(cfg["model"]["pretrained"])
     if args.max_steps is not None:
+        if args.max_steps < 1:
+            ap.error("--max-steps must be positive")
         cfg["train"]["max_steps"] = args.max_steps
+        cfg["train"]["epochs"] = 0
 
 
     if args.inspect:
@@ -315,6 +323,8 @@ def main():
                     or os.environ.get("MLP_TASK_NAME") or _resume_run
                     or os.path.splitext(os.path.basename(config_path))[0], "task")
     out_dir = os.path.join(_REPO, "output", "model_train", gpu, ts, taskname)
+    if args.output_dir:
+        out_dir = os.path.abspath(os.path.expanduser(args.output_dir))
     log_dir = os.path.join(out_dir, "logs")
 
 

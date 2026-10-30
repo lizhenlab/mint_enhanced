@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark"><title>MINT · 多算法工作台</title>
-  <link rel="stylesheet" href="comparison-assets/style.css?v=20261031-platform2">
+  <link rel="stylesheet" href="comparison-assets/style.css?v=20261031-completion">
 </head>
 <body>
 <svg class="icon-definitions" aria-hidden="true"><defs>
@@ -31,7 +31,7 @@
   <div class="masthead-start"><button id="toggleSidebar" class="icon-button" aria-label="切换任务列表" aria-controls="taskSidebar" aria-expanded="true"><svg class="icon"><use href="#i-menu"/></svg></button>
     <a class="brand" href="./"><span class="brand-mark">M</span><span><b>MINT</b><small>MOTION WORKSPACE</small></span></a><span class="masthead-divider"></span><h1>多算法比较</h1></div>
   <nav class="masthead-actions" aria-label="工作台入口"><a class="back" href="./">WUJI EGO 工作台 <svg class="icon"><use href="#i-arrow"/></svg></a><select id="languageSelect" aria-label="界面语言" data-i18n-ignore><option value="zh">中文</option><option value="en">English</option></select><button id="newComparison" class="primary"><svg class="icon"><use href="#i-plus"/></svg>新建比较</button></nav>
-  <nav class="platform-navigation" aria-label="工作台模块"><button data-platform-tab="data">数据与输入</button><button data-platform-tab="tasks">任务中心</button><button id="backToResults">结果分析</button><button data-platform-tab="evaluation">量化评测</button><button data-platform-tab="tools">高级工具</button></nav>
+  <nav class="platform-navigation" aria-label="工作台模块"><button data-platform-tab="data">数据与输入</button><button data-platform-tab="tasks">任务中心</button><button id="backToResults">结果分析</button><button data-platform-tab="evaluation">量化评测</button><button data-platform-tab="tools">高级工具</button><button data-platform-tab="catalog">结果目录</button><button data-platform-tab="research">数据与训练</button></nav>
 </header>
 <main class="app-shell" id="appShell">
   <aside class="task-sidebar" id="taskSidebar" aria-label="比较任务列表">
@@ -97,7 +97,7 @@
 <dialog id="logDialog" class="log-dialog" aria-labelledby="logTitle"><div class="dialog-heading"><div><p class="eyebrow">RUN / DIAGNOSTICS</p><h2 id="logTitle">运行日志</h2></div><button id="closeLog" class="icon-button" aria-label="关闭运行日志"><svg class="icon"><use href="#i-close"/></svg></button></div><pre id="logText"></pre></dialog>
 <dialog id="platformDialog" class="platform-dialog" aria-labelledby="platformTitle">
   <div class="dialog-heading"><div><p class="eyebrow">DATA / TASKS / TOOLS</p><h2 id="platformTitle">统一工作台</h2></div><button id="closePlatform" class="icon-button" aria-label="关闭工作台模块"><svg class="icon"><use href="#i-close"/></svg></button></div>
-  <nav class="platform-tabs" aria-label="工作台工具"><button data-hub-pane="data">数据与输入</button><button data-hub-pane="tasks">任务中心</button><button data-hub-pane="batch">批量处理</button><button data-hub-pane="evaluation">量化评测</button><button data-hub-pane="tools">高级工具</button></nav>
+  <nav class="platform-tabs" aria-label="工作台工具"><button data-hub-pane="data">数据与输入</button><button data-hub-pane="tasks">任务中心</button><button data-hub-pane="batch">批量处理</button><button data-hub-pane="evaluation">量化评测</button><button data-hub-pane="tools">高级工具</button><button data-hub-pane="catalog">结果目录</button><button data-hub-pane="quality">质检与复核</button><button data-hub-pane="research">数据与训练</button></nav>
   <div class="platform-body">
     <section id="hub-data" class="hub-pane"><div class="hub-grid">
       <section class="panel"><h3>视频目录</h3><label>服务器目录<div class="source-path-row"><input id="collectionDirectory" placeholder="/data1/lizhen_dataset"><button id="useCurrentDirectory">当前目录</button></div></label><div class="button-row"><label><input id="scanRecursive" type="checkbox" checked>递归子目录</label><button id="scanVideos">扫描视频</button><button id="selectAllVideos">选中本页</button></div><p id="scanSummary" class="hint"></p><div id="collectionVideos" class="collection-items"></div></section>
@@ -107,16 +107,20 @@
     <section id="hub-batch" class="hub-pane" hidden><p class="explanation">按选定输入创建持久比较任务，复用现有 GPU 调度、阶段缓存和恢复机制。每个视频的结果独立保存。</p><details id="batchSetup" class="collection-composer" open><summary>创建新批次 · 输入与算法参数</summary><div id="batchComposer"></div></details></section>
     <section id="hub-evaluation" class="hub-pane" hidden><p class="explanation">同输入、同帧范围和声明的 GT 下执行多算法数据集评测；分别报告误差、覆盖、失败样本与相机对齐方式。</p><p class="hint">这是本平台的标准几何评测协议。公开 Benchmark 的固定数据集、参考表和 MINT 检查点对照可从高级工具打开。</p><details id="evaluationSetup" class="collection-composer" open><summary>创建新评测 · 输入与算法参数</summary><div id="evaluationComposer"></div></details></section>
     <section id="hub-tools" class="hub-pane" hidden><div class="tool-links"><a href="/?tool=analysis-video">视频质量分析</a><a href="/?tool=analysis-intrinsics">内参 / FOV 分析</a><a href="/?tool=analysis-diversity">数据集多样性</a><a href="/?tool=benchmark">公开基准 / MINT 检查点评测</a><a href="/?tool=code">配置与代码对比</a><a href="/">MINT 专业调试</a></div><div class="readiness-actions"><button data-diagnostic="inference">检查推理环境</button><button data-diagnostic="data">检查数据生产环境</button><button data-diagnostic="train">检查训练准备</button><span id="diagnosticStatus" role="status"></span></div><div id="diagnosticResults" class="hub-table"></div><div id="toolReadiness" class="hint"></div><div class="hub-grid"><section class="panel"><h3>仿真与机械手重定向</h3><p class="hint">按需使用已有几何；相机系展示不会生成世界相机轨迹。重定向用于运动学查看。</p><label>结果<select id="renderRun"></select></label><div class="twocol"><label>工具<select id="renderKind"><option value="mujoco">MuJoCo 网格场景</option><option value="retarget">Wuji Hand 重定向</option></select></label><label>坐标<select id="renderSpace"><option value="camera">相机系</option><option value="world">原生世界系</option></select></label></div><div class="twocol"><label>起始样本帧（包含）<input id="renderStart" type="number" min="1" value="1"></label><label>结束样本帧（包含）<input id="renderEnd" type="number" min="1" placeholder="留空为片尾"></label><label>宽度<select id="renderWidth"><option>640</option><option>960</option><option>1280</option></select></label><label>资源策略<select id="renderPolicy"><option value="shared">负载感知共享</option><option value="idle">仅空闲 GPU</option></select></label></div><button id="startRenderTool" class="primary">生成仿真 / 重定向视频</button></section><section class="panel"><h3>生成状态与播放</h3><div id="renderToolStatus">选择已有结果后生成。</div><video id="renderToolVideo" controls playsinline preload="metadata" hidden></video></section></div></section>
+    <section id="hub-catalog" class="hub-pane" hidden></section>
+    <section id="hub-quality" class="hub-pane" hidden></section>
+    <section id="hub-research" class="hub-pane" hidden></section>
     <section id="collectionDetails" class="hub-secondary" hidden><div class="section-heading"><h3 id="collectionTitle"></h3><div class="button-row"><button id="cancelCollection">取消批次</button><button id="resumeCollection">恢复未完成任务</button><button id="downloadCollectionJSON">下载报告 JSON</button><a id="downloadCollectionCSV" hidden>评测 CSV</a></div></div><p id="collectionProgress"></p><div id="evaluationResults" class="hub-table"></div><div id="collectionChildren" class="hub-table"></div></section>
     <p id="platformError" role="alert"></p>
   </div>
 </dialog>
 <dialog id="exportDialog" class="export-dialog" aria-labelledby="exportTitle"><div class="dialog-heading"><h2 id="exportTitle">导出结果</h2><button id="closeExportDialog" class="icon-button" aria-label="关闭导出配置"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="task-dialog-body"><label>视频包含结果<select id="exportScope"><option value="all">全部已完成结果</option><option value="visible">当前可见结果</option></select></label><label>叠加内容<select id="exportGeometry"><option value="skeleton">骨架</option><option value="mesh">网格</option><option value="mesh_skel">网格 + 骨架</option></select></label><label><input id="exportBaseline" type="checkbox">叠加当前对照基准骨架</label><p class="hint">视频保持完整样本时间轴。缺少顶点的结果使用骨架。数值 ZIP 从各结果卡片下载，比较报告包含全部指标。</p><button id="confirmVideoExport" class="primary">生成同步视频</button><button id="exportCurrentPNG">保存当前可见画面 PNG</button><button id="exportFullReport">下载完整比较报告</button></div></dialog>
-<script src="comparison-assets/workspace.js?v=20261031-platform2"></script>
-<script src="comparison-assets/source-browser.js?v=20261031-platform2"></script>
-<script src="comparison-assets/result-tools.js?v=20261031-platform2"></script>
-<script src="comparison-assets/geometry-tools.js?v=20261031-platform2"></script>
-<script src="comparison-assets/platform.js?v=20261031-platform2"></script>
-<script src="comparison-assets/locale.js?v=20261031-platform2"></script>
-<script src="comparison-assets/app.js?v=20261031-platform2"></script>
+<script src="comparison-assets/workspace.js?v=20261031-completion"></script>
+<script src="comparison-assets/source-browser.js?v=20261031-completion"></script>
+<script src="comparison-assets/result-tools.js?v=20261031-completion"></script>
+<script src="comparison-assets/geometry-tools.js?v=20261031-completion"></script>
+<script src="comparison-assets/platform.js?v=20261031-completion"></script>
+<script src="comparison-assets/research.js?v=20261031-completion"></script>
+<script src="comparison-assets/locale.js?v=20261031-completion"></script>
+<script src="comparison-assets/app.js?v=20261031-completion"></script>
 </body></html>

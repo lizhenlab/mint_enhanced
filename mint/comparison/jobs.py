@@ -57,6 +57,9 @@ class ComparisonManager:
             db.execute('CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, payload TEXT NOT NULL, status TEXT NOT NULL, '
                        'created REAL NOT NULL, updated REAL NOT NULL, worker_pid INTEGER, worker_token TEXT, owner TEXT, '
                        'owner_pid INTEGER, owner_token TEXT, error TEXT)')
+            if 'priority' not in {r[1] for r in db.execute('PRAGMA table_info(runs)')}:
+                db.execute('ALTER TABLE runs ADD COLUMN priority INTEGER NOT NULL DEFAULT 1')
+            db.execute('CREATE INDEX IF NOT EXISTS run_admission ON runs(status,priority,created)')
             db.execute('CREATE TABLE IF NOT EXISTS comparisons (id TEXT PRIMARY KEY, payload TEXT NOT NULL, created REAL NOT NULL)')
         self._recover()
         if autostart:
@@ -121,7 +124,10 @@ class ComparisonManager:
             db.execute('UPDATE runs SET ' + ','.join(k + '=?' for k in values) + ' WHERE id=?', [*values.values(), run_id])
 
     def create(self, source, selections, *, view='full', target_fps=0, max_frames=None, start_frame=0,
-               camera=None, title=None, import_entry=None, dataset=None, comparison_key=None):
+               camera=None, title=None, import_entry=None, dataset=None, comparison_key=None, execution=None):
+        from .execution import execution_options, compatible_request, PRIORITIES
+        intent = execution_options(execution)
+        reuse = {}
         dataset_context = None
         if dataset:
             if import_entry:
@@ -192,13 +198,35 @@ class ComparisonManager:
                         raise ValueError('HaWoR import requires explicit image_size [width,height] of its native camera grid')
                     entry['image_size'] = grid
                 identity['import'] = entry
+            if intent['cache'] == 'fresh':
+                identity['fresh_nonce'] = uuid.uuid4().hex
             run_id = digest(identity)
             request = {**identity, 'id': run_id, 'backend': spec, 'sample_request': sample,
                        'sample_manifest': str(self.root / 'inputs' / sample['id'] / 'sample.json')}
+            request['execution'] = intent
+            if intent['cache'] == 'compatible' and not request.get('import'):
+                with self.db() as db:
+                    candidates = db.execute("SELECT id,payload FROM runs WHERE status='completed' ORDER BY updated DESC").fetchall()
+                for candidate in candidates:
+                    if not compatible_request(json.loads(candidate['payload']), request):
+                        continue
+                    try:
+                        from .contracts import result_metadata
+                        evidence = result_metadata(self.root / 'runs' / candidate['id'] / 'result')
+                        if evidence.get('components') or evidence.get('reference_role'):
+                            continue
+                    except (OSError, ValueError, KeyError):
+                        continue
+                    reuse[candidate['id']] = {'requested_options': options, 'source_run': candidate['id'],
+                        'requested_execution': intent, 'basis': 'identical source/backend/numerical options; validated immutable files',
+                        'timing_scope': 'cached_result; exclude from cold performance comparisons'}
+                    request['id'] = candidate['id']
+                    break
             requests.append(request)
         comparison_id = uuid.uuid5(uuid.NAMESPACE_URL, str(comparison_key)).hex if comparison_key else uuid.uuid4().hex
         comparison = {'id': comparison_id, 'title': str(title or Path(source).name)[:200],
-                      'sample_id': sample['id'], 'sample_request': sample, 'run_ids': [v['id'] for v in requests]}
+                      'sample_id': sample['id'], 'sample_request': sample, 'run_ids': [v['id'] for v in requests],
+                      'execution': intent, 'reuse': reuse}
         if dataset_context:
             comparison['dataset_context'] = dataset_context
         with self.db() as db:
@@ -210,10 +238,13 @@ class ComparisonManager:
                 return self.comparison(comparison_id)
             created = []
             for request in requests:
-                cursor = db.execute('INSERT OR IGNORE INTO runs(id,payload,status,created,updated) VALUES(?,?,?,?,?)',
-                                    (request['id'], json.dumps(request), 'queued', time.time(), time.time()))
+                cursor = db.execute('INSERT OR IGNORE INTO runs(id,payload,status,created,updated,priority) VALUES(?,?,?,?,?,?)',
+                                    (request['id'], json.dumps(request), 'queued', time.time(), time.time(), PRIORITIES[intent['priority']]))
                 if cursor.rowcount:
                     created.append(request['id'])
+                else:
+                    db.execute("UPDATE runs SET priority=max(priority,?) WHERE id=? AND status='queued'",
+                               (PRIORITIES[intent['priority']], request['id']))
             comparison['created_run_ids'] = created
             db.execute('INSERT INTO comparisons(id,payload,created) VALUES(?,?,?)',
                        (comparison_id, json.dumps(comparison), time.time()))
@@ -246,8 +277,12 @@ class ComparisonManager:
             raise KeyError('Run not found')
         return dict(row)
 
-    def run(self, run_id):
-        row = self.row(run_id)
+    def run(self, run_id, *, summary=False):
+        return self._run_record(self.row(run_id), summary=summary)
+
+    def _run_record(self, record, *, summary=False):
+        row = dict(record)
+        run_id = row['id']
         payload = json.loads(row.pop('payload'))
         path = self.root / 'runs' / run_id
         progress = {}
@@ -255,9 +290,15 @@ class ComparisonManager:
             progress = json.loads((path / 'progress.json').read_text())
         except (OSError, ValueError):
             pass
+        from .observability import describe_progress
+        progress = describe_progress(progress)
         result = None
         try:
-            result = load_result(path / 'result')[0]
+            if summary:
+                from .contracts import result_metadata
+                result = result_metadata(path / 'result')
+            else:
+                result = load_result(path / 'result')[0]
             from .results import public_metadata
             result = public_metadata(result)
         except (OSError, ValueError, KeyError):
@@ -265,6 +306,7 @@ class ComparisonManager:
                 row.update(status='failed', error='Completed result files changed or are unavailable; resume to regenerate')
         return {**row, 'algorithm': payload['algorithm'], 'label': payload['backend']['label'],
                 'checkpoint': payload['backend'].get('checkpoint'), 'config': payload['backend'].get('config'),
+                'execution': payload.get('execution', {'priority':'batch','cache':'exact'}),
                 'options': payload['options'], 'sample_id': payload['sample_id'], 'progress': progress,
                 'result': result, 'imported': bool(payload.get('import'))}
 
@@ -276,6 +318,8 @@ class ComparisonManager:
         item = json.loads(row['payload'])
         item['created'] = row['created']
         item['runs'] = [self.run(run_id) for run_id in item['run_ids']]
+        for run in item['runs']:
+            run['reuse'] = item.get('reuse', {}).get(run['id'])
         try:
             item['sample'] = json.loads((self.root / 'inputs' / item['sample_id'] / 'sample.json').read_text()) if include_sample else None
         except (OSError, ValueError):
@@ -330,7 +374,7 @@ class ComparisonManager:
             if slots <= 0 and import_slots <= 0:
                 continue
             with self.db() as db:
-                rows = db.execute("SELECT id,payload FROM runs WHERE status='queued' ORDER BY created LIMIT 128").fetchall()
+                rows = db.execute("SELECT id,payload FROM runs WHERE status='queued' ORDER BY (priority + min(2,CAST((? - created)/300 AS INTEGER))) DESC,created LIMIT 128", (time.time(),)).fetchall()
                 for row in rows:
                     imported = bool(json.loads(row['payload']).get('import'))
                     if (imported and import_slots <= 0) or (not imported and slots <= 0):
@@ -395,8 +439,12 @@ class ComparisonManager:
                 from .prepare import prepare_sample
                 if cancel():
                     raise InterruptedError('Cancelled before preparation')
+                preparing_started = time.perf_counter()
                 sample = prepare_sample(request['sample_request'], self.root / 'inputs' / request['sample_id'],
                     progress=lambda **kw: self._write_progress(run_id, **kw), cancel=cancel)
+                request['orchestration'] = {'preparation_seconds': time.perf_counter() - preparing_started,
+                    'queue_seconds': max(0., row['updated'] - row['created']),
+                    'scope': 'Wall time; shared preparation waiting is included'}
                 if request.get('import', {}).get('frame_map') and max(request['import']['frame_map']) >= sample['frames']:
                     raise ValueError('Import frame map escapes the prepared sample')
                 from .storage import DurableRunBudget, estimate_native_bytes
@@ -416,7 +464,8 @@ class ComparisonManager:
                 env = os.environ.copy()
                 env.update(PYTHONPATH=str(PROJECT), PYTHONDONTWRITEBYTECODE='1', PYTHONUNBUFFERED='1',
                     OMP_NUM_THREADS='4', MKL_NUM_THREADS='4', MINT_MANO_DEVICE='cpu',
-                    MINT_GPU_MAX_WORKERS=str(request['options']['max_gpus']))
+                    MINT_GPU_MAX_WORKERS=str(request['options']['max_gpus']),
+                    MINT_TASK_PRIORITY={0:'background',1:'batch',2:'interactive'}.get(row.get('priority', 1), 'batch'))
                 if not dynamic:
                     env['CUDA_VISIBLE_DEVICES'] = ','.join(uuids)
                 command = [request['backend']['python'], '-m', 'mint.comparison.worker', '--request', str(directory / 'request.json')]

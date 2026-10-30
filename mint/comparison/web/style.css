@@ -140,3 +140,15 @@ dialog{color:var(--text);background:var(--surface);border:1px solid #426050;bord
 .inspector-picker{position:static}.inspector-picker>summary{cursor:pointer;border:1px solid var(--line);border-radius:6px;padding:5px 9px;font-size:11px;list-style:none}.inspector-head{display:flex;gap:10px;align-items:end;margin-bottom:10px}.inspector-head label{flex:1}.inspector-head select{display:block;width:100%;margin-top:5px}.hub-table td small{display:block;color:var(--muted);font-size:10px;max-width:440px;overflow-wrap:anywhere}
 
 .collection-composer>summary{cursor:pointer;color:var(--cyan);padding:12px 0;border-bottom:1px solid var(--line);margin-bottom:15px}.collection-composer[open]>summary{color:var(--lime)}
+
+/* Shared lifecycle, registry and review views. */
+.platform-tabs{overflow-x:auto;flex-wrap:nowrap}.platform-tabs button{white-space:nowrap}
+#hub-research,#hub-catalog,#hub-quality{display:grid;gap:16px}#hub-research[hidden],#hub-catalog[hidden],#hub-quality[hidden]{display:none}
+#hub-research>.panel,#hub-catalog>.panel,#hub-quality>.panel{min-width:0}
+.research-output,.preflight-summary{font-size:12px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto;background:#09130f;border-radius:8px;padding:12px;color:var(--muted)}
+.preflight-summary:empty{display:none}.preflight-summary[data-ready=false]{color:#ffbd72}
+.waiting-reason{max-width:640px;color:#8fd5cb}.quality-issue{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding:10px 0}.quality-issue span{flex:1;min-width:200px}
+#qualityCanvas{width:100%;height:190px;display:block;cursor:crosshair;border:1px solid var(--line);border-radius:8px;margin:12px 0}
+.execution-fields{padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:12px}.hub-table small{display:block;overflow-wrap:anywhere}
+@media(min-width:1100px){#hub-research{grid-template-columns:1fr 1fr}#hub-research>.hub-secondary{grid-column:1/-1}}
+@media(max-width:600px){.research-output{font-size:11px}.platform-tabs{gap:4px}.platform-tabs button{padding:8px 10px}.quality-issue span{min-width:100%}}

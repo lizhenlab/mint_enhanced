@@ -50,6 +50,7 @@ function runProtocol(run,sample){
   else if(options.encode_width!==undefined||options.analysis_width!==undefined)short.push(grid);
   const policy=({shared:'负载感知共享',idle:'仅空闲卡',dedicated:'固定卡对照'})[options.resource_policy]||options.resource_policy||'导入数值';
   const rows=[['策略',strategy],['工作尺寸',grid]];
+  if(run.reuse){short.unshift('复用结果');rows.push(['结果复用','引用已校验的原生结果；资源和耗时属于原运行，本次未执行网络']);}
   if(run.algorithm==='mint')rows.push(['手部后处理',handPostprocessLabel(options.hand_mode||result.postprocess)]);
   else if(result.postprocess)rows.push(['后处理',result.postprocess]);
   if(options.stride!==undefined)rows.push(['片段步长 / 合并',`${options.stride} / ${options.merge||'原生'}`]);

@@ -144,6 +144,18 @@ def publish_result(directory, arrays, metadata):
     return record
 
 
+def result_metadata(directory):
+    """Validate immutable file identities without opening long numerical arrays."""
+    directory = Path(directory)
+    metadata = json.loads((directory / 'result.json').read_text())
+    if metadata.get('schema') != SCHEMA or metadata.get('joint_order') != 'openpose21' or metadata.get('units') != 'm':
+        raise ValueError('Unsupported comparison result schema')
+    for key, record in metadata['arrays'].items():
+        if not key.replace('_', '').isalnum() or file_identity(directory / (key + '.npy')) != record['file']:
+            raise ValueError('Published array changed: ' + key)
+    return metadata
+
+
 def load_result(directory, *, verify=True):
     directory = Path(directory)
     metadata = json.loads((directory / 'result.json').read_text())

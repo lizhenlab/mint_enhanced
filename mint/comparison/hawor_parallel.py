@@ -47,6 +47,8 @@ def native_args(ctx,plan):
 def adopt_stages(ctx):
     """Reuse only verified, input/native-version-compatible MINT-owned checkpoints."""
     from .native import publish_stage,stage_cached
+    if getattr(ctx, 'request', {}).get('execution', {}).get('cache') == 'fresh':
+        return
     if os.environ.get('MINT_NATIVE_REUSE_STAGES','1')=='0':return
     reuse_root=Path(os.environ.get('MINT_NATIVE_REUSE_ROOT',str(ctx.directory.parent.parent)))
     database=reuse_root/'jobs.sqlite'
@@ -60,11 +62,19 @@ def adopt_stages(ctx):
         if any(request['options'].get(k)!=ctx.options.get(k) for k in ('analysis_width','focal')):continue
         before=request['backend']['identity'];after=ctx.spec['identity']
         if before.get('interpreter')!=after.get('interpreter'):continue
-        if any(before.get(kind,{}).get(name)!=identity for kind in ('sources','assets')
-               for name,identity in after.get(kind,{}).items()):continue
+        if before.get('environment')!=after.get('environment'):continue
+        if any(before.get('sources',{}).get(name)!=identity for name,identity in after.get('sources',{}).items()):continue
+        if not slam_adapters_compatible(before.get('adapter',{}),after.get('adapter',{})):continue
         old=reuse_root/'runs'/run_id/'native'
         copied=[]
         for name in ('frames','detection','motion','slam_geometry'):
+            dependencies={'frames': [], 'detection':['weights/external/detector.pt'],
+                'motion':['weights/hawor/checkpoints/hawor.ckpt'], 'slam_geometry':['weights/external/droid.pth']}[name]
+            assets=after.get('assets',{})
+            required=[key for key in dependencies if key in assets]
+            if name=='motion':required += [key for key in assets if key.endswith('.pkl')]
+            if not required and dependencies:required=list(assets)  # Strict fallback for older descriptors.
+            if any(before.get('assets',{}).get(key)!=assets[key] for key in required):continue
             if name not in os.environ.get('MINT_NATIVE_REUSE_STAGE_LIMIT','frames,detection,motion,slam_geometry').split(','):continue
             if name=='slam_geometry':
                 # A SLAM checkpoint is valid only with the exact motion/masks

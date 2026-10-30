@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import time
+import os
 
 import torch
 from accelerate import skip_first_batches
@@ -176,6 +177,10 @@ class Trainer:
             self.logger.update(self.start_step)
             rank0_print(f"[train]  {self.start_step}."
                         f"[train]  {epoch}; {step_in_epoch}; {skip_batches}.")
+        if not use_epoch and step >= self.max_steps:
+            save_checkpoint(self.acc, self.out_dir, step, model=self.model)
+            self.logger.close()
+            return
 
         t_prev = time.perf_counter()
         step_t0 = t_prev
@@ -328,8 +333,14 @@ class Trainer:
                                             den = float(dd.sqrt())
                                             metrics[f"update_ratio/{name}"] = float(dn.sqrt()) / den if den > 0 else 0.0
                         self.logger.log(step, metrics)
+                    if self.acc.is_main_process and os.environ.get('MINT_TRAIN_PROGRESS_PATH'):
+                        from mint.runtime import atomic_json
+                        atomic_json(os.environ['MINT_TRAIN_PROGRESS_PATH'], {'stage': 'training', 'done': step,
+                            'total': self.max_steps if not use_epoch else None, 'epoch': epoch,
+                            'updated_at': time.time(), 'pid': os.getpid(),
+                            'scope': 'Optimizer steps; incomplete accumulation is not counted'})
                     if self.ckpt_every and step % self.ckpt_every == 0:
-                        save_checkpoint(self.acc, self.out_dir, step)
+                        save_checkpoint(self.acc, self.out_dir, step, model=self.model)
                         self.logger.info(f"[train]  {step}.")
 
                     step_t0 = time.perf_counter()
@@ -348,6 +359,6 @@ class Trainer:
                 if epoch >= self.max_epochs:
                     done = True
         self.acc.wait_for_everyone()
-        save_checkpoint(self.acc, self.out_dir, step)
+        save_checkpoint(self.acc, self.out_dir, step, model=self.model)
         self.logger.close()
         rank0_print("[train]")

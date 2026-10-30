@@ -61,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
         return inference_main(remainder)
     if command == "viewer":
         # The service supervisor owns the actual Viewer PID, without an intermediate launcher.
+        os.environ['PYTHONPATH'] = str(PROJECT_DIR) + (os.pathsep + os.environ['PYTHONPATH'] if os.environ.get('PYTHONPATH') else '')
         os.execv(sys.executable, [sys.executable, str(PROJECT_DIR / 'eval/model_effect/visualization/viewer_web.py'), *remainder])
     from .doctor import doctor_main
 

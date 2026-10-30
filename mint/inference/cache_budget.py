@@ -53,7 +53,7 @@ def pin_mapping(mapping, destination):
 
 
 class CacheBudget:
-    def __init__(self, directory, *, max_gib=None, min_free_gib=None, pattern='*.npy', pin_parent=False):
+    def __init__(self, directory, *, max_gib=None, min_free_gib=None, pattern='*.npy', pin_parent=False, preserve_metadata=False):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.maximum = int(float(os.environ.get('MINT_FRAME_CACHE_MAX_GIB', '256')) * 2**30) if max_gib is None else int(max_gib * 2**30)
@@ -61,6 +61,7 @@ class CacheBudget:
         if self.maximum <= 0 or self.minimum_free < 0:
             raise ValueError('Cache capacity must be positive and free-space reserve nonnegative')
         self.pattern = pattern
+        self.preserve_metadata = preserve_metadata
         self.pin_parent = pin_parent
         self.state = self.directory / '.reservations'
 
@@ -97,7 +98,8 @@ class CacheBudget:
                                 stack.enter_context(file_lock(path.parent / '.active.pin', blocking=False))
                             size = path.stat().st_size
                             path.unlink()
-                            path.with_suffix('.json').unlink(missing_ok=True)
+                            if not self.preserve_metadata:
+                                path.with_suffix('.json').unlink(missing_ok=True)
                             used -= size
                             removed.append(str(path))
             except (BlockingIOError, FileNotFoundError):

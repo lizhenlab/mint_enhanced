@@ -8,6 +8,7 @@ import resource
 import signal
 import sys
 import time
+import threading
 import traceback
 from pathlib import Path
 
@@ -33,6 +34,9 @@ class WorkerContext:
         self.timings, self.metadata = {}, {}
         self._last_progress = self._last_probe = 0
         self._last_stage, self._foreign = None, False
+        self._progress_lock = threading.RLock()
+        self._phase_started = time.time()
+        self._phase_totals = {}
         self.frames = None
 
     def cancelled(self):
@@ -46,9 +50,17 @@ class WorkerContext:
         self.check_cancel()
         now = time.monotonic()
         stage = values.get('stage')
-        if now - self._last_progress > .25 or stage != self._last_stage:
-            self._last_progress, self._last_stage = now, stage
-            atomic_json(self.directory / 'progress.json', {**values, 'updated_at': time.time(), 'pid': os.getpid()})
+        with self._progress_lock:
+            if now - self._last_progress > .25 or stage != self._last_stage:
+                at = time.time()
+                if stage != self._last_stage:
+                    if self._last_stage:
+                        self._phase_totals[self._last_stage] = self._phase_totals.get(self._last_stage, 0.) + max(0., at - self._phase_started)
+                    self._phase_started = at
+                self._last_progress, self._last_stage = now, stage
+                self.metadata['observed_phase_wall_seconds'] = dict(self._phase_totals)
+                atomic_json(self.directory / 'progress.json', {**values, 'updated_at': at, 'pid': os.getpid(),
+                    'phase_started_at': self._phase_started, 'phase_wall_seconds': dict(self._phase_totals)})
 
     def cooperate(self, started):
         self.check_cancel()
@@ -160,13 +172,23 @@ def main(argv=None):
                     raise ValueError('Prepared RGB frames changed during inference')
                 ctx.timings['worker_end_to_end_seconds'] = time.perf_counter() - ctx.started
                 ctx.metadata['peak_rss_gib'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20
+                usage, children = (resource.getrusage(kind) for kind in (resource.RUSAGE_SELF, resource.RUSAGE_CHILDREN))
+                ctx.metadata['host_resource_usage'] = {'worker_cpu_seconds': usage.ru_utime + usage.ru_stime,
+                    'reaped_children_cpu_seconds': children.ru_utime + children.ru_stime,
+                    'worker_peak_rss_gib': usage.ru_maxrss / 2**20,
+                    'largest_reaped_child_peak_rss_gib': children.ru_maxrss / 2**20,
+                    'physical_block_read_bytes': (usage.ru_inblock + children.ru_inblock) * 512,
+                    'physical_block_write_bytes': (usage.ru_oublock + children.ru_oublock) * 512,
+                    'scope': 'Linux worker and reaped owned children; physical block IO excludes page-cache hits; RSS peaks are not summed'}
                 if 'torch' in sys.modules and not ctx.request.get('import') and not ctx.request.get('external_pool'):
                     import torch
                     ctx.metadata['peak_gpu_allocated_gib'] = torch.cuda.max_memory_allocated() / 2**30
                 record = publish_result(ctx.directory / 'result', arrays,
                     {'run_id': ctx.run_id, 'sample_id': ctx.sample['id'], 'algorithm': ctx.request['algorithm'],
                      'label': ctx.spec['label'], 'backend_version': ctx.spec['version'], 'options': ctx.options,
-                     'provenance': ctx.spec['identity'], 'timings': ctx.timings, **ctx.metadata})
+                     'provenance': ctx.spec['identity'], 'timings': ctx.timings,
+                     'execution': ctx.request.get('execution', {'cache': 'exact', 'priority': 'batch'}),
+                     'orchestration': ctx.request.get('orchestration'), **ctx.metadata})
         status = 'partial' if ctx.metadata.get('partial') or record['frames'] != ctx.sample['frames'] else 'completed'
         atomic_json(ctx.directory / 'exit.json', {'status': status, 'result_frames': record['frames'],
                                                 'completed_at': time.time(), 'metadata': ctx.metadata})

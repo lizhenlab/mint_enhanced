@@ -191,7 +191,7 @@ class NativePool:
             probe=probe, poll_seconds=2., min_free_mib=min_free_mib or ctx.spec['min_free_mib'],
             # Keep expensive native models through a shared-duty pause or a slow
             # neighbour's cold load. Hard memory/load pressure still releases them.
-            idle_release_seconds=180., policy='shared' if ctx.options['resource_policy']=='shared' else 'idle',
+            idle_release_seconds=max(1., min(300., float(os.environ.get('MINT_NATIVE_WARM_SECONDS', '180')))), policy='shared' if ctx.options['resource_policy']=='shared' else 'idle',
             retry_exceptions=(NativeGPUOOM,), lease_factory=CappedLease)
 
     def run(self, items, stage='parallel_inference'):
@@ -229,6 +229,7 @@ class NativePool:
                 'maximum_workers': self.maximum, 'completed_tasks': done[0], 'total_tasks': len(items),
                 'peak_gpu_gib': self.gpu_peaks}
             self.ctx.metadata['parallel_stages'][self.kind]['model_load_seconds_by_device']=dict(self.model_load_seconds)
+            self.ctx.metadata['parallel_stages'][self.kind]['model_reuse_scope']='bounded replica lifetime inside this native stage; released on pressure, priority yield or pool close'
 
     def close(self):
         self.closing.set()

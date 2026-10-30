@@ -106,10 +106,17 @@ class GpuLease:
         directory.mkdir(mode=0o700, exist_ok=True)
         self.path = directory / (uuid.replace('/', '_') + '.lock')
         self.file = None
+        from .priority import configured_intent
+        self.intent = configured_intent(directory, uuid)
+
+    def should_yield(self):
+        return self.intent is not None and self.intent.higher_waiter()
 
     def acquire(self) -> bool:
         if self.file is not None:
             return True
+        if self.intent is not None and not self.intent.admitted():
+            return False
         stream = self.path.open('a')
         try:
             fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -117,9 +124,13 @@ class GpuLease:
             stream.close()
             return False
         self.file = stream
+        if self.intent is not None:
+            self.intent.clear()
         return True
 
     def release(self):
+        if self.intent is not None:
+            self.intent.clear()
         if self.file is not None:
             fcntl.flock(self.file, fcntl.LOCK_UN)
             self.file.close()
@@ -251,6 +262,8 @@ class IdleGpuScheduler:
                     if self._closed:
                         break
                     reason = self._reason(device)
+                    if resource is not None and getattr(lease, 'should_yield', lambda: False)():
+                        reason = 'higher-priority task waiting; release at completed work boundary'
                     job = None
                     if not reason:
                         for candidate in list(self._queue):

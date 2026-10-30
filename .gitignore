@@ -16,6 +16,7 @@ tests/*
 !tests/test_hawor_slam_runtime.py
 !tests/test_server_file_browser.py
 !tests/test_comparison_result_tools.cjs
+!tests/test_platform_lifecycle.py
 !eval/model_effect/benchmark/tests/
 !eval/model_effect/benchmark/tests/**
 !eval/model_effect/benchmark/dist/aliyun/tests/
@@ -26,6 +27,7 @@ tests/*
 # Environments and editors
 .env
 .venv/
+.environments/
 .idea/
 .vscode/
 

@@ -357,6 +357,7 @@ def test_geometry_export_uses_reusable_disk_archive(tmp_path, monkeypatch):
 
 
 def test_comparison_http_frames_assets_and_exact_input_attachment(tmp_path, monkeypatch):
+    monkeypatch.setattr('mint.comparison.preflight.inspect_request', lambda *a, **kw: {'ready': True})
     from flask import Flask
     from mint.comparison.api import comparison_blueprint
     monkeypatch.setattr('mint.comparison.jobs.backend_spec', fake_backend)

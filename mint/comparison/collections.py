@@ -264,7 +264,7 @@ class CollectionManager:
                             current = file_identity(descriptor['source'])
                         if current != descriptor['snapshot']:
                             raise ValueError('Collection input changed; create a new collection')
-                        comparison = self.manager.create(descriptor['source'], value['selections'], **options,
+                        comparison = self.manager.create(descriptor['source'], value['selections'], execution={'priority':'batch'}, **options,
                             dataset=descriptor.get('dataset'), title=descriptor.get('name') or Path(descriptor['source']).name,
                             comparison_key=f'{collection_id}:{index}')
                         if descriptor.get('reference'):

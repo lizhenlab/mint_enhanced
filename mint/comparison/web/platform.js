@@ -2,7 +2,7 @@
 
 const datasetForm={active:false,catalog:null,offset:0};
 const platform={pane:'data',selection:new Map(),catalog:null,datasetOffset:0,taskOffset:0,taskSerial:0,serial:0,timer:null,collection:null,collectionKind:null,report:null,renderJob:null,capability:null};
-const HUB_LABELS={data:'数据与输入',tasks:'任务中心',batch:'多视频多算法批量',evaluation:'多算法数据集评测',tools:'高级工具'};
+const HUB_LABELS={data:'数据与输入',tasks:'任务中心',batch:'多视频多算法批量',evaluation:'多算法数据集评测',tools:'高级工具',catalog:'持久结果与实验目录',quality:'逐帧质检与人工复核',research:'数据、训练与模型版本'};
 function datasetSelection(){
   if(!datasetForm.active)return null;
   if(!datasetForm.catalog||!$('datasetEpisode').value)throw new Error('请先读取数据集并选择 Episode');
@@ -95,7 +95,7 @@ async function submitCollection(kind){
   const items=chosen.map(value=>({source:value.source,name:value.name,...(value.dataset?{dataset:{...value.dataset,attach_gt:kind==='evaluation'||$(kind+'-reference').checked,use_calibration:$(kind+'-calibration').checked}}:{})}));
   const selections=selectedAlgorithmsFrom($(kind+'-algorithms'));if(!selections.length)throw new Error('请至少选择一个算法');
   const button=$(kind+'-submit');button.disabled=true;
-  try{const value=await api('api/comparison/collections',{kind,items,selections,options});await openCollection(value.id);}finally{button.disabled=false;}
+  try{button.textContent=`正在预检 ${items.length} 个输入…`;const check=await api('api/comparison/collections/preflight',{kind,items,selections,options});if(!check.ready)throw new Error(check.errors.slice(0,20).join('；'));const value=await api('api/comparison/collections',{kind,items,selections,options});await openCollection(value.id);}finally{button.disabled=false;button.textContent=kind==='evaluation'?'开始多算法数据集评测':'开始多视频多算法批量';}
 }
 async function openPlatform(tab='data'){
   pause();$('platformError').textContent='';if(!$('platformDialog').open)$('platformDialog').showModal();
@@ -110,6 +110,9 @@ function switchHub(tab){
   $('collectionDetails').hidden=!platform.collection||platform.collectionKind!==tab;
   if(['batch','evaluation'].includes(tab))createComposer(tab);
   if(tab==='tools')refreshToolOptions().catch(hubError);
+  if(tab==='catalog')refreshArtifactCatalog().catch(hubError);
+  if(tab==='quality')refreshQualityContext().catch(hubError);
+  if(tab==='research')refreshResearchChoices().catch(hubError);
   pollPlatform();
 }
 async function pollPlatform(){
@@ -122,12 +125,14 @@ function statusLabel(status){return STAGES[status]||({waiting_gpu:'等待 GPU',e
 async function refreshWorkspaceTasks(){
   const serial=++platform.taskSerial,query=new URLSearchParams({limit:50,offset:platform.taskOffset,query:$('taskSearch').value,status:$('taskStatusFilter').value});
   const value=await api('api/comparison/workspace?'+query);if(serial!==platform.taskSerial)return;
-  const scheduler=value.resource||{};$('resourceSummary').textContent=`MINT 调度器：${scheduler.running_devices?.length||0} 卡运行 · ${scheduler.queued||0} 个窗口排队 · 策略 ${scheduler.policy||'按需加载'}。其他算法和渲染的实际阶段见任务行。`;
+  const scheduler=value.resource||{},resources=value.resources||{},gpus=resources.gpus||[];$('resourceSummary').textContent=`物理 GPU ${gpus.length} 张 · 当前显存空余 ${(gpus.reduce((sum,gpu)=>sum+gpu.free_mib,0)/1024).toFixed(1)} GiB · CPU ${resources.cpu_count||'—'} 核 / 1 分钟负载 ${Number(resources.load_average?.[0]||0).toFixed(1)} · 主机可用内存 ${((resources.memory?.MemAvailable||0)/2**30).toFixed(1)} GiB · 磁盘余量 ${((resources.disk?.free_bytes||0)/2**30).toFixed(1)} GiB。MINT：${scheduler.running_devices?.length||0} 卡、${scheduler.queued||0} 个窗口排队。`;
   const table=el('table'),head=el('tr');for(const label of ['任务 / 来源','状态 / 当前阶段','完成量','操作'])head.append(el('th',label));table.append(head);
-  for(const task of value.tasks){const row=el('tr'),name=el('td');name.append(el('strong',task.label),el('small',task.source||task.kind));const progress=task.progress||{},phase=progress.stage||progress.phase;row.append(name,el('td',statusLabel(task.status)+(phase?' · '+(STAGES[phase]||phase):'')),el('td',progress.total?`${progress.done||0}/${progress.total}`:'—'));const actions=el('td');
-    const open=el('button','打开');open.onclick=()=>{if(task.kind==='batch'||task.kind==='evaluation')openCollection(task.id).catch(hubError);else if(task.kind==='render'){platform.renderJob=task.id;switchHub('tools');}else if(task.comparison_id){$('platformDialog').close();openComparison(task.comparison_id).then(()=>inspectResult(task.id)).catch(error=>notify(error.message));}else if(task.url)location.href=task.url;};open.disabled=!(['batch','evaluation','render'].includes(task.kind)||task.comparison_id||task.url);actions.append(open);
-    const terminal=TERMINAL.has(task.status)||task.status==='evicted';if(['inference','batch','evaluation','render'].includes(task.kind)&&task.status!=='completed'){
-      const action=el('button',terminal?'恢复':'取消');action.onclick=async()=>{try{if(task.kind==='inference')await api(`api/comparison/runs/${task.id}/${terminal?'resume':'cancel'}`,{});else if(task.kind==='render'){if(terminal){platform.renderJob=task.id;await resumeRenderTool(task.id);}else await api(`api/comparison/tools/${task.id}/cancel`,{});}else await api(`api/comparison/collections/${task.id}/${terminal?'resume':'cancel'}`,{});await refreshWorkspaceTasks();}catch(error){hubError(error);}};actions.append(action);
+  for(const task of value.tasks){const row=el('tr'),name=el('td');name.append(el('strong',task.label),el('small',task.source||task.kind));const progress=task.progress||{},phase=progress.stage||progress.phase;row.append(name,el('td',statusLabel(task.status)+(phase?' · '+(STAGES[phase]||phase):'')),el('td',progress.total?`${progress.done||0}/${progress.total}${progress.unit==='frames'?' 帧':progress.unit==='optimizer_steps'?' 步':''}`:'—'));const actions=el('td');
+    if(task.waiting_reason)name.append(el('small',task.waiting_reason,'waiting-reason'));if(task.eta)name.append(el('small',`当前阶段预计剩余 ${Math.ceil(task.eta.seconds)} 秒 · 估算`));
+    const history=researchButton('阶段记录',async()=>researchDetails(await api(`api/comparison/tasks/${task.kind}/${task.id}`)));actions.append(history);
+    const open=el('button','打开');open.onclick=()=>{if(task.kind==='batch'||task.kind==='evaluation')openCollection(task.id).catch(hubError);else if(task.kind==='render'){platform.renderJob=task.id;switchHub('tools');}else if(task.kind==='workflow'){switchHub('research');inspectWorkflow(task.id).catch(hubError);}else if(task.comparison_id){$('platformDialog').close();openComparison(task.comparison_id).then(()=>inspectResult(task.id)).catch(error=>notify(error.message));}else if(task.url)location.href=task.url;};open.disabled=!(['batch','evaluation','render','workflow'].includes(task.kind)||task.comparison_id||task.url);actions.append(open);
+    const terminal=TERMINAL.has(task.status)||task.status==='evicted';if(['inference','batch','evaluation','render','export','workflow'].includes(task.kind)&&task.status!=='completed'){
+      const action=el('button',terminal?'恢复':'取消');action.onclick=async()=>{try{if(task.kind==='inference')await api(`api/comparison/runs/${task.id}/${terminal?'resume':'cancel'}`,{});else if(task.kind==='render'){if(terminal){platform.renderJob=task.id;await resumeRenderTool(task.id);}else await api(`api/comparison/tools/${task.id}/cancel`,{});}else if(task.kind==='export')await api(`api/comparison/exports/${task.id}/${terminal?'resume':'cancel'}`,{});else if(task.kind==='workflow')await api(`api/comparison/workflows/${task.id}/${terminal?'resume':'cancel'}`,{});else await api(`api/comparison/collections/${task.id}/${terminal?'resume':'cancel'}`,{});await refreshWorkspaceTasks();}catch(error){hubError(error);}};actions.append(action);
     }
     if(task.error){const error=el('small',task.error,'task-error');name.append(error);}row.append(actions);table.append(row);
   }
@@ -205,10 +210,19 @@ function checkpointFields(host){
   const checkpoint=el('textarea');checkpoint.rows=2;checkpoint.dataset.selection='checkpoint';checkpoint.placeholder='留空使用默认模型；每行一个检查点绝对路径';checkpoint.spellcheck=false;
   const config=el('input');config.dataset.selection='config';config.placeholder='留空优先使用检查点配置快照';config.spellcheck=false;
   host.append(inputLabel('MINT 检查点（可多选）',checkpoint),inputLabel('可选模型配置路径',config));
+  const aliases=el('details',undefined,'checkpoint-browser');aliases.dataset.modelAliases='true';aliases.append(el('summary','选择已评测模型别名'));host.append(aliases);wireModelAliasBrowser(aliases);
   const picker=el('details',undefined,'checkpoint-browser');picker.append(el('summary','浏览服务器检查点'));host.append(picker);wireCheckpointBrowser(picker);
 }
 function wireCheckpointBrowser(picker){
   picker.ontoggle=()=>{if(picker.open&&!picker.querySelector('.checkpoint-browser-body'))browseCheckpoint(picker,'').catch(error=>notify(error.message));};
+}
+function wireModelAliasBrowser(picker){
+  picker.ontoggle=async()=>{if(!picker.open)return;try{
+    const value=await api('api/comparison/models/aliases');picker.querySelector('.alias-options')?.remove();const options=el('div',undefined,'alias-options');
+    for(const alias of value.aliases){const button=el('button',`${alias.name} · ${alias.model.name}${alias.ready?'':' · 文件变化'}`);button.disabled=!alias.ready;
+      button.onclick=()=>{const box=picker.closest('.algorithm');box.querySelector('[data-selection=checkpoint]').value=alias.model.path;box.querySelector('[data-selection=config]').value=alias.effective_config?.path||alias.model.config?.path||'';box.querySelector('input[type=checkbox]').checked=true;};options.append(button);}
+    if(!value.aliases.length)options.append(el('p','尚无已通过门槛的模型别名。可在数据与训练中登记、评测后发布。','hint'));picker.append(options);
+  }catch(error){notify(error.message);}};
 }
 async function browseCheckpoint(picker,path){
   const value=await api('/api/ckpt/browse?'+new URLSearchParams({path}));
@@ -226,7 +240,7 @@ function cloneComposerAlgorithms(host){
   for(const box of $('algorithmOptions').children)if(box.dataset.algorithm!=='reference'){
     const clone=box.cloneNode(true),from=box.querySelectorAll('input,textarea,select'),to=clone.querySelectorAll('input,textarea,select');
     from.forEach((field,index)=>{to[index].value=field.value;if(field.type==='checkbox')to[index].checked=field.checked;});
-    for(const picker of clone.querySelectorAll('.checkpoint-browser')){picker.querySelector('.checkpoint-browser-body')?.remove();picker.open=false;wireCheckpointBrowser(picker);}host.append(clone);
+    for(const picker of clone.querySelectorAll('.checkpoint-browser')){picker.querySelector('.checkpoint-browser-body')?.remove();picker.querySelector('.alias-options')?.remove();picker.open=false;if(picker.dataset.modelAliases)wireModelAliasBrowser(picker);else wireCheckpointBrowser(picker);}host.append(clone);
   }
 }
 function refreshComposerAlgorithms(){for(const kind of ['batch','evaluation']){const host=$(kind+'-algorithms');if(host?.dataset.waiting)cloneComposerAlgorithms(host);}}
@@ -234,7 +248,7 @@ async function runDiagnostic(profile){
   const buttons=[...document.querySelectorAll('[data-diagnostic]')];for(const button of buttons)button.disabled=true;$('diagnosticStatus').textContent='正在独立进程检查…';$('diagnosticResults').replaceChildren();
   try{const value=await api('api/comparison/diagnostics',{profile}),table=el('table');
     for(const check of value.checks){const row=el('tr');row.append(el('td',check.ok?'✓ 通过':check.required?'✗ 缺失':'○ 可选'),el('td',check.name),el('td',check.detail));table.append(row);}
-    $('diagnosticResults').append(table);$('diagnosticStatus').textContent=value.ready?'必需项已就绪':'仍有必需项缺失';
+    $('diagnosticResults').append(table);$('diagnosticStatus').textContent=value.ready?'必需项已就绪':value.environment_ready&&!value.inputs_ready?'环境就绪；默认生产配方的数据 / 初始化仍需配置，可在数据与训练中选择已转换版本。':'仍有必需环境或资产缺失';
   }catch(error){hubError(error);$('diagnosticStatus').textContent='检查失败';}finally{for(const button of buttons)button.disabled=false;}
 }
 for(const button of document.querySelectorAll('[data-diagnostic]'))button.onclick=()=>runDiagnostic(button.dataset.diagnostic);

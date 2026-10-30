@@ -127,57 +127,71 @@ def run_ace(ctx):
             missing.append(index)
     ctx.metadata['reused_segments'] = len(segments) - len(missing)
     ctx.metadata['new_segments'] = len(missing)
-    if missing:
-        ctx.progress(stage='model_load', done=0, total=len(segments))
-        config = root / ('options/ace_ego_hand_k.yml' if given else 'options/ace_ego_hand_kfree.yml')
-        weights = root / ('checkpoints/ace_ego_hand_k.pt' if given else 'checkpoints/ace_ego_hand_kfree.pt')
-        opt = yaml.safe_load(config.read_text())
-        # The model's unchanged loader resolves the configured paths relative to its native cwd.
-        started = time.perf_counter()
-        device = torch.device('cuda:0')
-        model = GeoDitModel(opt, device)
-        model.load_inference(str(weights))
-        vae = load_vae(device)
-        ctx.timings['model_load_seconds'] = time.perf_counter() - started
-        try:
-            for index in missing:
-                ctx.check_cancel()
-                segment = segments[index]
-                start, stop = segment['start'], segment['end']
-                ctx.progress(stage='vae_encode', done=index, total=len(segments))
-                tick = time.perf_counter()
-                # Identical OpenCV INTER_AREA, normalization and tensor layout to video_vae.decode_video.
-                pixels = np.stack([cv2.resize(np.asarray(frame), (width, height), interpolation=cv2.INTER_AREA)
-                                   if frame.shape[:2] != (height, width) else np.asarray(frame)
-                                   for frame in ctx.frames[start:stop]])
-                pixels = torch.from_numpy(pixels.astype(np.float32) / 255. * 2. - 1.).permute(0, 3, 1, 2).contiguous()
-                ctrl = encode(vae, pixels, device).float()
-                del pixels
+    if missing and ctx.request.get('external_pool'):
+        from .native_pool import NativePool
+        if getattr(ctx,'_ace_pool_finished',False):
+            raise ValueError('A parallel ACE segment failed cache validation')
+        original_reused = len(segments)-len(missing)
+        with NativePool(ctx,'ace',maximum=min(options['max_gpus'],len(missing))) as pool:
+            pool.run([segments[i] for i in missing],stage='parallel_inference')
+        ctx.timings['native_parallel_wall_seconds']=ctx.metadata['parallel_stages']['ace']['wall_seconds']
+        ctx.timings['native_worker_sum_seconds']=ctx.metadata['parallel_stages']['ace']['native_worker_seconds']
+        # Re-enter only the CPU load/merge/decode path after all atomic native segments exist.
+        ctx._ace_pool_finished=True
+        result=run_ace(ctx)
+        ctx.metadata.update(reused_segments=original_reused,new_segments=len(missing))
+        return result
+    elif missing:
+            ctx.progress(stage='model_load', done=0, total=len(segments))
+            config = root / ('options/ace_ego_hand_k.yml' if given else 'options/ace_ego_hand_kfree.yml')
+            weights = root / ('checkpoints/ace_ego_hand_k.pt' if given else 'checkpoints/ace_ego_hand_kfree.pt')
+            opt = yaml.safe_load(config.read_text())
+            # The model's unchanged loader resolves the configured paths relative to its native cwd.
+            started = time.perf_counter()
+            device = torch.device('cuda:0')
+            model = GeoDitModel(opt, device)
+            model.load_inference(str(weights))
+            vae = load_vae(device)
+            ctx.timings['model_load_seconds'] = time.perf_counter() - started
+            try:
+                for index in missing:
+                    ctx.check_cancel()
+                    segment = segments[index]
+                    start, stop = segment['start'], segment['end']
+                    ctx.progress(stage='vae_encode', done=index, total=len(segments))
+                    tick = time.perf_counter()
+                    # Identical OpenCV INTER_AREA, normalization and tensor layout to video_vae.decode_video.
+                    pixels = np.stack([cv2.resize(np.asarray(frame), (width, height), interpolation=cv2.INTER_AREA)
+                                       if frame.shape[:2] != (height, width) else np.asarray(frame)
+                                       for frame in ctx.frames[start:stop]])
+                    pixels = torch.from_numpy(pixels.astype(np.float32) / 255. * 2. - 1.).permute(0, 3, 1, 2).contiguous()
+                    ctrl = encode(vae, pixels, device).float()
+                    del pixels
+                    torch.cuda.empty_cache()
+                    ctx.progress(stage='hand_prediction', done=index, total=len(segments))
+                    prediction = predict_video(model, 15, ctrl, intr, 'tiled', device, tile_w=22)
+                    torch.cuda.synchronize(device)
+                    native = {key: np.asarray(prediction[key], np.float32) for key in DUMP_KEYS}
+                    count = stop - start
+                    record = {'go': native['global_orient'].reshape(count, 2, 1, 3, 3), 'hp': native['hand_pose'],
+                        'betas': native['betas'], 'cam_trans': native['cam_trans'],
+                        'is_right': np.tile(np.array([0., 1.], np.float32), (count, 1)),
+                        'exists_2d': native['exists_2d'], 'exists_3d': native['exists_3d'],
+                        'joints_2d': native['direct_joints2d'], 'joints_cam_direct': native['direct_joints_cam'],
+                        'wrist_cam_direct': native['direct_wrist_cam'], 'frame_indices': np.arange(start, stop)}
+                    camera = intr if given else prediction.get('_pred_K')
+                    if camera is None:
+                        raise ValueError('K-free returned no predicted intrinsics; placeholder K cannot render the prediction')
+                    k = np.array([[camera['fx'], 0, camera['cx']], [0, camera['fy'], camera['cy']], [0, 0, 1.]])
+                    atomic_npz(ctx.work / f'ace_segment_{index:06d}.npz', **record, K_matrix=k, run_id=np.asarray(ctx.run_id))
+                    record['intrinsics'] = record['pred_intrinsics'] = camera
+                    records[index] = record
+                    ctx.timings['native_inference_seconds'] = ctx.timings.get('native_inference_seconds', 0) + time.perf_counter() - tick
+                    del ctrl, prediction
+                    ctx.cooperate(tick)
+            finally:
+                del model, vae
                 torch.cuda.empty_cache()
-                ctx.progress(stage='hand_prediction', done=index, total=len(segments))
-                prediction = predict_video(model, 15, ctrl, intr, 'tiled', device, tile_w=22)
-                torch.cuda.synchronize(device)
-                native = {key: np.asarray(prediction[key], np.float32) for key in DUMP_KEYS}
-                count = stop - start
-                record = {'go': native['global_orient'].reshape(count, 2, 1, 3, 3), 'hp': native['hand_pose'],
-                    'betas': native['betas'], 'cam_trans': native['cam_trans'],
-                    'is_right': np.tile(np.array([0., 1.], np.float32), (count, 1)),
-                    'exists_2d': native['exists_2d'], 'exists_3d': native['exists_3d'],
-                    'joints_2d': native['direct_joints2d'], 'joints_cam_direct': native['direct_joints_cam'],
-                    'wrist_cam_direct': native['direct_wrist_cam'], 'frame_indices': np.arange(start, stop)}
-                camera = intr if given else prediction.get('_pred_K')
-                if camera is None:
-                    raise ValueError('K-free returned no predicted intrinsics; placeholder K cannot render the prediction')
-                k = np.array([[camera['fx'], 0, camera['cx']], [0, camera['fy'], camera['cy']], [0, 0, 1.]])
-                atomic_npz(ctx.work / f'ace_segment_{index:06d}.npz', **record, K_matrix=k, run_id=np.asarray(ctx.run_id))
-                record['intrinsics'] = record['pred_intrinsics'] = camera
-                records[index] = record
-                ctx.timings['native_inference_seconds'] = ctx.timings.get('native_inference_seconds', 0) + time.perf_counter() - tick
-                del ctrl, prediction
-                ctx.cooperate(tick)
-        finally:
-            del model, vae
-            torch.cuda.empty_cache()
     if independent:
         merged = merge_records(records, segments, n, options['merge'], 'intrinsics' if given else 'pred_intrinsics')
         K = merged['pred_camera_K'].copy()
@@ -208,6 +222,9 @@ def _hawor_numpy_compat():
 
 
 def run_hawor(ctx):
+    if ctx.request.get('external_pool'):
+        from .hawor_parallel import run_hawor_parallel
+        return run_hawor_parallel(ctx)
     import cv2
     import torch
     import joblib

@@ -56,22 +56,37 @@ class WorkerContext:
             return
         import torch
         torch.cuda.synchronize()
+        compute_seconds=max(0.,time.perf_counter()-started)
         now = time.monotonic()
         if now - self._last_probe > 5:
             from mint.inference.gpu_scheduler import NvidiaSmiProbe
             try:
-                samples = NvidiaSmiProbe()()
                 selected = self.request.get('gpu_uuids', [])
-                self._foreign = any(v.foreign_pids for u, v in samples.items() if u in selected)
+                cached=None
+                state=os.environ.get('MINT_NATIVE_GPU_STATE')
+                if state:
+                    try:
+                        snapshot=json.loads(Path(state).read_text())
+                        if time.time()-snapshot['updated_at']<10:
+                            cached=[v for v in snapshot['gpus'] if v['uuid'] in selected]
+                    except (OSError,ValueError,KeyError):pass
+                if cached:
+                    self._foreign=any(v['foreign_pids'] and (v['foreign_utilization'] is None or v['foreign_utilization']>0) for v in cached)
+                else:
+                    samples=NvidiaSmiProbe(process_utilization=True)()
+                    self._foreign=any(v.foreign_pids and (v.foreign_utilization is None or v.foreign_utilization>0)
+                                      for u,v in samples.items() if u in selected)
             except Exception:
                 self._foreign = True
             self._last_probe = now
         if self._foreign:
-            deadline = time.monotonic() + max(0., (time.perf_counter() - started) * (1 / .3 - 1))
+            tick=time.monotonic()
+            deadline = tick + compute_seconds * (1 / .3 - 1)
             self.progress(stage='shared_gpu_yield')
             while time.monotonic() < deadline:
                 self.check_cancel()
                 time.sleep(min(.25, max(.001, deadline - time.monotonic())))
+            self.timings['shared_gpu_yield_seconds']=self.timings.get('shared_gpu_yield_seconds',0.)+time.monotonic()-tick
 
 
 def main(argv=None):
@@ -97,6 +112,10 @@ def main(argv=None):
         if file_identity(ctx.sample['source']['path']) != ctx.sample['source']:
             raise ValueError('Source video changed after sample preparation')
         root = Path(ctx.spec['root'])
+        from .read_only import configure_native_cache,protect_native_roots
+        from .registry import root_for
+        configure_native_cache(ctx.directory/'runtime')
+        protect_native_roots([root_for('ace_kfree'),root_for('hawor_full')])
         os.chdir(root)
         if str(root) not in sys.path:
             sys.path.insert(0, str(root))
@@ -109,7 +128,7 @@ def main(argv=None):
             except importlib.metadata.PackageNotFoundError:
                 pass
         ctx.metadata['native_environment'] = {'python': sys.version, 'executable': sys.executable, 'packages': versions}
-        if not ctx.request.get('import'):
+        if not ctx.request.get('import') and not ctx.request.get('external_pool'):
             import torch
             if not torch.cuda.is_available():
                 raise RuntimeError('No CUDA GPU assigned to the native inference worker')
@@ -117,7 +136,7 @@ def main(argv=None):
                 torch.cuda.set_per_process_memory_fraction(ctx.spec['memory_fraction'], 0)
             torch.cuda.reset_peak_memory_stats()
         frames_path = Path(ctx.sample['frames_path'])
-        with file_lock(frames_path.parent / '.active.pin', shared=True):
+        with file_lock(frames_path.parent / '.active.pin', shared=True), file_lock(frames_path.with_suffix('.pin'),shared=True):
             if not ctx.request.get('import'):
                 if file_identity(frames_path) != ctx.sample['frames_identity']:
                     raise ValueError('Prepared RGB cache changed')
@@ -140,7 +159,7 @@ def main(argv=None):
                     raise ValueError('Prepared RGB frames changed during inference')
                 ctx.timings['worker_end_to_end_seconds'] = time.perf_counter() - ctx.started
                 ctx.metadata['peak_rss_gib'] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**20
-                if 'torch' in sys.modules and not ctx.request.get('import'):
+                if 'torch' in sys.modules and not ctx.request.get('import') and not ctx.request.get('external_pool'):
                     import torch
                     ctx.metadata['peak_gpu_allocated_gib'] = torch.cuda.max_memory_allocated() / 2**30
                 record = publish_result(ctx.directory / 'result', arrays,

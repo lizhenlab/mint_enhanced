@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
+import shutil
+import subprocess
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
@@ -12,7 +15,7 @@ import numpy as np
 
 from mint.runtime import atomic_json, file_identity
 from mint.inference.cache_budget import CacheBudget, file_lock
-from mint.inference.frame_store import read_frames, sample_indices, select_view
+from mint.inference.frame_store import sample_indices, select_view
 from mint.visualization.encoding import atomic_video_file
 
 
@@ -35,6 +38,80 @@ def preparation_lock(path, cancel, progress):
         if cancel():
             raise InferenceCancelled('Sample preparation cancelled')
         yield
+
+
+def decode_rgb(source, indices, view, destination, source_shape, progress, cancel, on_chunk=lambda start,stop:None):
+    """Independent decoders write disjoint full-resolution RGB ranges."""
+    from decord import VideoReader
+    from mint.inference.base import InferenceCancelled
+    workers=max(1,min(8,int(os.environ.get('MINT_COMPARISON_DECODE_WORKERS','4')),len(indices)//128 or 1))
+    chunk=max(1,min(96,64*2**20//int(np.prod(source_shape))))
+    count=0;last_report=0.;lock=threading.Lock();failed=threading.Event()
+    def decode(bounds):
+        nonlocal count,last_report
+        start,end=bounds
+        reader=VideoReader(source,num_threads=2)
+        mapped=np.load(destination,mmap_mode='r+',allow_pickle=False)
+        try:
+            for first in range(start,end,chunk):
+                if cancel() or failed.is_set():raise InferenceCancelled('Sample preparation cancelled')
+                last=min(end,first+chunk)
+                mapped[first:last]=select_view(reader.get_batch(indices[first:last].tolist()).asnumpy(),view)
+                on_chunk(first,last)
+                with lock:
+                    count+=last-first
+                    now=time.monotonic()
+                    if now-last_report>.25 or count==len(indices):
+                        last_report=now;progress(stage='decode',done=count,total=len(indices),decode_workers=workers)
+        except BaseException:
+            failed.set();raise
+        finally:mapped._mmap.close()
+    bounds=np.linspace(0,len(indices),workers+1,dtype=int)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures=[pool.submit(decode,(int(a),int(b))) for a,b in zip(bounds[:-1],bounds[1:])]
+        for future in as_completed(futures):future.result()
+    # One durable writeback after all disjoint writers finish, instead of whole-file
+    # synchronous flushes in every decode chunk.
+    mapped=np.load(destination,mmap_mode='r+',allow_pickle=False)
+    try:mapped.flush()
+    finally:mapped._mmap.close()
+    return workers
+
+
+def render_proxy(frames_path,fps,size,destination,wait_ready,cancel,budget):
+    """Encode completed RGB cache frames once, while other ranges still decode."""
+    from mint.inference.base import InferenceCancelled
+    frames=np.load(frames_path,mmap_mode='r',allow_pickle=False)
+    n,height,width,_=frames.shape
+    log=destination.with_suffix('.ffmpeg.log')
+    try:
+        with log.open('wb') as output:
+            child=subprocess.Popen(['ffmpeg','-nostdin','-y','-v','error','-f','rawvideo','-pix_fmt','rgb24',
+                '-s',f'{width}x{height}','-r',str(fps),'-i','pipe:0','-an','-filter_threads','2',
+                '-vf',f'scale={size[0]}:{size[1]}','-c:v','libx264','-preset','veryfast','-crf','23',
+                '-threads','4','-g',str(max(12,round(fps*2))),'-sc_threshold','0',
+                '-pix_fmt','yuv420p','-movflags','+faststart',str(destination)],
+                stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=output)
+            try:
+                for index,frame in enumerate(frames):
+                    wait_ready(index)
+                    if cancel():raise InferenceCancelled('Sample preview cancelled')
+                    child.stdin.write(memoryview(frame).cast('B'))
+                    if index%96==0 and shutil.disk_usage(destination.parent).free<budget.minimum_free:
+                        raise OSError('Preview reached disk reserve')
+                child.stdin.close()
+                if child.wait(timeout=120):raise RuntimeError('Preview encoding failed: '+log.read_text(errors='replace')[-1500:])
+            finally:
+                try:
+                    if not child.stdin.closed:child.stdin.close()
+                except (BrokenPipeError,OSError):pass
+                if child.poll() is None:
+                    child.terminate()
+                    try:child.wait(timeout=3)
+                    except subprocess.TimeoutExpired:child.kill();child.wait()
+    finally:
+        frames._mmap.close();log.unlink(missing_ok=True)
+    return destination
 
 
 def prepare_sample(request, directory, progress=lambda **kw: None, cancel=lambda: False):
@@ -74,47 +151,52 @@ def prepare_sample(request, directory, progress=lambda **kw: None, cancel=lambda
         with file_lock(directory / '.active.pin', shared=True), budget.reserve(frames_path, int(np.prod(shape)) + 4096):
             temporary = directory / f'frames.partial-{os.getpid()}.npy'
             frames = np.lib.format.open_memmap(temporary, mode='w+', dtype=np.uint8, shape=shape)
+            frames._mmap.close()
+            from .storage import PreviewBudget
+            preview_budget = PreviewBudget(directory.parent)
+            scale=min(1.,1280/width)
+            proxy_size=(max(2,2*round(width*scale/2)),max(2,2*round(height*scale/2)))
+            stopped=threading.Event()
+            cancelled=lambda:cancel() or stopped.is_set()
+            timings={};started=time.perf_counter()
+            ready=np.zeros(len(indices),bool);condition=threading.Condition()
+            def on_chunk(start,stop):
+                with condition:ready[start:stop]=True;condition.notify_all()
+            def wait_ready(index):
+                with condition:
+                    while not ready[index]:
+                        if cancelled():raise InferenceCancelled('Sample preview cancelled')
+                        condition.wait(.1)
+            def preview():
+                tick=time.perf_counter()
+                with preparation_lock(directory.parent / '.proxy-encode.lock',cancelled,progress):
+                    with preview_budget.reserve(directory/'input.mp4',max(2**20,len(indices)*proxy_size[0]*proxy_size[1]//32)):
+                        def render(path):
+                            render_proxy(temporary,fps,proxy_size,path,wait_ready,cancelled,preview_budget)
+                            used=sum(p.stat().st_size for p in preview_budget._files() if p!=directory/'input.mp4')
+                            if used+path.stat().st_size>preview_budget.maximum:raise OSError('Comparison preview quota exceeded')
+                        path=atomic_video_file(directory/'input.mp4',render,len(indices))
+                timings['preview_seconds']=time.perf_counter()-tick
+                return path
             try:
-                chunk = max(1, min(96, 64 * 2**20 // (source_h * source_w * 3)))
-                for start in range(0, len(indices), chunk):
-                    if cancel():
-                        raise InferenceCancelled('Sample preparation cancelled')
-                    stop = min(len(indices), start + chunk)
-                    frames[start:stop] = select_view(reader.get_batch(indices[start:stop].tolist()).asnumpy(), request['view'])
-                    progress(stage='decode', done=stop, total=len(indices))
-                    if start % (chunk * 8) == 0:
-                        frames.flush()
-                        from mint.inference.frame_store import release_mapped_pages
-                        release_mapped_pages(frames)
-                frames.flush()
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    def guarded_preview():
+                        try:return preview()
+                        except BaseException:stopped.set();raise
+                    future=pool.submit(guarded_preview)
+                    try:
+                        tick=time.perf_counter()
+                        workers=decode_rgb(source,indices,request['view'],temporary,(source_h,source_w,3),progress,cancelled,on_chunk)
+                        timings['decode_seconds']=time.perf_counter()-tick
+                        proxy=future.result()
+                    except BaseException:
+                        stopped.set()
+                        if future.done() and future.exception() is not None:raise future.exception()
+                        raise
                 if file_identity(source) != request['source']:
                     raise ValueError('Source changed during preparation')
                 os.replace(temporary, frames_path)
-                from mint.visualization.draw import H264PipeWriter
-                from .storage import PreviewBudget
-                preview_budget = PreviewBudget(directory.parent)
-                def render(destination):
-                    writer = H264PipeWriter(destination, fps, (width + width % 2, height + height % 2))
-                    try:
-                        for index, frame in enumerate(frames):
-                            if cancel():
-                                raise InferenceCancelled('Sample preparation cancelled')
-                            if height % 2 or width % 2:
-                                frame = np.pad(frame, ((0, height % 2), (0, width % 2), (0, 0)), mode='edge')
-                            writer.write(frame[:, :, ::-1])
-                            if index % 96 == 0:
-                                progress(stage='preview', done=index, total=len(indices))
-                                import shutil
-                                if shutil.disk_usage(directory).free < preview_budget.minimum_free:
-                                    raise OSError('Preview encoding reached the disk free-space reserve')
-                    finally:
-                        writer.close()
-                    used = sum(path.stat().st_size for path in preview_budget._files() if path != directory / 'input.mp4')
-                    if used + destination.stat().st_size > preview_budget.maximum:
-                        raise OSError('Comparison preview quota exceeded; archive selected inputs or increase MINT_COMPARISON_PROXY_MAX_GIB')
-                with preparation_lock(directory.parent / '.proxy-encode.lock', cancel, progress):
-                    with preview_budget.reserve(directory / 'input.mp4', max(2**20, int(np.prod(shape)) // 32)):
-                        proxy = atomic_video_file(directory / 'input.mp4', render, len(indices))
+                timings['preparation_seconds']=time.perf_counter()-started
                 camera = request['camera']
                 if camera:
                     K = np.asarray(camera['K'], np.float64).copy()
@@ -129,10 +211,11 @@ def prepare_sample(request, directory, progress=lambda **kw: None, cancel=lambda
                     'time_domain': 'source_video_pts_seconds', 'width': width, 'height': height,
                     'frames_path': str(frames_path), 'video_path': str(proxy), 'camera': camera,
                     'frames_identity': file_identity(frames_path), 'video_identity': file_identity(proxy),
-                    'proxy_pixel_grid': [width + width % 2, height + height % 2],
+                    'proxy_pixel_grid': list(proxy_size), 'proxy_content_grid': list(proxy_size),
+                    'preparation_timings': timings, 'decode_workers': workers,
                     'input_policy': 'Identical decoded RGB frames for all workers; native resize and camera remapping are declared by each algorithm'}
                 atomic_json(manifest, record)
                 return record
             finally:
-                frames._mmap.close()
+                stopped.set()
                 temporary.unlink(missing_ok=True)

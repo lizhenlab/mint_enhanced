@@ -163,9 +163,13 @@ def comparison_blueprint():
         path = manager().root / 'runs' / run_id / 'worker.log'
         if not path.exists():
             return jsonify(text='Worker has not started')
-        with path.open('rb') as stream:
-            stream.seek(max(0, path.stat().st_size - 16000))
-            return jsonify(text=stream.read().decode(errors='replace'))
+        logs=[path,*sorted((path.parent/'native').glob('*.log'),key=lambda p:p.stat().st_mtime,reverse=True)[:16]]
+        parts=[]
+        for item in logs:
+            with item.open('rb') as stream:
+                stream.seek(max(0,item.stat().st_size-(16000 if item==path else 4000)))
+                parts.append(f'[{item.name}]\n'+stream.read().decode(errors='replace'))
+        return jsonify(text='\n\n'.join(parts))
 
     @blueprint.get('/api/comparison/runs/<run_id>/manifest')
     def manifest(run_id):

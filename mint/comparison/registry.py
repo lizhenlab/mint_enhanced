@@ -88,7 +88,8 @@ def backend_spec(algorithm):
         if not (root / name).is_file():
             missing.append(str(root / name))
     implementation = {name: hashlib.sha256((PROJECT / 'mint/comparison' / name).read_bytes()).hexdigest()
-                      for name in ('contracts.py', 'registry.py', 'normalizers.py', 'prepare.py', 'native.py', 'worker.py')}
+                      for name in ('contracts.py', 'registry.py', 'normalizers.py', 'prepare.py', 'native.py', 'worker.py',
+                                   'native_pool.py','native_process.py','native_tasks.py','hawor_parallel.py','read_only.py')}
     identity['adapter'] = implementation
     return {**{k: v for k, v in spec.items() if k not in {'sources', 'assets', 'root_env', 'default_root'}},
             'id': algorithm, 'root': str(root), 'python': str(python), 'ready': not missing,
@@ -109,9 +110,9 @@ def normalize_options(algorithm, options=None):
     policy = options.get('resource_policy', 'shared')
     if policy not in {'shared', 'idle', 'dedicated'}:
         raise ValueError('resource_policy must be shared, idle or dedicated')
-    gpus = int(options.get('max_gpus', 8 if algorithm == 'mint' else 1))
-    if not 1 <= gpus <= 8 or (algorithm != 'mint' and gpus != 1):
-        raise ValueError('External native workers use one GPU; MINT permits 1..8')
+    gpus = int(options.get('max_gpus', 1 if algorithm=='reference' else 8))
+    if not 1 <= gpus <= 8 or (algorithm=='reference' and gpus!=1):
+        raise ValueError('Choose 1..8 GPUs; references use no GPU')
     result = {'mode': mode, 'resource_policy': policy, 'max_gpus': gpus}
     if algorithm == 'mint':
         result['hand_mode'] = canonical_hand_mode(options.get('hand_mode', 'smooth'))

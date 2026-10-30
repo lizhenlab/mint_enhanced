@@ -294,7 +294,7 @@ class ComparisonManager:
                         db.commit(); thread.start()
 
     def _acquire_gpu(self, request, cancelled):
-        if request.get('import'):
+        if request.get('import') or request.get('external_pool'):
             return [], []
         if request['algorithm'] == 'mint' and request['options']['resource_policy'] in {'shared', 'idle'}:
             return [], []  # The unchanged MINT scheduler owns the same cooperative GPU leases.
@@ -349,6 +349,7 @@ class ComparisonManager:
                 except OSError as exc:
                     raise OSError('Comparison native/result storage quota or free-space reserve exceeded; '
                                   'archive selected old runs or increase MINT_COMPARISON_RUN_MAX_GIB') from exc
+                request['external_pool'] = not request.get('import') and request['algorithm'] in {'ace_kfree','ace_kgiven','hawor_full','hawor_camera'}
                 uuids, leases = self._acquire_gpu(request, cancel)
                 if cancel():
                     raise InterruptedError('Cancelled before worker launch')

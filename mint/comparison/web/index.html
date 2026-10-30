@@ -1,30 +1,68 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MINT · 三算法比较</title><link rel="stylesheet" href="comparison-assets/style.css"></head>
-<body><header><a class="brand" href="./">MINT<span>RESEARCH WORKSPACE</span></a><div><h1>同一输入，同步比较</h1><p>MINT · HaWoR · ACE Ego Hand</p></div><a class="back" href="./">返回单算法工作台 ↗</a></header>
-<main><aside>
-<section class="panel"><h2>01 / 输入与协议</h2><label>服务器视频路径<input id="source" placeholder="/data1/…/video.mp4" spellcheck="false"></label>
-<label>已有样例<select id="examples"><option value="">选择一个已部署样例</option></select></label>
-<div class="twocol"><label>视频视角<select id="view"><option value="full">完整画面</option><option value="left">双目左眼</option><option value="right">双目右眼</option></select></label>
-<label>目标 FPS<input id="targetFps" type="number" min="0" value="0" step="any"></label></div>
-<div class="twocol"><label>起始源帧<input id="startFrame" type="number" min="0" value="0"></label><label>最多帧数<input id="maxFrames" type="number" min="1" placeholder="留空 = 全部"></label></div>
-<p class="hint">FPS 0 保留源时间表；无默认总帧数截断。各后端读取相同解码帧，必要的缩放与相机变换单独记录。</p>
-<details><summary>针孔相机标定（可选）</summary><textarea id="camera" rows="5" placeholder='{"K":[[600,0,320],[0,600,240],[0,0,1]],"width":640,"height":480,"source":"实际标定来源"}'></textarea><p class="hint">K 对应原始完整视频像素。双目选择时需提供对应相机在该像素网格下的标定；ACE K-given 必填。</p></details>
-</section>
-<section class="panel"><h2>02 / 算法与变体</h2><div id="algorithmOptions">读取本地依赖…</div><button id="start" class="primary">运行选中算法</button><p class="hint">后台独立运行，按资源情况排队。标定、相机来源与补全状态会保留在结果中。</p><div id="formError" role="alert"></div></section>
-<section class="panel"><h2>03 / 结果与恢复</h2><button id="refreshHistory">刷新记录</button><div id="history"></div></section>
-<section class="panel"><details><summary>导入已有算法结果</summary><label>算法<select id="importAlgorithm"></select></label><label>格式<select id="importFormat"><option value="mint_npz">MINT prediction.npz</option><option value="hawor_world_npz">HaWoR world_space_hands.npz</option><option value="ace_pickle">ACE 原生 PKL（限本地 results）</option><option value="normalized_npz">标准几何 NPZ</option></select></label><label>服务器文件路径<input id="importPath"></label><label>对应样本位置 JSON<textarea id="importMap" rows="2" placeholder="[0,1,2,…]，必须明确给出"></textarea></label><label>HaWoR 原生图像尺寸 JSON<input id="importGrid" placeholder="[1920,1080]，导入 HaWoR 时必填"></label><label>来源说明<input id="importSource" placeholder="原算法、输入视频与运行记录"></label><button id="import">导入并解码</button><p class="hint">沿用上方输入配置；必须明确帧映射。导入耗时不代表原始推理速度。</p></details></section>
-</aside><article>
-<section class="panel intro" id="welcome"><div class="eyebrow">COMPARE / TRACE / UNDERSTAND</div><h2>把算法结果放在同一条时间轴上</h2><p>选择视频与算法后提交，或打开已有记录。相机系手部、世界轨迹与原生后处理分别显示。</p><div class="principles"><span>21 点 · 左右手固定</span><span>米制 · 来源可追溯</span><span>缺失与补全分开</span></div></section>
-<section id="workspace" hidden>
-<div class="panel session"><div><div class="eyebrow">COMPARISON</div><h2 id="sessionTitle"></h2><p id="sampleInfo"></p></div><div><button id="downloadReport">保存比较报告</button><button id="exportVideo">导出同步对比视频</button></div></div>
-<div class="panel transport"><button id="play">▶ 播放</button><button id="prev" title="前一帧">←</button><button id="next" title="后一帧">→</button><input id="timeline" type="range" min="0" max="0" value="0"><output id="timeLabel">等待输入准备…</output><select id="speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></div>
-<div class="panel viewbar"><label>3D 空间<select id="space"><option value="camera">相机系</option><option value="world">世界系（首个共同有效相机帧）</option></select></label><label><input id="showAbsent" type="checkbox">显示存在性低的有限预测</label><label><input id="showTrails" type="checkbox" checked>腕/相机轨迹</label><button id="resetView">重置 3D 视角</button><button id="snapshot">保存当前画面</button><span class="hint">拖动旋转 · 滚轮缩放 · 三列联动</span></div>
-<div id="runs" class="run-grid"></div>
-<section class="panel"><h2>加入已有结果或 GT</h2><div class="combine"><select id="existingRun"></select><button id="refreshExisting">刷新可加入结果</button><button id="attachExisting">加入本次比较</button></div><p class="hint">仅列出输入身份、视角、帧范围及标定完全相同的结果。导入 Reference 时必须声明 GT 来源、坐标系与米制单位。</p></section>
-<section class="panel"><h2>相机来源组合实验</h2><div class="combine"><label>手部结果<select id="handRun"></select></label><span>＋</span><label>世界相机<select id="cameraRun"></select></label><button id="combine">生成组合变体</button></div><p class="hint">保留手部相机系几何及原 K，仅替换外参来源；这属于独立组合实验，不是原生算法世界预测。</p></section>
-<section class="panel"><h2>同输入数值比较</h2><p class="hint">没有声明的 GT 时，下表是算法间差异，不是精度排名。均值只覆盖共同有效几何，同时列出覆盖和缺失。</p><div id="metrics">结果完成后可计算。</div></section>
-</section><section id="notice" role="status"></section>
-</article></main>
-<dialog id="logDialog"><div class="dialog-head"><h2>运行日志</h2><button id="closeLog">关闭</button></div><pre id="logText"></pre></dialog>
-<script src="comparison-assets/app.js"></script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark"><title>MINT · 多算法工作台</title>
+  <link rel="stylesheet" href="comparison-assets/style.css?v=20261030-layout1">
+</head>
+<body>
+<svg class="icon-definitions" aria-hidden="true"><defs>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM9 5v14"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M7 17 17 7M7 7h10v10"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="m14 5-7 7 7 7M6 5v14"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="m10 5 7 7-7 7M18 5v14"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 4v16h17M8 15v-4M13 15V7M18 15V4"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m3 8 9-5 9 5-9 5zM3 12l9 5 9-5M3 16l9 5 9-5"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 7h4l2-3h4l2 3h4v13H4z"/><circle cx="12" cy="13" r="4"/></symbol>
+</defs></svg>
+<header class="masthead" id="appMasthead">
+  <div class="masthead-start"><button id="toggleSidebar" class="icon-button" aria-label="切换任务列表" aria-controls="taskSidebar" aria-expanded="true"><svg class="icon"><use href="#i-menu"/></svg></button>
+    <a class="brand" href="./"><span class="brand-mark">M</span><span><b>MINT</b><small>MOTION WORKSPACE</small></span></a><span class="masthead-divider"></span><h1>多算法比较</h1></div>
+  <nav class="masthead-actions" aria-label="工作台入口"><a class="back" href="./">WUJI EGO 工作台 <svg class="icon"><use href="#i-arrow"/></svg></a><button id="newComparison" class="primary"><svg class="icon"><use href="#i-plus"/></svg>新建比较</button></nav>
+</header>
+<main class="app-shell" id="appShell">
+  <aside class="task-sidebar" id="taskSidebar" aria-label="比较任务列表">
+    <div class="sidebar-heading"><div><div class="eyebrow">WORKSPACE</div><h2>比较任务 <span id="historyCount" class="count">0</span></h2></div><button id="refreshHistory" class="icon-button" aria-label="刷新任务列表" title="刷新任务列表"><svg class="icon"><use href="#i-refresh"/></svg></button></div>
+    <label class="search-field"><svg class="icon"><use href="#i-search"/></svg><input id="historySearch" type="search" placeholder="搜索任务、视频或算法" aria-label="搜索比较任务"></label>
+    <div class="history-filters" role="group" aria-label="任务状态筛选"><button class="active" data-history-filter="all" aria-pressed="true">全部</button><button data-history-filter="active" aria-pressed="false">运行中</button><button data-history-filter="attention" aria-pressed="false">未完整完成</button></div>
+    <div id="history" class="history-list" aria-live="polite"><p class="empty-hint">正在读取任务…</p></div>
+    <div class="sidebar-footer"><span class="status-dot"></span><span id="dependencyStatus">读取算法依赖…</span><button id="openImport" class="text-button">导入结果</button></div>
+  </aside>
+  <button id="sidebarBackdrop" class="sidebar-backdrop" aria-label="收起任务列表" hidden></button>
+  <article class="workspace-main">
+    <section id="welcome" class="welcome"><div class="welcome-inner"><span class="welcome-mark" aria-hidden="true"><svg class="icon"><use href="#i-layers"/></svg></span><p class="eyebrow">MINT / HAWOR / ACE EGO HAND</p><h2>同一段视频，看清算法差异。</h2><p>统一帧号、同一画面与米制坐标。选择左侧任务继续查看，或创建一次新的比较。</p><button id="welcomeNew" class="primary"><svg class="icon"><use href="#i-plus"/></svg>新建比较</button><div class="welcome-principles"><span>同步 2D / 3D</span><span>完整视频</span><span>结果可追溯</span></div></div></section>
+    <section id="workspace" class="workspace" hidden>
+      <div class="session-heading"><div class="session-copy"><div class="session-title-row"><h2 id="sessionTitle"></h2><span id="sessionStatus" class="status-badge"></span></div><p id="sampleInfo"></p></div><button id="editComparison" class="quiet-button" title="沿用当前输入和参数创建比较">输入与参数</button></div>
+      <div class="workspace-navigation"><div class="workspace-tabs" role="tablist" aria-label="比较工作区"><button id="tab-view" role="tab" aria-selected="true" aria-controls="panel-view" data-workspace-tab="view"><svg class="icon"><use href="#i-grid"/></svg>联动视图</button><button id="tab-metrics" role="tab" aria-selected="false" aria-controls="panel-metrics" data-workspace-tab="metrics" tabindex="-1"><svg class="icon"><use href="#i-chart"/></svg>指标与覆盖</button><button id="tab-manage" role="tab" aria-selected="false" aria-controls="panel-manage" data-workspace-tab="manage" tabindex="-1"><svg class="icon"><use href="#i-layers"/></svg>结果与组合</button></div><div class="export-actions"><button id="downloadReport" class="quiet-button" title="下载比较结果、来源和数值指标">比较报告</button><button id="exportVideo" class="quiet-button"><svg class="icon"><use href="#i-download"/></svg><span>导出视频</span></button></div></div>
+      <section id="panel-view" class="workspace-panel view-panel" role="tabpanel" aria-labelledby="tab-view">
+        <div class="view-toolbar"><div class="segmented" role="group" aria-label="画面布局"><button data-view-mode="split" aria-pressed="true" class="active">2D + 3D</button><button data-view-mode="2d" aria-pressed="false">2D 叠加</button><button data-view-mode="3d" aria-pressed="false">3D 空间</button></div><label class="inline-label" title="只切换 3D 与腕点数值的坐标；2D 始终投影到原相机">3D 坐标<select id="space"><option value="camera">相机系</option><option value="world">世界系</option></select></label><div class="view-options"><label><input id="showTrails" type="checkbox">轨迹</label><label title="显示存在性较低但有有限几何的预测"><input id="showAbsent" type="checkbox">低存在性</label></div><button id="resetView" class="icon-button" aria-label="重置三维视角" title="重置三维视角"><svg class="icon"><use href="#i-refresh"/></svg></button><button id="snapshot" class="icon-button" aria-label="保存当前画面" title="保存当前画面"><svg class="icon"><use href="#i-camera"/></svg></button><button id="focusMode" class="icon-button" aria-label="专注查看" aria-pressed="false" title="专注查看（F），Esc 退出"><svg class="icon"><use href="#i-expand"/></svg></button></div>
+        <div id="runs" class="run-grid" data-view-mode="split"></div>
+        <div class="transport"><div class="playback-buttons"><button id="prev" class="icon-button" aria-label="前一帧" title="前一帧（←）"><svg class="icon"><use href="#i-prev"/></svg></button><button id="play" class="play-button" aria-label="播放"><svg class="icon"><use href="#i-play"/></svg></button><button id="next" class="icon-button" aria-label="后一帧" title="后一帧（→）"><svg class="icon"><use href="#i-next"/></svg></button></div><div class="timeline-control"><input id="timeline" type="range" min="0" max="0" value="0" aria-label="视频帧时间轴"><div class="timeline-meta"><output id="timeLabel">等待输入准备…</output><span class="keyboard-hint">← → 逐帧 · 空格播放 · F 专注</span></div></div><label class="jump-control">跳至<input id="frameJump" type="number" min="1" value="1" aria-label="跳转到样本帧"><span>帧</span></label><select id="speed" aria-label="播放速度"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></div>
+      </section>
+      <section id="panel-metrics" class="workspace-panel scroll-panel" role="tabpanel" aria-labelledby="tab-metrics" hidden><div class="section-heading"><div><p class="eyebrow">METRICS / COVERAGE</p><h2>同输入数值比较</h2></div><span class="subtle-tag">共同有效几何</span></div><p class="explanation">没有声明的 GT 时，下表表示算法之间的差异，不能视为精度排名。统计同时保留覆盖率和缺失情况。</p><div id="metrics" class="metrics-table">结果完成后可计算。</div><div class="info-note">世界比较使用首个共同有效相机帧对齐，保留尺度差。无原生世界相机的算法仅参与相机系比较。</div></section>
+      <section id="panel-manage" class="workspace-panel scroll-panel" role="tabpanel" aria-labelledby="tab-manage" hidden><div class="section-heading"><div><p class="eyebrow">RESULTS / COMPONENTS</p><h2>复用结果，比较组件</h2></div><button id="manageImport" class="quiet-button">导入已有结果</button></div><div class="management-grid"><section class="panel"><h3>加入已有结果或 GT</h3><p class="explanation">只列出输入、视角、帧范围及标定完全相同的结果。</p><label>可加入的结果<select id="existingRun"></select></label><div class="button-row"><button id="refreshExisting">刷新列表</button><button id="attachExisting" class="primary">加入本次比较</button></div></section><section class="panel"><h3>相机来源组合实验</h3><p class="explanation">保留手部相机系几何和原 K，替换世界相机外参，生成独立结果。</p><label>手部结果<select id="handRun"></select></label><label>世界相机<select id="cameraRun"></select></label><button id="combine" class="primary">生成组合变体</button><p class="hint">组合结果会注明组件来源，区别于原生算法的世界预测。</p></section></div></section>
+    </section>
+  </article>
+</main>
+<div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+<dialog id="taskDialog" class="task-dialog" aria-labelledby="taskDialogTitle">
+  <div class="dialog-heading"><div><p class="eyebrow">INPUT / INFERENCE</p><h2 id="taskDialogTitle">新建算法比较</h2></div><button id="closeTask" class="icon-button" aria-label="关闭任务配置"><svg class="icon"><use href="#i-close"/></svg></button></div>
+  <div class="task-dialog-body"><div class="task-config-grid">
+    <section class="config-card"><h3><span>01</span> 输入与协议</h3><label>服务器视频路径<input id="source" placeholder="/data1/…/video.mp4" spellcheck="false" required></label><label>已有样例<select id="examples"><option value="">选择一个已部署样例</option></select></label><div class="twocol"><label>视频视角<select id="view"><option value="full">完整画面</option><option value="left">双目左眼</option><option value="right">双目右眼</option></select></label><label>目标 FPS<input id="targetFps" type="number" min="0" value="0" step="any"></label></div><div class="twocol"><label>起始源帧<input id="startFrame" type="number" min="0" value="0"></label><label>最多帧数<input id="maxFrames" type="number" min="1" placeholder="留空 = 全部"></label></div><p class="hint">FPS 0 保留源帧率，最多帧数留空处理全片。所有算法使用相同源帧与时间表。</p><details class="advanced-settings"><summary>针孔相机标定</summary><textarea id="camera" rows="5" placeholder='{"K":[[600,0,320],[0,600,240],[0,0,1]],"width":640,"height":480,"source":"标定来源"}'></textarea><p class="hint">K 对应原始完整视频网格。ACE K-given 必填，双目需使用所选眼的实际标定。</p></details></section>
+    <section class="config-card"><h3><span>02</span> 算法与资源</h3><p class="hint">勾选后可展开各算法参数。GPU 上限随资源动态调度，顺序阶段使用单卡。</p><div id="algorithmOptions">读取算法依赖…</div></section>
+  </div><details id="importSection" class="import-section"><summary>导入已有算法结果 / 参考标注</summary><div class="import-grid"><label>算法<select id="importAlgorithm"></select></label><label>格式<select id="importFormat"><option value="normalized_npz">标准几何 NPZ</option></select></label><label class="wide-field">服务器结果路径<input id="importPath" placeholder="/data1/…/result.npz"></label><label class="wide-field">对应样本位置 JSON<textarea id="importMap" rows="2" placeholder="[0,1,2,…]，必须明确给出"></textarea></label><label id="importGridLabel">HaWoR 原生尺寸 JSON<input id="importGrid" placeholder="[1920,1080]"></label><label class="wide-field">来源说明<input id="importSource" placeholder="原算法、输入视频和运行记录；参考标注需声明 GT 来源"></label></div><div class="button-row"><button id="import">导入并解码</button><p class="hint">沿用上方输入协议。导入耗时不包含原推理耗时。</p></div></details></div>
+  <div class="dialog-footer"><div><div id="formError" role="alert"></div><p class="hint">任务提交后可在后台持续运行；关闭面板不会中断已提交任务。</p></div><button id="start" class="primary"><svg class="icon"><use href="#i-play"/></svg>开始比较</button></div>
+</dialog>
+<dialog id="logDialog" class="log-dialog" aria-labelledby="logTitle"><div class="dialog-heading"><div><p class="eyebrow">RUN / DIAGNOSTICS</p><h2 id="logTitle">运行日志</h2></div><button id="closeLog" class="icon-button" aria-label="关闭运行日志"><svg class="icon"><use href="#i-close"/></svg></button></div><pre id="logText"></pre></dialog>
+<script src="comparison-assets/workspace.js?v=20261030-layout1"></script>
+<script src="comparison-assets/app.js?v=20261030-layout1"></script>
+</body></html>

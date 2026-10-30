@@ -22,6 +22,7 @@ function applyLayout(){
 function setViewMode(mode){workspaceUI.mode=mode;saveLayout();applyLayout();captureVideo(masterVideo(),false);}
 function setWorkspaceTab(tab){
   workspaceUI.tab=tab;
+  for(const id of ['resultPicker','protocolPicker'])$(id).open=false;
   for(const name of ['view','metrics','manage']){const active=name===tab;$('panel-'+name).hidden=!active;$('tab-'+name).setAttribute('aria-selected',String(active));$('tab-'+name).tabIndex=active?0:-1;}
   if(tab!=='view')pause();else requestAnimationFrame(()=>render(true));
   if(tab==='metrics')loadComparisonMetrics().catch(error=>notify(error.message));
@@ -60,7 +61,6 @@ function syncSessionSummary(value){
   const done=value.runs.filter(r=>r.status==='completed').length,status=comparisonState(value);
   $('sessionStatus').textContent=status==='completed'?`${done} 个结果已完成`:`${done}/${value.runs.length} 完成${status==='active'?' · 运行中':' · 需查看'}`;
   $('sessionStatus').dataset.state=status;$('sessionTitle').title=value.title;
-  $('runs').style.setProperty('--columns',Math.max(1,Math.min(3,value.runs.length)));$('runs').dataset.count=value.runs.length;$('runs').dataset.many=String(value.runs.length>3);
   const prior=workspaceUI.history.findIndex(v=>v.id===value.id);
   if(prior>=0){const changed=workspaceUI.history[prior].runs.map(r=>r.status).join()!==value.runs.map(r=>r.status).join();workspaceUI.history[prior]=value;if(changed)renderHistoryList();}
   const sample=value.sample;
@@ -98,7 +98,7 @@ function runGpuSummary(run){
   return {text:'',title:''};
 }
 function initializeWorkspace(){
-  applyLayout();updatePlayControl(false);initializeSourceBrowser();
+  applyLayout();updatePlayControl(false);initializeSourceBrowser();initializeResultTools();
   $('toggleSidebar').onclick=()=>{if(window.innerWidth<=1100)workspaceUI.mobileSidebar=!workspaceUI.mobileSidebar;else workspaceUI.sidebar=!sidebarIsOpen();saveLayout();applyLayout();};
   $('sidebarBackdrop').onclick=()=>{workspaceUI.mobileSidebar=false;applyLayout();};
   $('focusMode').onclick=()=>setFocusMode(!workspaceUI.focus);

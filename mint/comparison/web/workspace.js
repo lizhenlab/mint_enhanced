@@ -72,7 +72,7 @@ function openTaskDialog(importMode=false){
   pause();$('formError').textContent='';$('taskDialogTitle').textContent=importMode?'导入已有算法结果':'新建算法比较';
   if(!$('taskDialog').open)$('taskDialog').showModal();
   $('importSection').open=importMode;
-  if(importMode){$('importSection').scrollIntoView({block:'nearest'});$('importPath').focus();}else $('source').focus();
+  prepareSourceBrowser();if(importMode){$('importSection').scrollIntoView({block:'nearest'});$('importPath').focus();}else $('sourceSearch').focus({preventScroll:true});
 }
 function updateImportFormats(){
   const labels={mint_npz:'MINT prediction.npz',hawor_world_npz:'HaWoR 世界结果 NPZ',ace_pickle:'ACE 原生 PKL（results 目录内）',normalized_npz:'标准几何 NPZ'};
@@ -83,7 +83,7 @@ function updateImportFormats(){
   $('importGridLabel').hidden=select.value!=='hawor_world_npz';
 }
 function validateTaskInput(checkAlgorithms=true){
-  if(!$('source').value.trim())throw new Error('请填写服务器视频路径，或从已有样例中选择。');
+  if(!$('source').value.trim())throw new Error('请从输入目录选择一个视频，或展开直接输入路径 / 已有样例。');
   for(const id of ['targetFps','startFrame','maxFrames'])if(!$(id).checkValidity()){$(id).reportValidity();throw new Error('请检查帧范围与 FPS，空白的最多帧数表示处理全片。');}
   for(const input of $('algorithmOptions').querySelectorAll('.algorithm'))if(checkAlgorithms&&input.querySelector('input[type=checkbox]').checked){
     for(const field of input.querySelectorAll('[data-option]'))if(!field.checkValidity()){input.querySelector('details').open=true;field.reportValidity();throw new Error('请检查所选算法的运行参数。');}
@@ -98,7 +98,7 @@ function runGpuSummary(run){
   return {text:'',title:''};
 }
 function initializeWorkspace(){
-  applyLayout();updatePlayControl(false);
+  applyLayout();updatePlayControl(false);initializeSourceBrowser();
   $('toggleSidebar').onclick=()=>{if(window.innerWidth<=1100)workspaceUI.mobileSidebar=!workspaceUI.mobileSidebar;else workspaceUI.sidebar=!sidebarIsOpen();saveLayout();applyLayout();};
   $('sidebarBackdrop').onclick=()=>{workspaceUI.mobileSidebar=false;applyLayout();};
   $('focusMode').onclick=()=>setFocusMode(!workspaceUI.focus);

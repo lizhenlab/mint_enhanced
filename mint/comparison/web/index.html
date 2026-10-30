@@ -3,13 +3,16 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark"><title>MINT · 多算法工作台</title>
-  <link rel="stylesheet" href="comparison-assets/style.css?v=20261030-slam1">
+  <link rel="stylesheet" href="comparison-assets/style.css?v=20261030-files1">
 </head>
 <body>
 <svg class="icon-definitions" aria-hidden="true"><defs>
   <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM9 5v14"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
   <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M7 17 17 7M7 7h10v10"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v12H3zM3 6V4h7l2 2"/></symbol>
+  <symbol id="i-video" viewBox="0 0 24 24"><path d="M5 3h10l4 4v14H5zM14 3v5h5M10 11l5 3-5 3z"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 20V4m-6 6 6-6 6 6"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1"/></symbol>
   <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
@@ -57,12 +60,23 @@
 <dialog id="taskDialog" class="task-dialog" aria-labelledby="taskDialogTitle">
   <div class="dialog-heading"><div><p class="eyebrow">INPUT / INFERENCE</p><h2 id="taskDialogTitle">新建算法比较</h2></div><button id="closeTask" class="icon-button" aria-label="关闭任务配置"><svg class="icon"><use href="#i-close"/></svg></button></div>
   <div class="task-dialog-body"><div class="task-config-grid">
-    <section class="config-card"><h3><span>01</span> 输入与协议</h3><label>服务器视频路径<input id="source" placeholder="/data1/…/video.mp4" spellcheck="false" required></label><label>已有样例<select id="examples"><option value="">选择一个已部署样例</option></select></label><div class="twocol"><label>视频视角<select id="view"><option value="full">完整画面</option><option value="left">双目左眼</option><option value="right">双目右眼</option></select></label><label>目标 FPS<input id="targetFps" type="number" min="0" value="0" step="any"></label></div><div class="twocol"><label>起始源帧<input id="startFrame" type="number" min="0" value="0"></label><label>最多帧数<input id="maxFrames" type="number" min="1" placeholder="留空 = 全部"></label></div><p class="hint">FPS 0 保留源帧率，最多帧数留空处理全片。所有算法使用相同源帧与时间表。</p><details class="advanced-settings"><summary>针孔相机标定</summary><textarea id="camera" rows="5" placeholder='{"K":[[600,0,320],[0,600,240],[0,0,1]],"width":640,"height":480,"source":"标定来源"}'></textarea><p class="hint">K 对应原始完整视频网格。ACE K-given 必填，双目需使用所选眼的实际标定。</p></details></section>
+    <section class="config-card"><h3><span>01</span> 输入与协议</h3>
+      <section id="sourceDirectory" class="source-browser" aria-label="服务器输入目录" aria-busy="false">
+        <div class="source-browser-heading"><strong>输入目录</strong><span>实时读取 · 每 5 秒更新</span></div>
+        <div class="source-directory-line"><nav id="sourceCrumbs" class="source-crumbs" aria-label="服务器目录路径"><span>正在读取目录…</span></nav><div class="source-directory-actions"><button id="sourceUp" type="button" class="quiet-button" aria-label="上一级目录" disabled><svg class="icon"><use href="#i-up"/></svg>上一级</button><button id="sourceRefresh" type="button" class="icon-button" aria-label="刷新服务器目录" title="刷新服务器目录"><svg class="icon"><use href="#i-refresh"/></svg></button></div></div>
+        <label class="search-field source-search"><svg class="icon"><use href="#i-search"/></svg><input id="sourceSearch" type="search" aria-label="筛选当前目录" placeholder="筛选文件夹或视频名称"></label>
+        <div id="sourceFiles" class="source-files" role="group" aria-label="服务器文件夹与视频"><p class="source-empty">正在读取服务器文件…</p></div>
+        <p id="sourceBrowserStatus" class="source-browser-status" role="status"></p><p id="sourceBrowserError" class="source-browser-error" role="alert" hidden></p>
+        <div id="sourceSelected" class="source-selected"><svg class="icon"><use href="#i-video"/></svg><div class="source-selected-copy"><strong id="sourceSelectedName">尚未选择视频</strong><small id="sourceSelectedPath">点击目录中的视频文件进行选择。</small></div><button id="sourceLocate" type="button" class="quiet-button" aria-label="定位已选视频所在目录" disabled>定位</button></div>
+        <p class="source-selection-hint">点击文件夹进入，点击视频选中；“开始比较”才会提交推理。</p>
+      </section>
+      <details class="source-manual"><summary>直接定位路径 / 选择已有样例</summary><label>服务器目录<div class="source-path-row"><input id="sourceDirectoryPath" placeholder="/data1/lizhen_dataset" aria-label="定位服务器目录" spellcheck="false"><button id="sourceGo" type="button">前往</button></div></label><label>服务器视频路径<input id="source" placeholder="/data1/…/video.mp4" spellcheck="false" required></label><label>已有样例<select id="examples"><option value="">选择一个已部署样例</option></select></label></details><div class="twocol"><label>视频视角<select id="view"><option value="full">完整画面</option><option value="left">双目左眼</option><option value="right">双目右眼</option></select></label><label>目标 FPS<input id="targetFps" type="number" min="0" value="0" step="any"></label></div><div class="twocol"><label>起始源帧<input id="startFrame" type="number" min="0" value="0"></label><label>最多帧数<input id="maxFrames" type="number" min="1" placeholder="留空 = 全部"></label></div><p class="hint">FPS 0 保留源帧率，最多帧数留空处理全片。所有算法使用相同源帧与时间表。</p><details class="advanced-settings"><summary>针孔相机标定</summary><textarea id="camera" rows="5" placeholder='{"K":[[600,0,320],[0,600,240],[0,0,1]],"width":640,"height":480,"source":"标定来源"}'></textarea><p class="hint">K 对应原始完整视频网格。ACE K-given 必填，双目需使用所选眼的实际标定。</p></details></section>
     <section class="config-card"><h3><span>02</span> 算法与资源</h3><p class="hint">勾选后可展开各算法参数。GPU 上限随资源动态调度，顺序阶段使用单卡。</p><div id="algorithmOptions">读取算法依赖…</div></section>
   </div><details id="importSection" class="import-section"><summary>导入已有算法结果 / 参考标注</summary><div class="import-grid"><label>算法<select id="importAlgorithm"></select></label><label>格式<select id="importFormat"><option value="normalized_npz">标准几何 NPZ</option></select></label><label class="wide-field">服务器结果路径<input id="importPath" placeholder="/data1/…/result.npz"></label><label class="wide-field">对应样本位置 JSON<textarea id="importMap" rows="2" placeholder="[0,1,2,…]，必须明确给出"></textarea></label><label id="importGridLabel">HaWoR 原生尺寸 JSON<input id="importGrid" placeholder="[1920,1080]"></label><label class="wide-field">来源说明<input id="importSource" placeholder="原算法、输入视频和运行记录；参考标注需声明 GT 来源"></label></div><div class="button-row"><button id="import">导入并解码</button><p class="hint">沿用上方输入协议。导入耗时不包含原推理耗时。</p></div></details></div>
   <div class="dialog-footer"><div><div id="formError" role="alert"></div><p class="hint">任务提交后可在后台持续运行；关闭面板不会中断已提交任务。</p></div><button id="start" class="primary"><svg class="icon"><use href="#i-play"/></svg>开始比较</button></div>
 </dialog>
 <dialog id="logDialog" class="log-dialog" aria-labelledby="logTitle"><div class="dialog-heading"><div><p class="eyebrow">RUN / DIAGNOSTICS</p><h2 id="logTitle">运行日志</h2></div><button id="closeLog" class="icon-button" aria-label="关闭运行日志"><svg class="icon"><use href="#i-close"/></svg></button></div><pre id="logText"></pre></dialog>
-<script src="comparison-assets/workspace.js?v=20261030-slam1"></script>
-<script src="comparison-assets/app.js?v=20261030-slam1"></script>
+<script src="comparison-assets/workspace.js?v=20261030-files1"></script>
+<script src="comparison-assets/source-browser.js?v=20261030-files1"></script>
+<script src="comparison-assets/app.js?v=20261030-files1"></script>
 </body></html>

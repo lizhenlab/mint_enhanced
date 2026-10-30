@@ -14,6 +14,7 @@ tests/*
 !tests/test_gpu_scheduler.py
 !tests/test_idle_engine.py
 !tests/test_hawor_slam_runtime.py
+!tests/test_server_file_browser.py
 !eval/model_effect/benchmark/tests/
 !eval/model_effect/benchmark/tests/**
 !eval/model_effect/benchmark/dist/aliyun/tests/

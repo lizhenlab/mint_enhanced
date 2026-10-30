@@ -362,6 +362,8 @@ def create_app(store) -> Flask:
         if not d.is_dir():
             return jsonify(error=f"目录不存在或不可访问: {d}"), 400
         dirs = []
+        videos = []
+        include_videos = request.args.get("videos") == "1"
         truncated = False
         try:
             with os.scandir(d) as it:
@@ -369,15 +371,25 @@ def create_app(store) -> Flask:
                     try:
                         if entry.is_dir():
                             dirs.append(entry.name)
-                            if len(dirs) >= 2000:
-                                truncated = True
-                                break
+                        elif include_videos and entry.is_file() and Path(entry.name).suffix.lower() in (*VIDEO_EXTS, '.m4v'):
+                            stat = entry.stat()
+                            videos.append({'name': entry.name, 'path': entry.path,
+                                           'size_bytes': stat.st_size, 'modified_at': stat.st_mtime})
+                        if len(dirs) + len(videos) >= 2000:
+                            truncated = True
+                            break
                     except OSError:
                         continue
         except OSError as exc:
             return jsonify(error=f"目录不可读取: {exc}"), 400
         dirs.sort(key=str.lower)
-        return jsonify(path=str(d), parent=str(d.parent), dirs=dirs, truncated=truncated)
+        value = dict(path=str(d), parent=str(d.parent), dirs=dirs, truncated=truncated)
+        if include_videos:
+            videos.sort(key=lambda value: value['name'].lower())
+            value['videos'] = videos
+        response = jsonify(value)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
 
     @app.get("/api/lerobot_eid")        # 选中某 lerobot 数据集（绝对路径）的第 ep 个 episode → 分配/复用 eid
     def api_lerobot_eid():

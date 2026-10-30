@@ -125,7 +125,7 @@ function initializeResultTools(){
   $('showAllResults').onclick=()=>changeResultSelection({selected:state.comparison.runs.map(run=>run.id),reference:resultView.reference}).catch(error=>notify(error.message));
   $('comparePair').onclick=()=>{const other=state.comparison.runs.find(run=>run.id!==resultView.reference&&resultView.selected.includes(run.id))||state.comparison.runs.find(run=>run.id!==resultView.reference);changeResultSelection({selected:[resultView.reference,...(other?[other.id]:[])],reference:resultView.reference}).catch(error=>notify(error.message));};
   $('metricsScope').onchange=()=>{if(state.metricsRows)renderMetrics(state.metricsRows);};
-  $('manageProtocol').onclick=()=>{setWorkspaceTab('view');$('protocolPicker').open=true;};
+  $('manageProtocol').onclick=event=>{event.stopPropagation();setWorkspaceTab('view');$('protocolPicker').open=true;};
   $('manageReport').onclick=()=>$('downloadReport').click();
   $('refreshMetrics').onclick=()=>{state.metricsRows=null;state.metricRequest=null;loadComparisonMetrics().catch(error=>notify(error.message));};
   document.addEventListener('click',event=>{for(const id of ['resultPicker','protocolPicker']){const picker=$(id);if(picker.open&&!picker.contains(event.target))picker.open=false;}});

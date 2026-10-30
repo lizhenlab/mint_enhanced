@@ -299,3 +299,19 @@ def test_render_scheduler_can_see_old_jobs_beyond_recent_100(manager):
     assert len(tools.history(limit=None))==105
     assert any(job['status']=='queued' for job in tools.history(limit=None))
     tools.close()
+
+
+def test_task_hub_links_completed_exports_and_marks_released_video_cache(manager, monkeypatch):
+    from mint.comparison.workspace import WorkspaceServices
+    monkeypatch.setattr('mint.inference.checkpoints.list_tasks',lambda limit=None:[])
+    empty=SimpleNamespace(history=lambda limit=None:[])
+    service=WorkspaceServices(manager,empty,empty)
+    folder=manager.root/'exports';folder.mkdir();key='a'*64
+    (folder/(key+'.json')).write_text(json.dumps({'id':key,'status':'completed','done':81,'total':81}))
+    movie=folder/(key+'.mp4');movie.write_bytes(b'fixture')
+    task=service.tasks()['tasks'][0]
+    assert task['url']=='/api/comparison/exports/'+key+'/download' and task['status']=='completed'
+    movie.unlink()
+    assert service.tasks(status='active')['total']==0
+    task=service.tasks(status='attention')['tasks'][0]
+    assert task['status']=='evicted' and task['url'] is None

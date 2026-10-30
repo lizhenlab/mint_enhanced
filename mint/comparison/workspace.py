@@ -135,9 +135,12 @@ class WorkspaceServices:
                 job = json.loads(path.read_text())
                 if not job.get('id') or 'status' not in job:
                     continue
-                rows.append({'id': job['id'], 'kind': 'export', 'label': '同步视频导出', 'status': job['status'],
+                video = path.with_suffix('.mp4')
+                export_status = 'evicted' if job['status'] == 'completed' and not video.is_file() else job['status']
+                url = f'/api/comparison/exports/{job["id"]}/download' if export_status == 'completed' else None
+                rows.append({'id': job['id'], 'kind': 'export', 'label': '同步视频导出', 'status': export_status,
                     'updated': path.stat().st_mtime, 'progress': {k: job.get(k) for k in ('done', 'total')},
-                    'error': job.get('error'), 'url': job.get('url')})
+                    'error': job.get('error'), 'url': url})
             except (OSError, ValueError):
                 continue
         query = str(query).lower().strip()

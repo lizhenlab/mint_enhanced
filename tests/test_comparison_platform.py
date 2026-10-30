@@ -315,3 +315,13 @@ def test_task_hub_links_completed_exports_and_marks_released_video_cache(manager
     assert service.tasks(status='active')['total']==0
     task=service.tasks(status='attention')['tasks'][0]
     assert task['status']=='evicted' and task['url'] is None
+
+
+def test_legacy_completed_window_inference_is_not_an_active_platform_task(manager, monkeypatch):
+    from mint.comparison.workspace import WorkspaceServices
+    monkeypatch.setattr('mint.inference.checkpoints.list_tasks',lambda limit=None:[{'id':'b'*64,'status':'inference_complete','completed_windows':1,'total_windows':1,'parameters':{}}])
+    empty=SimpleNamespace(history=lambda limit=None:[])
+    service=WorkspaceServices(manager,empty,empty)
+    assert service.tasks(status='active')['total']==0
+    row=service.tasks(status='completed')['tasks'][0]
+    assert row['status']=='completed' and row['progress']['stage']=='inference_complete'

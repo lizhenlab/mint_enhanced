@@ -114,8 +114,8 @@ class WorkspaceServices:
             if params.get('kind') == 'comparison':
                 continue
             rows.append({'id': task['id'], 'kind': 'mint_workspace', 'label': 'MINT 工作台窗口任务',
-                'source': params.get('source'), 'status': task['status'], 'updated': task.get('updated_at', 0),
-                'progress': {'done': task.get('completed_windows', 0), 'total': task.get('total_windows', 0)},
+                'source': params.get('source'), 'status': 'completed' if task['status'] == 'inference_complete' else task['status'], 'updated': task.get('updated_at', 0),
+                'progress': {'stage': task['status'], 'done': task.get('completed_windows', 0), 'total': task.get('total_windows', 0)},
                 'url': '/?task=' + task['id']})
         if self.legacy is not None:
             snapshots = [('mint_batch', 'MINT 目录批量', self.legacy.batch_inference_status(), '/?tool=batch'),

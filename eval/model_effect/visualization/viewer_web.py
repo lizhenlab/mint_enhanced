@@ -157,6 +157,7 @@ def main() -> int:
                   inference_fp8_mode=args.fp8_mode,
                   batch_workers=args.jobs)
     app = create_app(store)
+    app.extensions['mint_comparison_start']()
     import atexit
     import signal
     def shutdown(signum=None, frame=None):

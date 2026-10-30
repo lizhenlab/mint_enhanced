@@ -98,5 +98,5 @@ function initializeSourceBrowser(){
   $('sourceLocate').onclick=()=>browseSourceDirectory(sourceParent($('source').value.trim()));
   $('source').addEventListener('input',syncSourceSelection);
   $('examples').addEventListener('change',()=>requestAnimationFrame(prepareSourceBrowser));
-  setInterval(()=>{if($('taskDialog').open&&!document.hidden&&sourceBrowser.path&&!sourceBrowser.navigationError&&document.activeElement!==$('sourceDirectoryPath'))browseSourceDirectory(sourceBrowser.path,{quiet:true});},5000);
+  setInterval(()=>{if($('taskDialog').open&&!$('sourceDirectory').hidden&&!document.hidden&&sourceBrowser.path&&!sourceBrowser.navigationError&&document.activeElement!==$('sourceDirectoryPath'))browseSourceDirectory(sourceBrowser.path,{quiet:true});},5000);
 }

@@ -121,7 +121,18 @@ class ComparisonManager:
             db.execute('UPDATE runs SET ' + ','.join(k + '=?' for k in values) + ' WHERE id=?', [*values.values(), run_id])
 
     def create(self, source, selections, *, view='full', target_fps=0, max_frames=None, start_frame=0,
-               camera=None, title=None, import_entry=None):
+               camera=None, title=None, import_entry=None, dataset=None, comparison_key=None):
+        dataset_context = None
+        if dataset:
+            if import_entry:
+                raise ValueError('Dataset references and external imports are separate operations')
+            from .datasets import resolve_dataset_input
+            resolved, dataset_context = resolve_dataset_input(dataset, source=source, view=view,
+                target_fps=target_fps, max_frames=max_frames, start_frame=start_frame, camera=camera)
+            source, view, target_fps, max_frames, start_frame, camera = (resolved[k] for k in
+                ('source', 'view', 'target_fps', 'max_frames', 'start_frame', 'camera'))
+            if dataset.get('attach_gt'):
+                selections = [dict(item) for item in selections if item.get('algorithm') != 'reference'] + [{'algorithm': 'reference'}]
         sample = source_request(source, view=view, target_fps=target_fps, max_frames=max_frames,
                                 start_frame=start_frame, camera=camera)
         if not isinstance(selections, list) or not 1 <= len(selections) <= 8:
@@ -131,8 +142,12 @@ class ComparisonManager:
             if not isinstance(selection, dict):
                 raise ValueError('Invalid algorithm selection')
             algorithm = selection.get('algorithm')
-            spec = backend_spec(algorithm)
-            if spec.get('import_only') and not import_entry:
+            if set(selection) - {'algorithm', 'options', 'checkpoint', 'config'}:
+                raise ValueError('Unknown algorithm selection fields')
+            custom = {key: selection[key] for key in ('checkpoint', 'config') if selection.get(key)}
+            spec = backend_spec(algorithm, **custom) if custom else backend_spec(algorithm)
+            dataset_reference = algorithm == 'reference' and dataset_context and dataset.get('attach_gt')
+            if spec.get('import_only') and not (import_entry or dataset_reference):
                 raise ValueError('Reference requires an explicit normalized geometry import and provenance')
             if not spec['ready']:
                 raise ValueError(spec['label'] + ' dependencies unavailable: ' + ', '.join(spec['missing']))
@@ -141,7 +156,11 @@ class ComparisonManager:
             options = normalize_options(algorithm, selection.get('options'))
             identity = {'schema': 1, 'sample_id': sample['id'], 'algorithm': algorithm,
                         'backend_version': spec['version'], 'options': options}
-            if import_entry:
+            if dataset_reference:
+                identity['import'] = {'format': 'lerobot_reference', 'dataset_context': dataset_context,
+                    'path': dataset_context['identity']['parquet']['path'],
+                    'identity': dataset_context['identity']['parquet']}
+            elif import_entry:
                 path = Path(import_entry['path']).expanduser().resolve()
                 if not path.is_file():
                     raise ValueError('Native import file not found')
@@ -158,6 +177,11 @@ class ComparisonManager:
                     raise ValueError('Import frame_map must contain increasing nonnegative integer positions')
                 entry = {'path': str(path), 'identity': file_identity(path), 'format': form, 'frame_map': mapping,
                          'declared_source': str(import_entry.get('declared_source') or 'Explicit server-native result import')}
+                if form == 'mint_npz':
+                    frame = import_entry.get('hand_frame', 'camera')
+                    if frame not in {'camera', 'world'}:
+                        raise ValueError('Declare camera or world for imported MINT hand parameters')
+                    entry['hand_frame'] = frame
                 if algorithm == 'reference':
                     if not str(import_entry.get('declared_source', '')).strip():
                         raise ValueError('Declare the GT origin, coordinate frame and metric units')
@@ -172,16 +196,46 @@ class ComparisonManager:
             request = {**identity, 'id': run_id, 'backend': spec, 'sample_request': sample,
                        'sample_manifest': str(self.root / 'inputs' / sample['id'] / 'sample.json')}
             requests.append(request)
-        comparison_id = uuid.uuid4().hex
+        comparison_id = uuid.uuid5(uuid.NAMESPACE_URL, str(comparison_key)).hex if comparison_key else uuid.uuid4().hex
         comparison = {'id': comparison_id, 'title': str(title or Path(source).name)[:200],
                       'sample_id': sample['id'], 'sample_request': sample, 'run_ids': [v['id'] for v in requests]}
+        if dataset_context:
+            comparison['dataset_context'] = dataset_context
         with self.db() as db:
+            previous = db.execute('SELECT payload FROM comparisons WHERE id=?', (comparison_id,)).fetchone()
+            if previous:
+                old = json.loads(previous['payload'])
+                if old['sample_id'] != comparison['sample_id'] or old['run_ids'] != comparison['run_ids']:
+                    raise ValueError('Idempotent comparison inputs changed; create a new batch')
+                return self.comparison(comparison_id)
+            created = []
             for request in requests:
-                db.execute('INSERT OR IGNORE INTO runs(id,payload,status,created,updated) VALUES(?,?,?,?,?)',
-                           (request['id'], json.dumps(request), 'queued', time.time(), time.time()))
+                cursor = db.execute('INSERT OR IGNORE INTO runs(id,payload,status,created,updated) VALUES(?,?,?,?,?)',
+                                    (request['id'], json.dumps(request), 'queued', time.time(), time.time()))
+                if cursor.rowcount:
+                    created.append(request['id'])
+            comparison['created_run_ids'] = created
             db.execute('INSERT INTO comparisons(id,payload,created) VALUES(?,?,?)',
                        (comparison_id, json.dumps(comparison), time.time()))
         return self.comparison(comparison_id)
+
+    def cancel_exclusive(self, run_id, comparison_id):
+        """A batch cancellation must not stop a run shared with another comparison."""
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            parents = db.execute('SELECT id,payload FROM comparisons WHERE id != ?', (comparison_id,)).fetchall()
+            if any(run_id in json.loads(row['payload'])['run_ids'] for row in parents):
+                return False
+            row = db.execute('SELECT status FROM runs WHERE id=?', (run_id,)).fetchone()
+            if row is None:
+                raise KeyError('Run not found')
+            if row['status'] not in TERMINAL:
+                path = self.root / 'runs' / run_id
+                path.mkdir(parents=True, exist_ok=True)
+                (path / 'cancel').touch()
+                db.execute('UPDATE runs SET status=?,updated=? WHERE id=?',
+                           ('cancelled' if row['status'] == 'queued' else 'cancelling', time.time(), run_id))
+        return True
 
     def row(self, run_id):
         if len(str(run_id)) != 64 or any(c not in '0123456789abcdef' for c in str(run_id)):
@@ -210,6 +264,7 @@ class ComparisonManager:
             if row['status'] in {'completed', 'partial'}:
                 row.update(status='failed', error='Completed result files changed or are unavailable; resume to regenerate')
         return {**row, 'algorithm': payload['algorithm'], 'label': payload['backend']['label'],
+                'checkpoint': payload['backend'].get('checkpoint'), 'config': payload['backend'].get('config'),
                 'options': payload['options'], 'sample_id': payload['sample_id'], 'progress': progress,
                 'result': result, 'imported': bool(payload.get('import'))}
 
@@ -227,9 +282,10 @@ class ComparisonManager:
             item['sample'] = None
         return item
 
-    def history(self, limit=50):
+    def history(self, limit=50, offset=0):
         with self.db() as db:
-            rows = db.execute('SELECT id FROM comparisons ORDER BY created DESC LIMIT ?', (max(1, min(100, int(limit))),)).fetchall()
+            rows = db.execute('SELECT id FROM comparisons ORDER BY created DESC LIMIT ? OFFSET ?',
+                              (max(1, min(200, int(limit))), max(0, int(offset)))).fetchall()
         return [self.comparison(row['id'], include_sample=False) for row in rows]
 
     def resume(self, run_id):
@@ -237,7 +293,8 @@ class ComparisonManager:
         payload = json.loads(row['payload'])
         if payload['algorithm'] == 'camera_combination':
             raise ValueError('Regenerate camera combinations from their complete source results using Generate combination')
-        if backend_spec(payload['algorithm'])['version'] != payload['backend']['version']:
+        selection = {key: payload['backend'][key] for key in ('checkpoint', 'config') if payload['backend'].get(key)}
+        if backend_spec(payload['algorithm'], **selection)['version'] != payload['backend']['version']:
             raise ValueError('Model/code version changed; submit a new comparison')
         if file_identity(payload['sample_request']['source']['path']) != payload['sample_request']['source']:
             raise ValueError('Source changed; submit a new comparison')
@@ -340,7 +397,7 @@ class ComparisonManager:
                     raise InterruptedError('Cancelled before preparation')
                 sample = prepare_sample(request['sample_request'], self.root / 'inputs' / request['sample_id'],
                     progress=lambda **kw: self._write_progress(run_id, **kw), cancel=cancel)
-                if request.get('import') and max(request['import']['frame_map']) >= sample['frames']:
+                if request.get('import', {}).get('frame_map') and max(request['import']['frame_map']) >= sample['frames']:
                     raise ValueError('Import frame map escapes the prepared sample')
                 from .storage import DurableRunBudget, estimate_native_bytes
                 budget = DurableRunBudget(self.root / 'runs')

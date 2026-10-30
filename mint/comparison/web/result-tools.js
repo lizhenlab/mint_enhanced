@@ -7,9 +7,10 @@ const RESULT_PREFERENCES='mint.compare.results.v1';
 function defaultResultSelection(runs){
   if(!runs.length)return {selected:[],reference:null};
   const reference=runs.find(run=>run.result?.reference_role==='user_declared_ground_truth')||runs.find(run=>run.algorithm==='mint')||runs[0];
+  const maximum=reference.result?.reference_role==='user_declared_ground_truth'?4:3;
   const selected=[reference.id],families=new Set([reference.algorithm.split('_')[0]]);
-  for(const run of runs){const family=run.algorithm.split('_')[0];if(selected.length<3&&!families.has(family)){selected.push(run.id);families.add(family);}}
-  for(const run of runs)if(selected.length<Math.min(3,runs.length)&&!selected.includes(run.id))selected.push(run.id);
+  for(const run of runs){const family=run.algorithm.split('_')[0];if(selected.length<maximum&&!families.has(family)){selected.push(run.id);families.add(family);}}
+  for(const run of runs)if(selected.length<Math.min(maximum,runs.length)&&!selected.includes(run.id))selected.push(run.id);
   return {selected,reference:reference.id};
 }
 function normalizeResultSelection(runs,saved){
@@ -56,6 +57,7 @@ function runProtocol(run,sample){
   if(result.component_sources)rows.push(['手部 / 相机组件',`${result.component_sources.hands} / ${result.component_sources.camera}`]);
   if(sample){rows.push(['输入协议',`${({full:'完整画面',left:'左眼',right:'右眼'})[sample.request?.view]||sample.request?.view||''} · ${sample.frames} 帧 · ${metricValue(sample.fps,4)} FPS`]);}
   rows.push(['实现版本',result.backend_version?.slice(0,12)||(result.component_sources?'相机组件组合':'结果发布后显示')],['结果 ID',run.id]);
+  if(result.selected_checkpoint)rows.push(['检查点',result.selected_checkpoint],['模型配置',result.selected_config||'原生配置']);
   return {short:short.join(' · '),rows};
 }
 function visibleResultCards(){
@@ -97,16 +99,19 @@ function syncResultTools(value){
     const added=value.run_ids.filter(id=>!resultView.known.includes(id));
     Object.assign(resultView,normalizeResultSelection(value.runs,{selected:[...resultView.selected,...added],reference:resultView.reference}));resultView.known=value.run_ids.slice();
   }
-  const signature=JSON.stringify(value.runs.map(run=>[run.id,run.label,run.result?.reference_role]));
+  const signature=JSON.stringify(value.runs.map(run=>[run.id,run.label,!!run.result,run.result?.reference_role]));
   if(resultView.signature!==signature){
-    resultView.signature=signature;$('resultSelectionList').replaceChildren();$('referenceRun').replaceChildren();
+    const inspected=$('inspectRun').value;
+    resultView.signature=signature;$('resultSelectionList').replaceChildren();$('referenceRun').replaceChildren();$('inspectRun').replaceChildren();
     for(const run of value.runs){
       const label=el('label'),check=el('input');check.type='checkbox';check.value=run.id;check.setAttribute('aria-label','显示 '+run.label+' '+run.id.slice(0,6));
       check.onchange=()=>changeResultSelection(toggleResultSelection(resultView,run.id,check.checked)).catch(error=>notify(error.message));
       const name=el('span',run.label),id=el('small',run.id.slice(0,6));label.append(check,name,id);
       if(run.result?.reference_role==='user_declared_ground_truth')label.append(el('small','声明 GT','role-tag'));
       $('resultSelectionList').append(label);const option=el('option',run.label+' · '+run.id.slice(0,6));option.value=run.id;$('referenceRun').append(option);
+      if(run.result){const inspect=el('option',run.label+' · '+run.id.slice(0,6));inspect.value=run.id;$('inspectRun').append(inspect);}
     }
+    if([...$('inspectRun').options].some(option=>option.value===inspected))$('inspectRun').value=inspected;
   }
   const protocols=value.runs.map(run=>({run,...runProtocol(run,value.sample)})),protocolSignature=JSON.stringify(protocols.map(value=>[value.run.id,value.short,value.rows,!!value.run.result]));
   if(resultView.protocolSignature!==protocolSignature){
@@ -128,8 +133,8 @@ function initializeResultTools(){
   $('manageProtocol').onclick=event=>{event.stopPropagation();setWorkspaceTab('view');$('protocolPicker').open=true;};
   $('manageReport').onclick=()=>$('downloadReport').click();
   $('refreshMetrics').onclick=()=>{state.metricsRows=null;state.metricRequest=null;loadComparisonMetrics().catch(error=>notify(error.message));};
-  document.addEventListener('click',event=>{for(const id of ['resultPicker','protocolPicker']){const picker=$(id);if(picker.open&&!picker.contains(event.target))picker.open=false;}});
-  document.addEventListener('keydown',event=>{if(event.key==='Escape')for(const id of ['resultPicker','protocolPicker'])$(id).open=false;});
+  document.addEventListener('click',event=>{for(const id of ['resultPicker','protocolPicker','frameInspector']){const picker=$(id);if(picker.open&&!picker.contains(event.target))picker.open=false;}});
+  document.addEventListener('keydown',event=>{if(event.key==='Escape')for(const id of ['resultPicker','protocolPicker','frameInspector'])$(id).open=false;});
 }
 
 const METRIC_GROUPS=[

@@ -343,7 +343,8 @@ def _video_hw_from_info(dataset_root, video_key: str = "observation.images.ego")
 
 
 def load_episode_raw(ep: dict, max_frames: int | None = None, on_step=None,
-                     allow_missing_video: bool = False, cancel_check=None) -> dict:
+                     allow_missing_video: bool = False, cancel_check=None,
+                     decode_video: bool = True, video_key: str = "observation.images.ego") -> dict:
     """读单个 episode 的 GT + 抽帧，自动识别两种 export，统一输出 6D + c2w/K。
 
     · 预算集（build_train_lerobot 产物）：cam_trans/quat/fov、hand_kept，以及可选的
@@ -415,6 +416,8 @@ def load_episode_raw(ep: dict, max_frames: int | None = None, on_step=None,
 
     def _read_video():
         _raise_if_cancelled(cancel_check, "视频解码")
+        if not decode_video:
+            return None
         # allow_missing_video：视频缺失/软链断时跳过抽帧（GT 世界系渲染只用 parquet 里的 label，
         # 不需要图像帧；但反解 K 要分辨率，改从 meta/info.json 的 feature shape 取）。
         if allow_missing_video and not (ep.get("video") and os.path.exists(ep["video"])):
@@ -451,7 +454,7 @@ def load_episode_raw(ep: dict, max_frames: int | None = None, on_step=None,
         return values
 
     # frames 为 None（allow_missing_video 且视频不可用）时，分辨率退回 meta/info.json 的 feature shape。
-    H, W = (_video_hw_from_info(ep.get("dataset_root")) if frames is None
+    H, W = (_video_hw_from_info(ep.get("dataset_root"), video_key=video_key) if frames is None
             else frames.shape[1:3])
 
     hands = {}

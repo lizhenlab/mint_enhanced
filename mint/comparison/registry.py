@@ -61,14 +61,31 @@ def root_for(algorithm):
     return Path(os.environ.get(spec['root_env'], spec['default_root'])).expanduser().resolve()
 
 
-def backend_spec(algorithm):
+def backend_spec(algorithm, *, checkpoint=None, config=None):
     if algorithm not in ALGORITHMS:
         raise ValueError('Unknown algorithm: ' + str(algorithm))
     spec = ALGORITHMS[algorithm]
     root = root_for(algorithm)
+    selected = {}
+    assets = list(spec['assets'])
+    if checkpoint or config:
+        if algorithm != 'mint':
+            raise ValueError('Custom checkpoints currently apply to the MINT backend only')
+        from eval.model_effect.visualization.viewer import ckpts
+        weight = ckpts.resolve_checkpoint_path(checkpoint or str(root / 'checkpoints/model.safetensors'))
+        if weight is None:
+            raise ValueError('MINT checkpoint is unavailable')
+        weight = ckpts.checkpoint_weight_file(weight)
+        configuration = Path(config or ckpts.config_for_ckpt(str(weight), str(root / 'configs/training/mint_step2.yaml')) or root / 'configs/training/mint_step2.yaml').expanduser().resolve()
+        if not configuration.is_file():
+            raise ValueError('The selected MINT configuration is unavailable')
+        selected = {'checkpoint': str(weight), 'config': str(configuration)}
+        assets = [str(weight)]
     python = root / '.venv/bin/python'
-    missing = [str(p) for p in [python, *[root / p for p in spec['sources'] + spec['assets']]] if not p.is_file()]
-    identity = {'source_root': str(root), 'sources': {}, 'assets': {p: file_identity(root / p) for p in spec['assets']}}
+    missing = [str(p) for p in [python, *[root / p for p in spec['sources'] + assets]] if not p.is_file()]
+    identity = {'source_root': str(root), 'sources': {}, 'assets': {p: file_identity(root / p) for p in assets}}
+    if selected:
+        identity['selected_configuration'] = {'file': file_identity(selected['config']), 'sha256': hashlib.sha256(Path(selected['config']).read_bytes()).hexdigest()}
     for path in spec['sources']:
         target = root / path
         identity['sources'][path] = hashlib.sha256(target.read_bytes()).hexdigest() if target.is_file() else None
@@ -91,9 +108,12 @@ def backend_spec(algorithm):
                       for name in ('contracts.py', 'registry.py', 'normalizers.py', 'prepare.py', 'native.py', 'worker.py',
                                    'native_pool.py','native_process.py','native_tasks.py','hawor_parallel.py','hawor_slam.py','read_only.py')}
     identity['adapter'] = implementation
+    if algorithm == 'reference':
+        identity['reference_adapter'] = hashlib.sha256((PROJECT / 'mint/comparison/datasets.py').read_bytes()).hexdigest()
     return {**{k: v for k, v in spec.items() if k not in {'sources', 'assets', 'root_env', 'default_root'}},
             'id': algorithm, 'root': str(root), 'python': str(python), 'ready': not missing,
-            'missing': missing, 'identity': identity, 'version': digest(identity)}
+            'missing': missing, 'identity': identity, 'version': digest(identity), **selected,
+            **({'label': 'MINT · ' + Path(selected['checkpoint']).parent.name} if selected else {})}
 
 
 def normalize_options(algorithm, options=None):

@@ -58,6 +58,7 @@ def frame_payload(result_dir, sample, start=0, count=64, *, vertices=False, orig
         value = np.full((n, 2, 778, 3), np.nan)
         value[present] = arrays['vertices_camera_m'][positions[present]]
         payload['vertices_camera_m'] = value
+        payload['vertices_world_m'] = None
     payload['joints_world_m'], payload['camera_world_m'] = None, None
     if 'T_world_camera' in arrays:
         T = np.full((n, 4, 4), np.nan)
@@ -71,6 +72,8 @@ def frame_payload(result_dir, sample, start=0, count=64, *, vertices=False, orig
         T = rebase @ T
         payload['joints_world_m'] = transform_points(T, payload['joints_camera_m'])
         payload['camera_world_m'] = T[:, :3, 3]
+        if vertices and payload.get('vertices_camera_m') is not None:
+            payload['vertices_world_m'] = transform_points(T, payload['vertices_camera_m'])
     return json_values(payload)
 
 
@@ -174,6 +177,7 @@ def paired_metrics(first_dir, second_dir):
         velocity_delta = np.linalg.norm(np.diff(ja[:, :, 0], axis=0) / dt[:, None, None]
             - np.diff(jb[:, :, 0], axis=0) / dt[:, None, None], axis=-1)
         result['camera_wrist_velocity_difference_m_s'] = mean(velocity_delta[consecutive_valid])
+        result['paired_velocity_samples'] = int(consecutive_valid.sum())
     if 'T_world_camera' in a and 'T_world_camera' in b:
         pose_mask = a['pose_valid'][ia] & b['pose_valid'][ib]
         result['world_camera_common_frames'] = int(pose_mask.sum())
@@ -195,6 +199,7 @@ def paired_metrics(first_dir, second_dir):
                 error = np.linalg.inv(relative_b) @ relative_a
                 angle = np.arccos(np.clip((np.trace(error[:, :3, :3], axis1=1, axis2=2) - 1) / 2, -1, 1))
                 result.update(camera_rpe_translation_rmse_m=float(np.sqrt(np.mean(np.sum(error[:, :3, 3]**2, axis=1)))),
+                    camera_rpe_samples=len(error),
                     camera_rpe_rotation_rmse_deg=float(np.rad2deg(np.sqrt(np.mean(angle**2)))),
                     rpe_policy='Between successive common valid camera samples, preserving original source times',
                     rpe_source_intervals_s=np.unique(np.round(np.diff(a['timestamps_s'][ia][pose_mask]), 6)).tolist())

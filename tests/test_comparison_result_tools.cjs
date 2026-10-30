@@ -9,7 +9,7 @@ test('default three-column view includes independent algorithm families',()=>{
 });
 test('a declared GT is pinned without changing prediction metadata',()=>{
   const gt={id:'gt',algorithm:'reference',result:{reference_role:'user_declared_ground_truth'}};
-  assert.deepEqual(defaultResultSelection([...runs,gt]),{selected:['gt','m','h'],reference:'gt'});
+  assert.deepEqual(defaultResultSelection([...runs,gt]),{selected:['gt','m','h','a'],reference:'gt'});
   assert.equal(runs[0].result,undefined);
 });
 test('restored selections discard stale IDs and duplicates and retain their pinned baseline',()=>{
@@ -52,4 +52,16 @@ test('import and camera combinations do not advertise inherited GPU settings as 
   const combined={...run,imported:false,result:{component_sources:{hands:'a',camera:'h'}}};
   assert.match(runProtocol(combined).short,/相机外参组合/);
   assert.deepEqual(runProtocol(combined).rows.find(([label])=>label==='手部 / 相机组件'),['手部 / 相机组件','a / h']);
+});
+
+test('language module starts independently, shares preference and preserves untranslated evidence',()=>{
+  const vm=require('node:vm'),fs=require('node:fs');
+  const nodes=['数据与输入','/data1/中文目录/video.mp4','未翻译诊断原文'].map(nodeValue=>({nodeValue,parentElement:{closest:()=>false}}));
+  const storage=new Map([['wuji-viewer-language','en']]),listeners={};
+  const select={value:'',addEventListener:(name,fn)=>listeners[name]=fn};
+  const document={body:{},documentElement:{},getElementById:()=>select,createTreeWalker:()=>{let i=0;return{nextNode:()=>nodes[i++]||null};}};
+  const sandbox={document,NodeFilter:{SHOW_TEXT:4},MutationObserver:class{observe(){}},localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},window:{addEventListener(){}},queueMicrotask};
+  vm.runInNewContext(fs.readFileSync(require.resolve('../mint/comparison/web/locale.js'),'utf8'),sandbox);
+  assert.equal(nodes[0].nodeValue,'Data & input');assert.equal(nodes[1].nodeValue,'/data1/中文目录/video.mp4');assert.equal(nodes[2].nodeValue,'未翻译诊断原文');
+  select.value='zh';listeners.change();assert.equal(nodes[0].nodeValue,'数据与输入');assert.equal(storage.get('wuji-viewer-language'),'zh');
 });

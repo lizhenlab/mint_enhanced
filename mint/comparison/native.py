@@ -39,8 +39,8 @@ def run_mint(ctx):
     dynamic = ctx.request.get('dynamic_gpus', False)
     devices = options['resource_policy'] if dynamic else 'auto'
     started = time.perf_counter()
-    engine = StudentEngine(str(root / 'configs/training/mint_step2.yaml'),
-        ckpt=str(root / 'checkpoints/model.safetensors'), devices=devices, compile_mode='off', fp8_mode='off')
+    engine = StudentEngine(spec.get('config', str(root / 'configs/training/mint_step2.yaml')),
+        ckpt=spec.get('checkpoint', str(root / 'checkpoints/model.safetensors')), devices=devices, compile_mode='off', fp8_mode='off')
     ctx.timings['model_load_seconds'] = time.perf_counter() - started
     try:
         started = time.perf_counter()
@@ -55,6 +55,8 @@ def run_mint(ctx):
         ctx.timings['native_inference_seconds'] = time.perf_counter() - started
         atomic_npz(ctx.work / 'mint_native.npz', **{k: np.asarray(v) for k, v in prediction.items() if not k.startswith('_')})
         ctx.metadata.update(native_timings=prediction.get('_timings'), checkpoint_task=prediction.get('_task'),
+            selected_checkpoint=spec.get('checkpoint', str(root / 'checkpoints/model.safetensors')),
+            selected_config=spec.get('config', str(root / 'configs/training/mint_step2.yaml')),
             camera_source='MINT predicted camera', K_source='MINT native Viewer first-frame FoV',
             confidence_semantics='sigmoid native hand presence logit; geometry retained independently',
             postprocess=options['hand_mode'], numerical_path='Unchanged StudentEngine and original MANO decoder')
@@ -365,6 +367,11 @@ def import_native(ctx):
     """Read trusted server-native files only inside the matching algorithm environment."""
     import pickle
     entry = ctx.request['import']
+    if entry['format'] == 'lerobot_reference':
+        from .datasets import reference_arrays
+        arrays, metadata = reference_arrays(ctx.sample, entry['dataset_context'])
+        ctx.metadata.update(metadata)
+        return arrays
     source = Path(entry['path'])
     if file_identity(source) != entry['identity']:
         raise ValueError('Native import source changed')
@@ -385,7 +392,17 @@ def import_native(ctx):
             camera_source='User-declared reference camera' if 'T_world_camera' in value else 'Unavailable in reference')
     if entry['format'] == 'mint_npz':
         ctx.metadata.update(camera_source='Imported MINT predicted camera', K_source='MINT native first-frame FoV')
-        return mint_geometry(value, ctx.sample, positions)
+        arrays = mint_geometry(value, ctx.sample, positions)
+        if entry.get('hand_frame') == 'world':
+            from .contracts import transform_points
+            inverse = np.linalg.inv(arrays['T_world_camera'])
+            for key in ('joints_camera_m', 'vertices_camera_m'):
+                arrays[key] = transform_points(inverse, arrays[key]).astype(np.float32)
+            arrays['geometry_valid'] &= arrays['pose_valid'][:, None]
+            for key in ('joints_camera_m', 'vertices_camera_m'):
+                arrays[key][~arrays['geometry_valid']] = np.nan
+            ctx.metadata['hand_coordinate_conversion'] = 'Explicit world-frame imported hand parameters transformed by their predicted camera'
+        return arrays
     if entry['format'] == 'ace_pickle':
         camera = value.get('pred_intrinsics') if ctx.request['algorithm'] == 'ace_kfree' else value.get('intrinsics')
         if not camera:

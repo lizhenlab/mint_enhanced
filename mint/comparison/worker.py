@@ -106,7 +106,8 @@ def main(argv=None):
             if os.getppid() != ctx.request['parent_pid']:
                 raise InferenceCancelled('Owning comparison service exited before worker startup')
         from .registry import backend_spec
-        current = backend_spec(ctx.request['algorithm'])
+        selection = {key: ctx.spec[key] for key in ('checkpoint', 'config') if ctx.spec.get(key)}
+        current = backend_spec(ctx.request['algorithm'], **selection)
         if current['version'] != ctx.spec['version']:
             raise ValueError('Native source, model assets or comparison adapter changed; create a new run')
         if file_identity(ctx.sample['source']['path']) != ctx.sample['source']:
@@ -151,7 +152,7 @@ def main(argv=None):
                 ctx.check_cancel()
                 ctx.progress(stage='validate_publish')
                 # Recheck disk identities after long native calls, before publishing a cached result.
-                if backend_spec(ctx.request['algorithm'])['version'] != ctx.spec['version']:
+                if backend_spec(ctx.request['algorithm'], **selection)['version'] != ctx.spec['version']:
                     raise ValueError('Native dependencies changed during inference; result was not published')
                 if file_identity(ctx.sample['source']['path']) != ctx.sample['source']:
                     raise ValueError('Source video changed during inference')

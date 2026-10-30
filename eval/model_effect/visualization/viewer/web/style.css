@@ -1127,3 +1127,5 @@ pre.ld-patch span { display: block; }
   .bf-run-progress-stats { grid-template-columns: 1fr; }
   .bf-run-progress > header strong { font-size: 20px; }
 }
+
+.shared-workspace-nav{display:flex;gap:8px;flex-wrap:wrap}.shared-workspace-nav a{color:var(--cyan,#58d5d2);padding:6px 10px;border:1px solid #29413a;border-radius:7px;font-size:12px}#shareComparisonResult{flex-shrink:0}@media(max-width:760px){.shared-workspace-nav{order:3;flex-basis:100%}.shared-workspace-nav a{font-size:11px;padding:5px}.masthead{flex-wrap:wrap}}

@@ -566,6 +566,7 @@ async function init(){
   wireBatch();                               // 批量目录推理：只绑定，不自动启动
   wireBench();                               // 顶部 Benchmark 按钮 + 结果区（独立于样例面板）
   wireLogDiff();                             // 顶部「📋 代码对比」按钮 + 结果区（独立面板）
+  wireSharedWorkspace();
   buildPanels(false);                        // 绑定持久 DOM 后再摘出隐藏面板，事件监听会随节点保留
   startDatasetAnalysisPoll();                // 接续显示服务端已有分析任务或最近结果
   startBatchPoll();                          // 接续显示服务端已有批量任务/结果
@@ -5107,3 +5108,23 @@ async function resumeSavedTask(id){
 }
 if($('#refreshTasks')) $('#refreshTasks').addEventListener('click',refreshTaskHistory);
 refreshTaskHistory();
+
+
+function wireSharedWorkspace(){
+  const button=$('#shareComparisonResult');
+  button.onclick=async()=>{
+    button.disabled=true;
+    try{
+      const response=await fetch('/api/comparison/legacy-results');const value=await response.json();if(!response.ok)throw new Error(value.error||'读取已有预测失败');
+      const match=value.results.find(row=>String(row.eid)===String(state.eid)&&row.camera_mode===state.camMode&&row.hand_mode===effectiveHandMode());
+      if(!match)throw new Error('当前选项没有已缓存的数值预测。请先在原工作台加载已有结果或完成一次推理。');
+      const imported=await fetch('/api/comparison/legacy-results/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:match.id})});const comparison=await imported.json();if(!imported.ok)throw new Error(comparison.error||'导入失败');location.href='/compare?id='+encodeURIComponent(comparison.id);
+    }catch(error){alert(error.message);}finally{button.disabled=false;}
+  };
+  const query=new URLSearchParams(location.search),tool=query.get('tool');
+  if(tool==='batch')$('#batchBtn').click();
+  if(tool==='benchmark')$('#benchBtn').click();
+  if(tool==='code')$('#logDiffBtn').click();
+  if(tool?.startsWith('analysis-'))selectDatasetAnalysis(tool.slice(9));
+  if(query.get('task')){const history=$('#taskHistory');history.open=true;history.scrollIntoView({block:'start'});}
+}

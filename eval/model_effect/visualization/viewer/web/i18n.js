@@ -320,6 +320,8 @@
     ['无', 'None'],
   ]);
 
+  for(const [source,target] of Object.entries({'数据与输入':'Data & input','任务中心':'Task center','多算法结果':'Algorithm results','量化评测':'Evaluation','高级工具':'Tools','加入多算法比较':'Compare this prediction'}))PHRASES.set(source,target);
+
   const REPLACEMENTS = Array.from(PHRASES.entries())
     .filter(([source]) => source.length > 1)
     .sort((a, b) => b[0].length - a[0].length);
@@ -330,7 +332,8 @@
 
   function readInitialLanguage() {
     try {
-      return localStorage.getItem(STORAGE_KEY) === 'zh' ? 'zh' : 'en';
+      const requested=new URLSearchParams(location.search).get('lang');
+      return (requested||localStorage.getItem(STORAGE_KEY)||'zh') === 'en' ? 'en' : 'zh';
     } catch (_) {
       return 'en';
     }

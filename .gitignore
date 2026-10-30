@@ -98,3 +98,5 @@ docs/dataset-card/
 !tests/test_comparison_parallel.py
 /.venv-features/
 /model/
+
+!tests/test_comparison_platform.py

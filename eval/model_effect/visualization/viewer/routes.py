@@ -67,10 +67,10 @@ def _default_input_path(root: Path) -> Path:
 def create_app(store) -> Flask:
     app = Flask(__name__)
     from mint.comparison.api import comparison_blueprint
-    app.register_blueprint(comparison_blueprint())
     dataset_analysis = DatasetAnalysisManager(
         default_root=Path(getattr(store, "root", None) or Path.cwd()),
     )
+    app.register_blueprint(comparison_blueprint(store, dataset_analysis))
     export_files: dict[str, tuple[Path, str]] = {}
     export_jobs: dict[str, dict] = {}
     export_lock = threading.Lock()

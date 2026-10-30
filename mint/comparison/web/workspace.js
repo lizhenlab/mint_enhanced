@@ -1,14 +1,14 @@
 'use strict';
 
 // Presentation preferences never alter inference options or saved result data.
-const workspaceUI={mode:'split',tab:'view',sidebar:null,mobileSidebar:false,focus:false,history:[],filter:'all',noticeTimer:null};
-try{const saved=JSON.parse(localStorage.getItem('mint.compare.layout.v1')||'{}');if(['split','2d','3d'].includes(saved.mode))workspaceUI.mode=saved.mode;if(typeof saved.sidebar==='boolean')workspaceUI.sidebar=saved.sidebar;}catch(_){}
+const workspaceUI={mode:'split',geometry:'skeleton',tab:'view',sidebar:null,mobileSidebar:false,focus:false,history:[],filter:'all',noticeTimer:null};
+try{const saved=JSON.parse(localStorage.getItem('mint.compare.layout.v1')||'{}');if(['split','2d','3d'].includes(saved.mode))workspaceUI.mode=saved.mode;if(['skeleton','mesh','mesh_skel'].includes(saved.geometry))workspaceUI.geometry=saved.geometry;if(typeof saved.sidebar==='boolean')workspaceUI.sidebar=saved.sidebar;}catch(_){}
 
 function icon(name){
   const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.classList.add('icon');svg.setAttribute('aria-hidden','true');
   const use=document.createElementNS('http://www.w3.org/2000/svg','use');use.setAttribute('href','#i-'+name);svg.append(use);return svg;
 }
-function saveLayout(){try{localStorage.setItem('mint.compare.layout.v1',JSON.stringify({mode:workspaceUI.mode,sidebar:workspaceUI.sidebar}));}catch(_){} }
+function saveLayout(){try{localStorage.setItem('mint.compare.layout.v1',JSON.stringify({mode:workspaceUI.mode,geometry:geometryMode(),sidebar:workspaceUI.sidebar}));}catch(_){} }
 function sidebarIsOpen(){return !workspaceUI.focus&&(window.innerWidth<=1100?workspaceUI.mobileSidebar:(workspaceUI.sidebar??true));}
 function applyLayout(){
   const open=sidebarIsOpen();$('appShell').classList.toggle('sidebar-closed',!open);document.body.classList.toggle('focus-mode',workspaceUI.focus);
@@ -22,7 +22,7 @@ function applyLayout(){
 function setViewMode(mode){workspaceUI.mode=mode;saveLayout();applyLayout();captureVideo(masterVideo(),false);}
 function setWorkspaceTab(tab){
   workspaceUI.tab=tab;
-  for(const id of ['resultPicker','protocolPicker'])$(id).open=false;
+  for(const id of ['resultPicker','protocolPicker','frameInspector'])$(id).open=false;
   for(const name of ['view','metrics','manage']){const active=name===tab;$('panel-'+name).hidden=!active;$('tab-'+name).setAttribute('aria-selected',String(active));$('tab-'+name).tabIndex=active?0:-1;}
   if(tab!=='view')pause();else requestAnimationFrame(()=>render(true));
   if(tab==='metrics')loadComparisonMetrics().catch(error=>notify(error.message));
@@ -72,7 +72,7 @@ function openTaskDialog(importMode=false){
   pause();$('formError').textContent='';$('taskDialogTitle').textContent=importMode?'导入已有算法结果':'新建算法比较';
   if(!$('taskDialog').open)$('taskDialog').showModal();
   $('importSection').open=importMode;
-  prepareSourceBrowser();if(importMode){$('importSection').scrollIntoView({block:'nearest'});$('importPath').focus();}else $('sourceSearch').focus({preventScroll:true});
+  if(!datasetForm.active)prepareSourceBrowser();if(importMode){$('importSection').scrollIntoView({block:'nearest'});$('importPath').focus();}else $(datasetForm.active?'datasetEpisode':'sourceSearch').focus({preventScroll:true});
 }
 function updateImportFormats(){
   const labels={mint_npz:'MINT prediction.npz',hawor_world_npz:'HaWoR 世界结果 NPZ',ace_pickle:'ACE 原生 PKL（results 目录内）',normalized_npz:'标准几何 NPZ'};
@@ -98,7 +98,7 @@ function runGpuSummary(run){
   return {text:'',title:''};
 }
 function initializeWorkspace(){
-  applyLayout();updatePlayControl(false);initializeSourceBrowser();initializeResultTools();
+  applyLayout();updatePlayControl(false);initializeSourceBrowser();initializeResultTools();initializeGeometryTools();initializePlatform();
   $('toggleSidebar').onclick=()=>{if(window.innerWidth<=1100)workspaceUI.mobileSidebar=!workspaceUI.mobileSidebar;else workspaceUI.sidebar=!sidebarIsOpen();saveLayout();applyLayout();};
   $('sidebarBackdrop').onclick=()=>{workspaceUI.mobileSidebar=false;applyLayout();};
   $('focusMode').onclick=()=>setFocusMode(!workspaceUI.focus);

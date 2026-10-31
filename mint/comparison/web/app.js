@@ -45,7 +45,7 @@ async function openComparison(id,{replace=false,history=true}={}){
   $('runs').replaceChildren();$('welcome').hidden=true;$('workspace').hidden=false;setWorkspaceTab('view');const token=state.pollToken;
   document.querySelectorAll('[data-comparison]').forEach(row=>{const active=row.dataset.comparison===id;row.classList.toggle('active',active);if(active)row.setAttribute('aria-current','page');else row.removeAttribute('aria-current');});
   await refresh(id,token);if(token!==state.pollToken)return;restoreForm();$('workspace').setAttribute('aria-busy','false');$('editComparison').disabled=false;$('downloadReport').disabled=false;
-  if(history){const method=replace||new URLSearchParams(location.search).get('id')===id?'replaceState':'pushState';window.history[method](null,'','/compare?id='+encodeURIComponent(id));}
+  if(history){const query=new URLSearchParams(location.search),method=replace||query.get('id')===id?'replaceState':'pushState';query.set('id',id);window.history[method](null,'','/compare?'+query.toString());}
   try{localStorage.setItem('mint.compare.last',id);}catch(_){}
   updateHistorySelection();await refreshExisting();restoreDatasetForm(state.comparison);poll(id,token);
 }

@@ -47,7 +47,7 @@ function comparisonDisplayName(value){
   const path=value.sample_request?.source?.path||'',parts=path.split('/').filter(Boolean),file=parts.at(-1)||'未命名输入';
   const title=String(value.title||'').trim();
   if(title&&title!==file&&!/^(?:\d+:)?(?:None|null|undefined)(?::\d+)?$/i.test(title))return title;
-  return /^(?:video|input|source|clip)\.[^.]+$/i.test(file)&&parts.length>1?`${parts.at(-2)} · ${file}`:file;
+  return /^\d+\.[^.]+$/i.test(file)&&parts.length>2?`${parts.slice(-3,-1).join(' / ')} · ${file}`:/^(?:video|input|source|clip)\.[^.]+$/i.test(file)&&parts.length>1?`${parts.at(-2)} · ${file}`:file;
 }
 function historyGroups(rows){
   const groups=new Map();for(const row of rows){const request=row.sample_request||{},key=`${request.source?.path||row.id}|${request.view||'full'}`;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}return [...groups.entries()];
@@ -85,6 +85,7 @@ function syncSessionSummary(value){
   $('sessionStatus').dataset.state=status;$('sessionTitle').title=value.title;
   const prior=workspaceUI.history.findIndex(v=>v.id===value.id);
   if(prior>=0){const changed=workspaceUI.history[prior].runs.map(r=>r.status).join()!==value.runs.map(r=>r.status).join();workspaceUI.history[prior]=value;if(changed)renderHistoryList();}
+  if(typeof refreshPlatformContext==='function')refreshPlatformContext();
   const sample=value.sample;
   for(const id of ['play','prev','next','timeline','frameJump','snapshot'])$(id).disabled=!sample;
   const results=value.runs.filter(r=>r.result).length;$('exportVideo').disabled=!sample||!results||!!state.exporting;
@@ -145,9 +146,10 @@ function runExecutionSummary(run){
   return parts.join(' · ');
 }
 function updateResultLayoutHint(){
-  const hint=$('resultLayoutHint');if(!hint||!state.comparison)return;const count=visibleResultCards().length;$('runs').dataset.visibleCount=String(count);hint.hidden=count<=3;
-  if(count>3){const columns=getComputedStyle($('runs')).gridTemplateColumns.trim().split(/\s+/).length,text=`当前显示 ${count} 个结果，分 ${Math.ceil(count/Math.max(1,columns))} 行排列；向下滚动查看其余结果，或使用 A/B 对照。`;if(hint.textContent!==text)hint.textContent=text;}
+  const hint=$('resultLayoutHint');if(!hint||!state.comparison)return;const count=visibleResultCards().length,host=$('runs');host.dataset.visibleCount=String(count);hint.hidden=resultView.layout!=='overview'||count<=2;
+  if(!hint.hidden){const columns=comparisonGridPlan(host.clientWidth,host.clientHeight,count,'overview').columns,text=`总览 · ${count} 个结果 / ${Math.ceil(count/columns)} 行；可滚动查看。切换“基准 + 候选”可完整对照。`;if(hint.textContent!==text)hint.textContent=text;}
 }
+
 function initializeWorkspace(){
   applyLayout();updatePlayControl(false);initializeSourceBrowser();initializeResultTools();initializeGeometryTools();initializePlatform();
   $('toggleSidebar').onclick=()=>{if(window.innerWidth<=1100)workspaceUI.mobileSidebar=!workspaceUI.mobileSidebar;else workspaceUI.sidebar=!sidebarIsOpen();saveLayout();applyLayout();};

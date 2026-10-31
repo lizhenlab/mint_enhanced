@@ -3,7 +3,9 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark"><title>MINT · 多算法工作台</title>
-  <link rel="stylesheet" href="comparison-assets/style.css?v=20261031-diagnostic-layout">
+  <link rel="stylesheet" href="comparison-assets/style.css?v=20261031-canvas-workflows">
+  <link rel="stylesheet" href="comparison-assets/comparison-layout.css?v=20261031-canvas-workflows">
+  <link rel="stylesheet" href="comparison-assets/platform-layout.css?v=20261031-canvas-workflows">
 </head>
 <body>
 <svg class="icon-definitions" aria-hidden="true"><defs>
@@ -61,7 +63,7 @@
       </section>
       <section id="panel-metrics" class="workspace-panel scroll-panel" role="tabpanel" aria-labelledby="tab-metrics" hidden>
         <div class="section-heading"><div><p class="eyebrow">METRICS / COVERAGE</p><h2>同输入指标分析</h2></div><button id="refreshMetrics" class="quiet-button">刷新指标</button></div>
-        <div class="metrics-controls"><label class="inline-label">对照范围<select id="metricsScope"><option value="selected">当前选列 · 与基准对照</option><option value="all">全部结果 · 两两比较</option></select></label><span class="subtle-tag">共同有效几何</span></div>
+        <div class="metrics-controls"><label class="inline-label">对照范围<select id="metricsScope"><option value="selected">当前对照组合 · 与基准对照</option><option value="all">全部结果 · 两两比较</option></select></label><span class="subtle-tag">共同有效几何</span></div>
         <p id="metricsScopeNote" class="explanation">没有声明的 GT 时，数值表示算法之间的差异。统计同时保留覆盖率和缺失情况。</p><div id="metrics" class="metrics-container">打开此页后计算。</div>
       </section>
       <section id="panel-manage" class="workspace-panel scroll-panel" role="tabpanel" aria-labelledby="tab-manage" hidden>
@@ -96,12 +98,12 @@
 </dialog>
 <dialog id="logDialog" class="log-dialog" aria-labelledby="logTitle"><div class="dialog-heading"><div><p class="eyebrow">RUN / DIAGNOSTICS</p><h2 id="logTitle">运行日志</h2></div><button id="closeLog" class="icon-button" aria-label="关闭运行日志"><svg class="icon"><use href="#i-close"/></svg></button></div><pre id="logText"></pre></dialog>
 <dialog id="platformDialog" class="platform-dialog workspace-page" aria-labelledby="platformTitle">
-  <div class="dialog-heading"><div><p class="eyebrow">MINT WORKSPACE</p><h2 id="platformTitle">统一工作台</h2></div><button id="closePlatform" class="icon-button" aria-label="返回比较工作区" title="返回比较工作区；数据选择和表单保留"><svg class="icon"><use href="#i-close"/></svg></button></div>
+  <div class="dialog-heading"><div><p class="eyebrow">MINT WORKSPACE</p><h2 id="platformTitle">统一工作台</h2></div><button id="closePlatform" class="quiet-button" aria-label="返回比较工作区" title="返回比较工作区；数据选择和表单保留">← 返回比较</button></div>
   <nav class="platform-tabs" aria-label="当前模块功能"><button data-hub-pane="data">数据接入</button><button data-hub-pane="catalog">数据与结果目录</button><button data-hub-pane="batch">批量比较</button><button data-hub-pane="evaluation">数据集评测</button><button data-hub-pane="quality">逐帧质检与复核</button><button data-hub-pane="research">训练与模型</button><button data-hub-pane="tasks">任务与恢复</button><button data-hub-pane="tools">专项工具</button></nav>
   <div id="moduleContext" class="module-context" role="status"></div>
   <nav id="evaluationRoutes" class="evaluation-routes" aria-label="评测与质检入口" hidden><button data-evaluation-route="current">当前比较指标</button><button data-evaluation-route="dataset">数据集评测</button><button data-evaluation-route="quality">逐帧质检</button><button data-evaluation-route="regression">检查点回归 / 性能</button><a href="/?tool=benchmark">公开基准 · MINT 专项</a></nav>
   <div class="platform-body">
-    <section id="hub-data" class="hub-pane"><p class="explanation">普通视频、LeRobot 和开源数据集共用输入协议。开源标注先准备数据版本，再继续比较；需要批量处理时在下方选择多个视频或 Episode。</p><div class="hub-grid">
+    <section id="hub-data" class="hub-pane"><div class="hub-grid">
       <section class="panel"><h3>视频目录</h3><label>服务器目录<div class="source-path-row"><input id="collectionDirectory" placeholder="/data1/lizhen_dataset"><button id="useCurrentDirectory">当前目录</button></div></label><div class="button-row"><label><input id="scanRecursive" type="checkbox" checked>递归子目录</label><button id="scanVideos">扫描视频</button><button id="selectAllVideos">选中本页</button></div><p id="scanSummary" class="hint"></p><div id="collectionVideos" class="collection-items"></div></section>
       <section class="panel"><h3>LeRobot 数据集</h3><label>数据集根目录<div class="source-path-row"><input id="hubDatasetRoot" placeholder="包含 meta/info.json 的目录"><button id="hubLoadDataset">读取</button></div></label><label>相机流<select id="hubDatasetCamera"></select></label><div class="button-row"><button id="hubDatasetPrevious">上一页</button><button id="hubDatasetNext">下一页</button><button id="selectAllEpisodes">选中本页</button></div><p id="hubDatasetSummary" class="hint"></p><div id="hubEpisodes" class="collection-items"></div></section>
     </div><div class="hub-footer"><span id="collectionSelectionSummary">批量列表尚未选择输入</span><button id="clearCollectionSelection">清空选择</button><button id="useSingleEpisode">用于单次比较</button><button id="prepareBatch" class="primary">多视频多算法批量</button><button id="prepareEvaluation">创建数据集评测</button></div></section>
@@ -121,13 +123,13 @@
   </div>
 </dialog>
 <dialog id="exportDialog" class="export-dialog" aria-labelledby="exportTitle"><div class="dialog-heading"><h2 id="exportTitle">导出结果</h2><button id="closeExportDialog" class="icon-button" aria-label="关闭导出配置"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="task-dialog-body"><label>视频包含结果<select id="exportScope"><option value="all">全部已完成结果</option><option value="visible">当前可见结果</option></select></label><label>叠加内容<select id="exportGeometry"><option value="skeleton">骨架</option><option value="mesh">网格</option><option value="mesh_skel">网格 + 骨架</option></select></label><label><input id="exportBaseline" type="checkbox">叠加当前对照基准骨架</label><p class="hint">视频保持完整样本时间轴。缺少顶点的结果使用骨架。数值 ZIP 从各结果卡片下载，比较报告包含全部指标。</p><button id="confirmVideoExport" class="primary">生成同步视频</button><button id="exportCurrentPNG">保存当前可见画面 PNG</button><button id="exportFullReport">下载完整比较报告</button></div></dialog>
-<script src="comparison-assets/workspace.js?v=20261031-diagnostic-layout"></script>
-<script src="comparison-assets/source-browser.js?v=20261031-diagnostic-layout"></script>
-<script src="comparison-assets/result-tools.js?v=20261031-diagnostic-layout"></script>
-<script src="comparison-assets/geometry-tools.js?v=20261031-diagnostic-layout"></script>
-<script src="comparison-assets/platform.js?v=20261031-diagnostic-layout"></script>
-<script src="comparison-assets/research.js?v=20261031-diagnostic-layout"></script>
-<script src="comparison-assets/enhancements.js?v=20261031-diagnostic-layout"></script>
-<script src="comparison-assets/locale.js?v=20261031-diagnostic-layout"></script>
-<script src="comparison-assets/app.js?v=20261031-diagnostic-layout"></script>
+<script src="comparison-assets/workspace.js?v=20261031-canvas-workflows"></script>
+<script src="comparison-assets/source-browser.js?v=20261031-canvas-workflows"></script>
+<script src="comparison-assets/result-tools.js?v=20261031-canvas-workflows"></script>
+<script src="comparison-assets/geometry-tools.js?v=20261031-canvas-workflows"></script>
+<script src="comparison-assets/platform.js?v=20261031-canvas-workflows"></script>
+<script src="comparison-assets/research.js?v=20261031-canvas-workflows"></script>
+<script src="comparison-assets/enhancements.js?v=20261031-canvas-workflows"></script>
+<script src="comparison-assets/locale.js?v=20261031-canvas-workflows"></script>
+<script src="comparison-assets/app.js?v=20261031-canvas-workflows"></script>
 </body></html>

@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MINT 单算法诊断 · 算法工作台</title>
-<link rel="stylesheet" href="style.css?v=20261031-diagnostic-layout">
+<link rel="stylesheet" href="style.css?v=20261031-diagnostic-modes">
 </head>
-<body>
+<body data-diagnostic-view="config">
 <div id="app">
 <div id="content">
 <header class="control-deck">
@@ -25,14 +25,15 @@
     </label>
   </div>
 
-  <div class="diagnostic-context"><strong>只调试 MINT 的推理与显示细节</strong><p>常规推理和算法横向对照请使用比较工作区。这里用于分窗、平滑、手形、内参与逐帧 loss 诊断；已有预测可加入同输入比较，设置不会自动同步。</p></div>
-  <nav class="diagnostic-steps" aria-label="本页操作步骤"><a href="#diagnostic-input">1 · 输入与运行</a><a href="#diagnostic-results">2 · 结果查看</a><a href="#diagnostic-tools">3 · 专项工具</a></nav>
+  <details class="diagnostic-context"><summary>用途与比较工作区的关系</summary><p>常规推理和算法横向对照请使用比较工作区。这里用于分窗、平滑、手形、内参与逐帧 loss 诊断；已有预测可加入同输入比较，设置不会自动同步。</p></details>
+  <nav class="diagnostic-steps" role="tablist" aria-label="单算法诊断视图"><button id="diagnosticTab-config" type="button" role="tab" data-diagnostic-view="config" aria-selected="true" aria-controls="diagnosticConfiguration">配置与运行</button><button id="diagnosticTab-results" type="button" role="tab" data-diagnostic-view="results" aria-selected="false" aria-controls="diagnosticStage" tabindex="-1">结果与损失</button><button id="diagnosticTab-tools" type="button" role="tab" data-diagnostic-view="tools" aria-selected="false" aria-controls="diagnosticStage" tabindex="-1">专项工具</button></nav>
   <div class="status-rail">
     <span id="stepInfo" class="step" title="当前进行到哪一步">待操作</span>
     <span id="progWrap" class="progwrap" title="加载进度（推理为确定进度，其余为不确定动画）" style="display:none"><span id="progBar" class="progbar"></span></span>
     <span id="info">选择输入与参数后，点击“开始推理”运行模型。</span>
   </div>
 
+  <section id="diagnosticConfiguration" role="tabpanel" aria-labelledby="diagnosticTab-config">
   <details class="control-card" id="taskHistory" data-i18n-ignore>
     <summary>任务记录与恢复 <span id="cacheUsage"></span></summary>
     <button type="button" id="refreshTasks">刷新</button>
@@ -116,9 +117,10 @@
   </div>
 
 
+</section>
 </header>
-<main>
-  <div class="diagnostic-result-header" id="diagnostic-results"><div class="diagnostic-section-title"><h2>2 · 结果查看</h2><span>视频、三维与数值共用当前输入；结果可复用到比较工作区。</span></div><div class="diagnostic-result-actions">      <div class="field"><label>叠加模式</label><select id="mode">
+<main id="diagnosticStage" role="tabpanel" aria-labelledby="diagnosticTab-results">
+  <div class="diagnostic-result-header" id="diagnostic-results"><div class="diagnostic-section-title"><h2>结果与损失</h2><span>视频、三维与数值联动；当前结果可加入统一比较。</span></div><div class="diagnostic-result-actions">      <div class="field"><label>叠加模式</label><select id="mode">
         <option value="mesh">网格 Mesh</option>
         <option value="skeleton">骨架 Skeleton</option>
         <option value="mesh_skel">网格 + 骨架</option>
@@ -154,10 +156,11 @@
       </span>
 </div><details id="sidebar" class="diagnostic-layout"><summary>调整结果栏目与显示顺序</summary><p class="side-hint">拖动栏目调整顺序，点击眼睛切换显示。仿真、重定向和专项工具保持按需开启。</p><ul id="orderBar"></ul></details></div>
 
+  <div id="diagnosticResultEmpty" class="empty-state" hidden><div><b>尚未加载诊断结果</b><p>在配置中选择输入并显式运行，或读取原始 GT。切换视图不会启动推理。</p><button type="button" data-diagnostic-view="config">前往配置与运行</button></div></div>
   <div id="blocks"></div>
-  <div class="metrics" id="metricsWrap"><div class="cap">逐帧 loss（与训练同公式，随当前帧联动）。权重=组权重×项权重；值/加权/占比同口径（旋转项按弧度，值列括号补度数便于观看）；加权=权重×值；占比=加权值÷加权总 loss，看谁主导。</div>
+  <div class="metrics" id="metricsWrap"><details class="cap diagnostic-loss-guide"><summary>逐帧损失说明与计量口径</summary><p>逐帧 loss（与训练同公式，随当前帧联动）。权重=组权重×项权重；值/加权/占比同口径（旋转项按弧度，值列括号补度数便于观看）；加权=权重×值；占比=加权值÷加权总 loss，看谁主导。</p></details>
     <div id="metrics"></div></div>
-  <details class="diagnostic-tools" id="diagnostic-tools"><summary>3 · 专项工具（按需展开）</summary><p>在已有结果上检查仿真和重定向，或打开数据分析、MINT 专项评测及代码对比。批量多算法任务请到 <a href="/compare?hub=batch">批量比较</a>。</p><div class="utility-rail">
+  <details class="diagnostic-tools" id="diagnostic-tools"><summary>选择专项工具</summary><p>在已有结果上检查仿真和重定向，或打开数据分析、MINT 专项评测及代码对比。批量多算法任务请到 <a href="/compare?hub=batch">批量比较</a>。</p><div class="utility-rail">
     <button id="mujocoBtn" class="ghost" aria-pressed="false" title="默认关闭；点击后才按当前样本启动 MuJoCo 渲染">MuJoCo 仿真</button>
     <button id="retargetBtn" class="ghost" aria-pressed="false" title="默认关闭；点击后才将当前 21 点驱动 Wuji Hand 并启动渲染">Wuji Hand 运动学重定向</button>
     <span id="datasetAnalysisLauncher" class="analysis-launcher">
@@ -461,6 +464,6 @@
 <script src="i18n.js?v=20260816-3"></script>
 <script src="camera_baselines.js?v=20260814-1"></script>
 <script src="benchmark_suites.js?v=20260906-coverage"></script>
-<script src="app.js?v=20261031-workspace-ux"></script>
+<script src="app.js?v=20261031-diagnostic-modes"></script>
 </body>
 </html>

@@ -46,7 +46,7 @@ async function openComparison(id,{replace=false,history=true,keepPlatform=false}
   $('runs').replaceChildren();$('welcome').hidden=true;$('workspace').hidden=false;setWorkspaceTab('view');const token=state.pollToken;
   document.querySelectorAll('[data-comparison]').forEach(row=>{const active=row.dataset.comparison===id;row.classList.toggle('active',active);if(active)row.setAttribute('aria-current','page');else row.removeAttribute('aria-current');});
   await refresh(id,token);if(token!==state.pollToken)return;restoreForm();$('workspace').setAttribute('aria-busy','false');$('editComparison').disabled=false;$('downloadReport').disabled=false;
-  if(history){const query=new URLSearchParams(location.search),method=replace||query.get('id')===id?'replaceState':'pushState';if(!keepPlatform)for(const key of ['hub','section','collection','tool_job','study'])query.delete(key);query.set('id',id);window.history[method](null,'','/compare?'+query.toString());}
+  if(history){const query=new URLSearchParams(location.search),method=replace||query.get('id')===id?'replaceState':'pushState';if(!keepPlatform)for(const key of ['hub','section','collection','tool_job','study','research_tab','source_type'])query.delete(key);query.set('id',id);window.history[method](null,'','/compare?'+query.toString());}
   try{localStorage.setItem('mint.compare.last',id);}catch(_){}
   updateHistorySelection();await refreshExisting();restoreDatasetForm(state.comparison);poll(id,token);
 }
@@ -194,18 +194,28 @@ document.addEventListener('keydown',event=>{
 window.addEventListener('popstate',()=>{const query=new URLSearchParams(location.search);if(query.get('hub'))return;const id=query.get('id');if(id)openComparison(id,{history:false}).catch(e=>notify(e.message));});
 initializeWorkspace();
 (async()=>{try{
-  const query=new URLSearchParams(location.search);
+  // History is useful context, but explicit links must not wait for the full catalog.
+  const historyReady=loadHistory().catch(error=>notify(error.message));
+  const explicitRoute=query=>['id','run','hub','collection','tool_job','workflow','study'].some(key=>query.get(key));
   const [algorithms,examples]=await Promise.all([api('api/algorithms'),api('api/comparison/examples')]);state.specs=algorithms.algorithms;buildAlgorithms();refreshComposerAlgorithms();updateImportFormats();
   const available=state.specs.filter(s=>!s.import_only);$('dependencyStatus').textContent=`${available.filter(s=>s.ready).length}/${available.length} 变体就绪`;
   for(const example of examples.examples){const option=el('option',example.label);option.value=example.path;$('examples').append(option);}
-  if(examples.examples.length){$('source').value=examples.examples[0].path;$('examples').value=examples.examples[0].path;}
-  await loadHistory();let remembered;try{remembered=localStorage.getItem('mint.compare.last');}catch(_){}
-  let id=query.get('id');if(query.get('run')&&!id){const parents=await api('api/comparison/runs/'+encodeURIComponent(query.get('run'))+'/parent');id=parents.comparisons[0];}
-  const hub=query.get('hub');if(!id&&!hub&&!query.get('collection'))id=workspaceUI.history.some(v=>v.id===remembered)?remembered:workspaceUI.history[0]?.id;
-  if(id)await openComparison(id,{replace:true});
-  if(query.get('run'))inspectResult(query.get('run'));
-  if(query.get('frame'))seek(Math.max(0,Number(query.get('frame'))-1));
-  if(query.get('collection'))await openCollection(query.get('collection'));
-  else if(query.get('tool_job')){platform.renderJob=query.get('tool_job');await openPlatform('tools');}
-  else if(hub&&HUB_LABELS[hub])await openPlatform(hub);
+  if(examples.examples.length&&!$('source').value.trim()){$('source').value=examples.examples[0].path;$('examples').value=examples.examples[0].path;}
+  let query=new URLSearchParams(location.search);
+  if(!explicitRoute(query)&&!$('platformDialog').open&&!$('taskDialog').open){await historyReady;query=new URLSearchParams(location.search);}
+  if($('taskDialog').open)return;
+  let id=query.get('id');
+  if(query.get('run')&&!id){const requestedRun=query.get('run'),parents=await api('api/comparison/runs/'+encodeURIComponent(requestedRun)+'/parent');query=new URLSearchParams(location.search);id=query.get('id')||(query.get('run')===requestedRun?parents.comparisons[0]:null);}
+  if(!id&&!explicitRoute(query)&&!$('platformDialog').open){
+    let remembered;try{remembered=localStorage.getItem('mint.compare.last');}catch(_){}
+    id=workspaceUI.history.some(v=>v.id===remembered)?remembered:workspaceUI.history[0]?.id;
+  }
+  // A navigation made while the request is pending retains its pane and route.
+  if(id&&state.comparison?.id!==id)await openComparison(id,{replace:true,keepPlatform:true});
+  query=new URLSearchParams(location.search);if($('taskDialog').open)return;
+  const hub=query.get('hub');
+  if(!$('platformDialog').open&&!hub){if(query.get('run'))inspectResult(query.get('run'));if(query.get('frame'))seek(Math.max(0,Number(query.get('frame'))-1));}
+  if(query.get('collection')){if(platform.collection!==query.get('collection'))await openCollection(query.get('collection'));}
+  else if(query.get('tool_job')){platform.renderJob=query.get('tool_job');if(!$('platformDialog').open||platform.pane!=='tools')await openPlatform('tools');}
+  else if(hub&&HUB_LABELS[hub]&&(!$('platformDialog').open||platform.pane!==hub))await openPlatform(hub);
 }catch(error){notify(error.message);}})();tick();

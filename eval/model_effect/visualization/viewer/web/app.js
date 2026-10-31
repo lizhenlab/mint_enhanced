@@ -115,6 +115,68 @@ async function getJSON(u){ const r = await fetch(U(u)); if(!r.ok) throw new Erro
 let EP_TOTAL = 0, CKPT_TAG = '';
 let SMOOTHING_PRESETS = {};
 let UI_READY = false;
+
+// Presentation-only modes keep the same controls and numerical results mounted.
+const DIAGNOSTIC_VIEWS = ['config','results','tools'];
+let diagnosticView = 'config';
+function initialDiagnosticView(search, hash=''){
+  const query=new URLSearchParams(search);
+  if(DIAGNOSTIC_VIEWS.includes(query.get('view'))) return query.get('view');
+  const tool=query.get('tool');
+  if(['batch','benchmark','code'].includes(tool)||tool?.startsWith('analysis-')) return 'tools';
+  return ({'#diagnostic-results':'results','#diagnostic-tools':'tools'})[hash]||'config';
+}
+function syncDiagnosticView(){
+  document.body.dataset.diagnosticView=diagnosticView;
+  const config=$('#diagnosticConfiguration'),stage=$('#diagnosticStage'),empty=$('#diagnosticResultEmpty');
+  if(config) config.hidden=diagnosticView!=='config';
+  if(stage){ stage.hidden=diagnosticView==='config';stage.setAttribute('aria-labelledby','diagnosticTab-'+diagnosticView); }
+  if(empty) empty.hidden=diagnosticView!=='results'||state.loaded;
+  const resultHeader=$('#diagnostic-results');if(resultHeader) resultHeader.hidden=diagnosticView!=='results';
+  const tools=$('#diagnostic-tools');if(tools) tools.open=diagnosticView==='tools';
+  document.querySelectorAll('.diagnostic-steps button[data-diagnostic-view]').forEach(button=>{
+    const selected=button.dataset.diagnosticView===diagnosticView;
+    button.setAttribute('aria-selected',String(selected));button.tabIndex=selected?0:-1;
+    button.classList.toggle('active',selected);
+  });
+}
+function showDiagnosticView(mode,{focus=false,updateURL=true}={}){
+  if(!DIAGNOSTIC_VIEWS.includes(mode)) return;
+  if(mode!=='results'&&diagnosticView==='results'){
+    document.querySelectorAll('#blocks video').forEach(video=>video.pause());
+  }
+  diagnosticView=mode;syncDiagnosticView();
+  if(updateURL){
+    const url=new URL(location.href);url.searchParams.set('view',mode);
+    if(mode!=='tools') url.searchParams.delete('tool');
+    if(url.hash.startsWith('#diagnostic-')) url.hash='';
+    if(url.href!==location.href) window.history.replaceState(null,'',url.pathname+url.search+url.hash);
+  }
+  if(focus){
+    const target=mode==='config'?$('#diagnosticConfiguration'):$('#diagnosticStage');
+    if(target){target.tabIndex=-1;target.focus({preventScroll:true});}
+    window.scrollTo({top:0,behavior:'auto'});
+  }
+  if(mode==='results'&&state.loaded) requestDraw();
+}
+function wireDiagnosticViews(){
+  document.querySelectorAll('button[data-diagnostic-view]').forEach(button=>{
+    button.onclick=()=>showDiagnosticView(button.dataset.diagnosticView,{focus:true});
+  });
+  const tabs=[...document.querySelectorAll('.diagnostic-steps [role=tab]')];
+  tabs.forEach((button,index)=>button.addEventListener('keydown',event=>{
+    let next;if(event.key==='ArrowRight')next=(index+1)%tabs.length;
+    else if(event.key==='ArrowLeft')next=(index+tabs.length-1)%tabs.length;
+    else if(event.key==='Home')next=0;else if(event.key==='End')next=tabs.length-1;else return;
+    event.preventDefault();event.stopPropagation();showDiagnosticView(tabs[next].dataset.diagnosticView);
+    tabs[next].focus();
+  }));
+  window.addEventListener('hashchange',()=>{
+    const mode=({'#diagnostic-input':'config','#diagnostic-results':'results','#diagnostic-tools':'tools'})[location.hash];
+    if(mode)showDiagnosticView(mode,{focus:true});
+  });
+  showDiagnosticView(initialDiagnosticView(location.search,location.hash),{updateURL:false});
+}
 const clampEp = v => EP_TOTAL ? Math.min(EP_TOTAL-1, Math.max(0, Math.floor(+v||0))) : 0;
 function effectiveHandMode(){
   if(state.handMode!=='smooth') return state.handMode;
@@ -163,6 +225,7 @@ function queueInference(msg){
   state.epIdx = state.epOrdinal = state.epTotal = null;
   state.sourceName = state.sourcePath = null;
   buildPanels(false);
+  showDiagnosticView('config');
   setStep(state.modelReady ? '○ 设置待应用' : '○ 模型未加载', state.modelReady ? 'warn' : '');
   hideProg();
   markPending(msg || (state.modelReady
@@ -472,6 +535,7 @@ async function switchCkptPath(path){
 }
 
 async function init(){
+  wireDiagnosticViews();
   // ── 全局配置：浏览根 + 默认起点（模式不再全局固定，由浏览到的目录动态判定）──
   const cfg = await getJSON('/api/episodes');
   state.analysis.diversity_root=cfg.diversity_root||'';
@@ -648,7 +712,7 @@ function onLoadRawClick(){
     setRawOnly(false);
     const metrics=$('#metricsWrap'); if(metrics) metrics.style.display='';
     setStep('✓ 已返回 GT 对照','ok');
-    buildPanels(false); requestDraw();
+    buildPanels(false); showDiagnosticView('results',{focus:true}); requestDraw();
     console.log('[btn] 返回 GT/PRED 对照（复用已有结果）');
     return;
   }
@@ -734,6 +798,7 @@ async function loadEpisode(eid, {explicitInference=false, restoredHandMode=null}
         }
       }
       buildPanels(false);
+      showDiagnosticView('results',{focus:true});
     }
   }catch(e){ if(!state.stopped){ info.textContent = '加载失败：'+e.message; setStep('✗ 失败', 'err'); } }
   finally{ polling = false; try{ await pollDone; }catch(e){}   // 等轮询真正停下再恢复按钮
@@ -1123,6 +1188,7 @@ function buildPanels(preserveTime){
   renderOrderBar();
   updateExportButton();
   syncMujocoVideos(true);
+  syncDiagnosticView();
   if(loaded) requestDraw();
 }
 
@@ -2382,6 +2448,7 @@ function selectDatasetAnalysis(analysisType){
 }
 
 function showDatasetAnalysis(on){
+  if(on) showDiagnosticView('tools');
   if(on) state.hidden.delete('analysis'); else state.hidden.add('analysis');
   buildPanels(true);
   if(on){
@@ -2872,6 +2939,7 @@ function wireBatch(){
   renderBatch();
 }
 function showBatch(on){
+  if(on) showDiagnosticView('tools');
   if(on) state.hidden.delete('batch'); else state.hidden.add('batch');
   buildPanels(true);
   if(on){
@@ -3051,6 +3119,7 @@ function wireBench(){
 }
 // benchmark 面板已纳入栏目系统:显隐=切 state.hidden 并重建(与调节栏 👁 同一套);on 时滚动到位。
 function showBench(on){
+  if(on) showDiagnosticView('tools');
   if(on) state.hidden.delete('bench'); else state.hidden.add('bench');
   buildPanels(true);
   if(on){ const s = document.querySelector('#blocks section[data-pid="bench"]');
@@ -4759,6 +4828,7 @@ function wireLogDiff(){
 }
 // 配置/代码变更面板同样纳入栏目系统:显隐=切 state.hidden 并重建;on 时滚动到位。
 function showLd(on){
+  if(on) showDiagnosticView('tools');
   if(on) state.hidden.delete('logdiff'); else state.hidden.add('logdiff');
   buildPanels(true);
   if(on){ const s = document.querySelector('#blocks section[data-pid="logdiff"]');
@@ -4912,6 +4982,7 @@ function sceneItems(){
           gt:[{d:state.gt,dash:false,tag:'GT'}], pred:[{d:state.pred,dash:false,tag:'PRED'}]};
 }
 function draw(){
+  if(diagnosticView!=='results') return;
   const it = state.loaded ? sceneItems() : null;
   for(const id of state.order){
     if(state.hidden.has(id)) continue;
@@ -4992,12 +5063,14 @@ function syncMujocoButton(){
   }
 }
 function toggleMujocoPanel(){
+  showDiagnosticView('results');
   if(state.hidden.has('mujoco_3d')) state.hidden.delete('mujoco_3d');
   else state.hidden.add('mujoco_3d');
   console.log('[btn] MuJoCo 仿真 → '+(!state.hidden.has('mujoco_3d')));
   buildPanels(true);
 }
 function toggleRetargetPanel(){
+  showDiagnosticView('results');
   if(state.hidden.has('wuji_retarget_3d')) state.hidden.delete('wuji_retarget_3d');
   else state.hidden.add('wuji_retarget_3d');
   console.log('[btn] Wuji Hand Retargeting → '+(!state.hidden.has('wuji_retarget_3d')));
@@ -5015,6 +5088,7 @@ function renderOrderBar(){
   ul.querySelectorAll('.oeye').forEach(btn => btn.onclick = e=>{
     e.stopPropagation(); const id = btn.closest('li').dataset.id;
     if(state.hidden.has(id)) state.hidden.delete(id); else state.hidden.add(id);
+    if(!state.hidden.has(id)&&PANEL_BY[id]?.kind==='tool')showDiagnosticView('tools');
     buildPanels(true);
   });
   syncMujocoButton();
@@ -5122,10 +5196,10 @@ function wireSharedWorkspace(){
       const imported=await fetch('/api/comparison/legacy-results/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:match.id})});const comparison=await imported.json();if(!imported.ok)throw new Error(comparison.error||'导入失败');location.href='/compare?id='+encodeURIComponent(comparison.id);
     }catch(error){alert(error.message);}finally{button.disabled=false;}
   };
-  const query=new URLSearchParams(location.search),tool=query.get('tool');
+  const query=new URLSearchParams(location.search),tool=initialDiagnosticView(location.search,location.hash)==='tools'?query.get('tool'):null;
   if(tool==='batch')$('#batchBtn').click();
   if(tool==='benchmark')$('#benchBtn').click();
   if(tool==='code')$('#logDiffBtn').click();
   if(tool?.startsWith('analysis-'))selectDatasetAnalysis(tool.slice(9));
-  if(query.get('task')){const history=$('#taskHistory');history.open=true;history.scrollIntoView({block:'start'});}
+  if(query.get('task')){showDiagnosticView('config');const history=$('#taskHistory');history.open=true;history.scrollIntoView({block:'start'});}
 }

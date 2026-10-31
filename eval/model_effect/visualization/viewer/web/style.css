@@ -1171,3 +1171,33 @@ pre.ld-patch span { display: block; }
 .diagnostic-tools > p a {color:var(--cyan);}
 .diagnostic-tools .utility-rail {border:0;background:none;padding:0;}
 @media(max-width:900px){.control-grid{grid-template-columns:1fr}.diagnostic-breadcrumb{margin-left:0}.masthead{flex-wrap:wrap}.diagnostic-advanced-fields{grid-template-columns:1fr}.diagnostic-run-actions .inference-actions-label{flex-basis:100%}.diagnostic-run-actions #loadRawBtn{margin-left:0}.diagnostic-result-actions{align-items:flex-start}.diagnostic-result-actions .field{flex-basis:100%;max-width:320px}}
+
+/* Config, existing results and specialist tools are separate presentation views. */
+.diagnostic-context{margin:0 0 9px;padding:5px 10px;border-left-width:2px}
+.diagnostic-context>summary{font-size:11px;color:var(--mut);cursor:pointer}
+.diagnostic-context[open]>summary{color:var(--cyan)}
+.diagnostic-context p{margin:7px 0;font-size:12px}
+.diagnostic-steps{margin:0 0 8px;gap:5px}
+.diagnostic-steps button{padding:7px 14px;border:1px solid var(--line);border-radius:7px;background:var(--surface);color:var(--mut);font-size:12px;cursor:pointer}
+.diagnostic-steps button[aria-selected=true]{color:var(--acid);border-color:#91bd5480;background:#b9f45a0b}
+#diagnosticConfiguration[hidden],#diagnosticStage[hidden],#diagnosticResultEmpty[hidden]{display:none!important}
+body[data-diagnostic-view=results] .control-deck,body[data-diagnostic-view=tools] .control-deck{padding-top:12px;padding-bottom:9px}
+body[data-diagnostic-view=results] .masthead,body[data-diagnostic-view=tools] .masthead{margin-bottom:9px}
+body[data-diagnostic-view=results] .status-rail,body[data-diagnostic-view=tools] .status-rail{margin:0;min-height:32px;padding:6px 10px}
+body[data-diagnostic-view=results] #diagnostic-tools{display:none}
+body[data-diagnostic-view=results] #blocks>section[data-pid=analysis],body[data-diagnostic-view=results] #blocks>section[data-pid=batch],body[data-diagnostic-view=results] #blocks>section[data-pid=bench],body[data-diagnostic-view=results] #blocks>section[data-pid=logdiff]{display:none}
+body[data-diagnostic-view=tools] #blocks>section:not([data-pid=analysis]):not([data-pid=batch]):not([data-pid=bench]):not([data-pid=logdiff]),body[data-diagnostic-view=tools] #blocks>.empty-state,body[data-diagnostic-view=tools] #metricsWrap{display:none}
+body[data-diagnostic-view=tools] #diagnosticStage{display:flex;flex-direction:column}
+body[data-diagnostic-view=tools] #diagnostic-tools{order:-1;padding:11px 14px;margin:0 0 14px}
+body[data-diagnostic-view=tools] #diagnostic-tools>summary{cursor:default;pointer-events:none;list-style:none;font-weight:650}
+body[data-diagnostic-view=tools] #diagnostic-tools>summary::-webkit-details-marker{display:none}
+body[data-diagnostic-view=tools] #diagnostic-tools>p{margin:8px 0}
+body[data-diagnostic-view=results] #diagnostic-results{margin:0 0 12px;padding:0 0 10px}
+body[data-diagnostic-view=results] .diagnostic-result-header>.diagnostic-section-title{margin:0 0 8px}
+body[data-diagnostic-view=results] .diagnostic-section-title>span{display:none}
+body[data-diagnostic-view=results] .diagnostic-result-actions{gap:7px}
+body[data-diagnostic-view=results] #metricsWrap>.cap{font-size:11px;line-height:1.6;max-width:100%}
+#diagnosticResultEmpty .empty-state p{margin:10px 0}
+#diagnosticResultEmpty button{padding:8px 14px;border:1px solid var(--line);border-radius:7px;color:var(--cyan);background:var(--surface-2);cursor:pointer}
+.diagnostic-loss-guide{position:static!important;padding:8px 10px;cursor:pointer;color:var(--mut);font-size:11px}
+.diagnostic-loss-guide p{margin:9px 0 0;line-height:1.7;max-width:1100px}

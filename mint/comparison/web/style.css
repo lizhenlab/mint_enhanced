@@ -220,3 +220,17 @@ dialog{color:var(--text);background:var(--surface);border:1px solid #426050;bord
 .evaluation-routes button.active{color:var(--lime);border-color:#91bd5480;background:#b9f45a0b}
 .task-purpose{margin:0 0 16px;padding:10px 12px;border-left:2px solid var(--cyan);background:var(--surface)}
 @media(max-width:900px){.tool-groups{grid-template-columns:1fr}.tool-group{padding:14px}.tool-group .tool-links{flex-direction:row;flex-wrap:wrap}.tool-group .tool-links a{flex:1;min-width:140px}}
+/* Shared chrome uses one height contract across comparison and module views. */
+:root{--workspace-header-height:82px}
+#appMasthead{height:var(--workspace-header-height);padding-bottom:34px}
+.platform-navigation{height:34px}.platform-navigation button{min-height:30px}
+.app-shell{height:calc(100dvh - var(--workspace-header-height))}
+.platform-dialog.workspace-page{inset:var(--workspace-header-height) 0 0;height:calc(100dvh - var(--workspace-header-height))}
+.task-sidebar,.sidebar-backdrop{top:var(--workspace-header-height)}
+.workspace-page>.dialog-heading{padding:8px 20px;min-height:44px;gap:12px}
+.workspace-page>.dialog-heading h2{font-size:17px}
+#closePlatform{font-size:12px;white-space:nowrap;min-height:32px;flex-shrink:0}
+.platform-page-open .masthead-divider,.platform-page-open .masthead-start h1{display:none}
+.module-context{font-size:12px;padding-bottom:8px}
+.platform-body input,.platform-body select,.platform-body textarea,.platform-body button{font-size:12px}
+@media(max-width:760px){:root{--workspace-header-height:78px}.app-shell{height:calc(100dvh - var(--workspace-header-height));min-height:0}.platform-dialog.workspace-page{inset:var(--workspace-header-height) 0 0;height:calc(100dvh - var(--workspace-header-height))}#appMasthead{padding-bottom:34px}.workspace-page>.dialog-heading{padding:8px 12px}.platform-navigation button{font-size:12px}}

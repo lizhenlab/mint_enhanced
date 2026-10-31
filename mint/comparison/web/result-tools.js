@@ -1,7 +1,7 @@
 'use strict';
 
 // Display preferences refer to immutable runs; they never change GT roles or inference options.
-const resultView={comparison:null,selected:[],reference:null,expanded:null,known:[],signature:'',protocolSignature:''};
+const resultView={comparison:null,selected:[],reference:null,candidate:null,layout:'pair',pairSide:'candidate',expanded:null,known:[],signature:'',protocolSignature:''};
 const RESULT_PREFERENCES='mint.compare.results.v1';
 
 function defaultResultSelection(runs){
@@ -61,13 +61,69 @@ function runProtocol(run,sample){
   if(result.selected_checkpoint)rows.push(['检查点',result.selected_checkpoint],['模型配置',result.selected_config||'原生配置']);
   return {short:short.join(' · '),rows};
 }
+
+// Layout is a viewing preference; overview selections and result provenance stay intact.
+function resultCandidate(runs,view){
+  const ids=new Set(runs.map(run=>run.id));
+  return ids.has(view.candidate)&&view.candidate!==view.reference?view.candidate:
+    (view.selected||[]).find(id=>ids.has(id)&&id!==view.reference)||runs.find(run=>run.id!==view.reference)?.id||null;
+}
+function displayResultIds(runs,view,width=1000){
+  if(view.expanded&&runs.some(run=>run.id===view.expanded))return [view.expanded];
+  const ids=new Set(runs.map(run=>run.id)),reference=ids.has(view.reference)?view.reference:runs[0]?.id;
+  if(view.layout==='overview')return [reference,...(view.selected||[])].filter((id,index,all)=>ids.has(id)&&all.indexOf(id)===index);
+  const candidate=resultCandidate(runs,{...view,reference});
+  if(width<620&&candidate)return [view.pairSide==='reference'?reference:candidate];
+  return [reference,candidate].filter((id,index,all)=>id&&all.indexOf(id)===index);
+}
+function comparisonGridPlan(width,height,count,layout='pair'){
+  const overview=layout==='overview';
+  let columns=overview?Math.max(1,Math.min(4,count,Math.floor(width/320)||1)):Math.max(1,Math.min(count,width<620?1:2));
+  if(overview&&count===4&&columns===3)columns=2;
+  return {columns,rows:Math.ceil(count/columns),scroll:overview&&count>columns,rowHeight:overview?Math.max(360,Math.floor(height)):Math.max(0,Math.floor(height))};
+}
+function comparisonMetricSelection(runs,view){
+  // A narrow-screen pager or a focused card changes the viewport, not the pair being scored.
+  const reference=runs.some(run=>run.id===view.reference)?view.reference:runs[0]?.id||null;
+  return {selected:displayResultIds(runs,{...view,reference,expanded:null},Infinity),reference};
+}
+function currentResultSelection(){return comparisonMetricSelection(state.comparison?.runs||[],resultView);}
+function syncComparisonLayout(){
+  if(!state.comparison)return;
+  const host=$('runs'),width=host.clientWidth||window.innerWidth,plan=comparisonGridPlan(width,host.clientHeight,visibleResultCards().length,resultView.expanded?'pair':resultView.layout);
+  host.dataset.layout=resultView.expanded?'single':resultView.layout;host.style.setProperty('--fit-columns',plan.columns);host.style.setProperty('--overview-row-height',plan.rowHeight+'px');
+  if($('resultLayout'))$('resultLayout').value=resultView.layout;
+  if($('pairSideControl'))$('pairSideControl').hidden=resultView.layout!=='pair'||width>=620||!resultView.candidate;
+  if($('pairSide'))$('pairSide').value=resultView.pairSide;
+  if($('candidateControl'))$('candidateControl').hidden=resultView.layout!=='pair'||!resultView.candidate;
+  if($('candidateRun'))$('candidateRun').value=resultView.candidate||'';
+}
+function initializeComparisonToolbar(){
+  const toolbar=document.querySelector('.result-toolbar'),old=document.querySelector('.view-toolbar');
+  const layout=selectInput([['pair','基准 + 候选'],['overview','结果总览']],'pair');layout.id='resultLayout';layout.setAttribute('aria-label','比较布局');
+  const candidate=selectInput([],'');candidate.id='candidateRun';const candidateField=inputLabel('候选',candidate);candidateField.id='candidateControl';candidateField.className='inline-label candidate-control';
+  const side=selectInput([['candidate','候选结果'],['reference','对照基准']],'candidate');side.id='pairSide';const sideField=inputLabel('当前画面',side);sideField.id='pairSideControl';sideField.className='inline-label';sideField.hidden=true;
+  const advanced=el('details',undefined,'comparison-options');advanced.id='comparisonOptions';advanced.append(el('summary','显示与诊断'));const content=el('div',undefined,'comparison-options-content');advanced.append(content);
+  const picker=$('resultPicker');picker.querySelector('.hint').textContent='勾选总览中展示的结果；“基准 + 候选”模式通过候选菜单切换。导出可选择全部结果或当前可见结果。';
+  content.append(picker,$('comparePair'),$('showAllResults'),old.querySelector('label[title]'),old.querySelector('label:not([title])'),old.querySelector('.view-options'),$('resetView'),$('snapshot'),$('protocolPicker'),$('frameInspector'));
+  const segment=old.querySelector('.segmented');toolbar.prepend(layout);$('referenceRun').closest('label').after(candidateField,sideField);toolbar.append(segment,advanced,$('focusMode'));old.hidden=true;
+  $('resultPicker').querySelector('summary').title='仅影响总览选列，不改变基准和候选';
+  layout.onchange=()=>{resultView.layout=layout.value;resultView.expanded=null;saveResultPreferences();applyResultVisibility();render(true);ensureFrame(state.frame).then(()=>render(true));};
+  candidate.onchange=()=>{resultView.candidate=candidate.value;resultView.pairSide='candidate';resultView.expanded=null;saveResultPreferences();applyResultVisibility();render(true);ensureFrame(state.frame).then(()=>render(true));if(state.metricsRows)renderMetrics(state.metricsRows);};
+  side.onchange=()=>{resultView.pairSide=side.value;saveResultPreferences();applyResultVisibility();render(true);ensureFrame(state.frame).then(()=>render(true));};
+  document.addEventListener('click',event=>{if(advanced.open&&!advanced.contains(event.target))advanced.open=false;});
+  document.addEventListener('keydown',event=>{if(event.key==='Escape')advanced.open=false;});
+  if(typeof ResizeObserver!=='undefined'){const observer=new ResizeObserver(()=>{if(state.comparison&&hostVisible())requestAnimationFrame(()=>{applyResultVisibility();render(true);});});observer.observe($('runs'));}
+  function hostVisible(){return $('runs').clientWidth>0&&$('runs').clientHeight>0;}
+}
+
 function visibleResultCards(){
-  if(resultView.expanded)return [...state.cards.values()].filter(card=>card.run.id===resultView.expanded);
-  const cards=[...state.cards.values()].filter(card=>resultView.selected.includes(card.run.id));
+  const visibleIds=displayResultIds(state.comparison?.runs||[],resultView,$('runs').clientWidth||window.innerWidth);
+  const cards=[...state.cards.values()].filter(card=>visibleIds.includes(card.run.id));
   return cards.sort((a,b)=>Number(b.run.id===resultView.reference)-Number(a.run.id===resultView.reference));
 }
 function saveResultPreferences(){
-  try{const saved=JSON.parse(localStorage.getItem(RESULT_PREFERENCES)||'{}');saved[state.comparison.id]={selected:resultView.selected,reference:resultView.reference};const entries=Object.entries(saved).slice(-40);localStorage.setItem(RESULT_PREFERENCES,JSON.stringify(Object.fromEntries(entries)));}catch(_){}
+  try{const saved=JSON.parse(localStorage.getItem(RESULT_PREFERENCES)||'{}');saved[state.comparison.id]={selected:resultView.selected,reference:resultView.reference,candidate:resultView.candidate,layout:resultView.layout,pairSide:resultView.pairSide};const entries=Object.entries(saved).slice(-40);localStorage.setItem(RESULT_PREFERENCES,JSON.stringify(Object.fromEntries(entries)));}catch(_){}
 }
 function applyResultVisibility(){
   const visible=visibleResultCards(),visibleIds=new Set(visible.map(card=>card.run.id)),host=$('runs');
@@ -80,14 +136,14 @@ function applyResultVisibility(){
   // Reparenting a card may interrupt its video decoder. CSS order pins the reference without moving media.
   for(const [index,card]of visible.entries()){card.node.style.order=index;card.node.setAttribute('aria-posinset',String(index+1));card.node.setAttribute('aria-setsize',String(visible.length));}
   host.style.setProperty('--columns',Math.max(1,Math.min(3,visible.length)));host.dataset.count=visible.length;host.dataset.many=String(visible.length>3);
-  $('resultSelectionCount').textContent=`${resultView.expanded?'单列放大':'显示结果'} ${visible.length}/${state.comparison.runs.length}`;
+  $('resultSelectionCount').textContent=`总览选列 ${resultView.selected.length}/${state.comparison.runs.length}`;
   for(const check of $('resultSelectionList').querySelectorAll('input')){check.checked=resultView.selected.includes(check.value);check.disabled=check.value===resultView.reference;}
-  $('referenceRun').value=resultView.reference||'';
+  $('referenceRun').value=resultView.reference||'';const candidateSelect=$('candidateRun'),eligible=(state.comparison.runs||[]).filter(run=>run.id!==resultView.reference),candidateSignature=JSON.stringify(eligible.map(run=>[run.id,run.label,run.status]));if(candidateSelect&&candidateSelect.dataset.signature!==candidateSignature){candidateSelect.dataset.signature=candidateSignature;candidateSelect.replaceChildren();for(const run of eligible){const option=el('option',run.label+' · '+(STAGES[run.status]||run.status||''));option.value=run.id;candidateSelect.append(option);}}syncComparisonLayout();
 }
 async function changeResultSelection(selection){
   if(!state.comparison)return;
   resultView.expanded=null;
-  Object.assign(resultView,normalizeResultSelection(state.comparison.runs,selection));
+  Object.assign(resultView,normalizeResultSelection(state.comparison.runs,selection));resultView.candidate=resultCandidate(state.comparison.runs,resultView);
   saveResultPreferences();applyResultVisibility();render(true);
   if(state.metricsRows)renderMetrics(state.metricsRows);
   const token=state.pollToken;await ensureFrame(state.frame);if(token===state.pollToken)render(true);
@@ -95,11 +151,12 @@ async function changeResultSelection(selection){
 function syncResultTools(value){
   if(resultView.comparison!==value.id){
     let saved;try{saved=JSON.parse(localStorage.getItem(RESULT_PREFERENCES)||'{}')[value.id];}catch(_){}
-    Object.assign(resultView,normalizeResultSelection(value.runs,saved),{comparison:value.id,expanded:null,known:value.run_ids.slice(),signature:'',protocolSignature:''});
+    Object.assign(resultView,normalizeResultSelection(value.runs,saved),{comparison:value.id,candidate:saved?.candidate||null,layout:saved?.layout==='overview'?'overview':'pair',pairSide:saved?.pairSide==='reference'?'reference':'candidate',expanded:null,known:value.run_ids.slice(),signature:'',protocolSignature:''});
   }else{
     const added=value.run_ids.filter(id=>!resultView.known.includes(id));
     Object.assign(resultView,normalizeResultSelection(value.runs,{selected:[...resultView.selected,...added],reference:resultView.reference}));resultView.known=value.run_ids.slice();
   }
+  resultView.candidate=resultCandidate(value.runs,resultView);
   const signature=JSON.stringify(value.runs.map(run=>[run.id,run.label,!!run.result,run.result?.reference_role]));
   if(resultView.signature!==signature){
     const inspected=$('inspectRun').value;
@@ -127,11 +184,12 @@ function syncResultTools(value){
   applyResultVisibility();
 }
 function initializeResultTools(){
+  initializeComparisonToolbar();
   $('referenceRun').onchange=()=>changeResultSelection({selected:[...resultView.selected,$('referenceRun').value],reference:$('referenceRun').value}).catch(error=>notify(error.message));
-  $('showAllResults').onclick=()=>changeResultSelection({selected:state.comparison.runs.map(run=>run.id),reference:resultView.reference}).catch(error=>notify(error.message));
-  $('comparePair').onclick=()=>{const other=state.comparison.runs.find(run=>run.id!==resultView.reference&&resultView.selected.includes(run.id))||state.comparison.runs.find(run=>run.id!==resultView.reference);changeResultSelection({selected:[resultView.reference,...(other?[other.id]:[])],reference:resultView.reference}).catch(error=>notify(error.message));};
+  $('showAllResults').onclick=()=>{resultView.layout='overview';changeResultSelection({selected:state.comparison.runs.map(run=>run.id),reference:resultView.reference}).catch(error=>notify(error.message));};
+  $('comparePair').onclick=()=>{resultView.layout='pair';resultView.expanded=null;saveResultPreferences();applyResultVisibility();render(true);ensureFrame(state.frame).then(()=>render(true));};
   $('metricsScope').onchange=()=>{if(state.metricsRows)renderMetrics(state.metricsRows);};
-  $('manageProtocol').onclick=event=>{event.stopPropagation();setWorkspaceTab('view');$('protocolPicker').open=true;};
+  $('manageProtocol').onclick=event=>{event.stopPropagation();setWorkspaceTab('view');$('comparisonOptions').open=true;$('protocolPicker').open=true;};
   $('manageReport').onclick=()=>$('downloadReport').click();
   $('refreshMetrics').onclick=()=>{state.metricsRows=null;state.metricRequest=null;loadComparisonMetrics().catch(error=>notify(error.message));};
   document.addEventListener('click',event=>{for(const id of ['resultPicker','protocolPicker','frameInspector']){const picker=$(id);if(picker.open&&!picker.contains(event.target))picker.open=false;}});
@@ -150,7 +208,7 @@ const METRIC_GROUPS=[
 ];
 function renderMetrics(rows){
   const host=$('metrics');host.replaceChildren();
-  const filtered=filterMetricRows(rows,resultView,$('metricsScope').value),names=new Map(state.comparison.runs.map(run=>[run.id,run.label]));
+  const filtered=filterMetricRows(rows,currentResultSelection(),$('metricsScope').value),names=new Map(state.comparison.runs.map(run=>[run.id,run.label]));
   const reference=names.get(resultView.reference)||'尚未选择';
   $('metricsScopeNote').textContent=filtered.some(row=>row.scope==='error_against_declared_GT')?'每组配对分别注明参考误差或算法差异。GT 为用户声明的参考来源；固定对照基准不会改变 GT 角色。':'当前显示算法之间的差异。没有声明的 GT，不据此生成精度排名；固定基准仅用于选列和数值对照。';
   const overview=el('div',undefined,'metric-overview');
@@ -167,4 +225,4 @@ function renderMetrics(rows){
   }
 }
 
-if(typeof module!=='undefined')module.exports={defaultResultSelection,normalizeResultSelection,toggleResultSelection,metricValue,metricPairScope,filterMetricRows,handPostprocessLabel,runProtocol};
+if(typeof module!=='undefined')module.exports={defaultResultSelection,normalizeResultSelection,toggleResultSelection,metricValue,metricPairScope,filterMetricRows,handPostprocessLabel,runProtocol,resultCandidate,displayResultIds,comparisonGridPlan,comparisonMetricSelection};

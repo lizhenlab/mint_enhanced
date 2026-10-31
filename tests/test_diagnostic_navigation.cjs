@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const source=fs.readFileSync(require.resolve('../eval/model_effect/visualization/viewer/web/app.js'),'utf8');
 const nav=source.slice(source.indexOf('// Diagnostic section navigation'),source.indexOf('// 新视频帧或交互使视图失效时才重画'));
-function fixture({loaded=true,width=1280,nums={}}={}){
+function fixture({loaded=true,width=1280,nums={},metrics={}}={}){
   const events={},calls=[],frames=[];let context;
   function match(node,part){
     const id=part.match(/#([\w-]+)/),cl=part.match(/\.([\w-]+)/),tag=part.match(/^[a-z]+/i),attr=part.match(/\[data-(\w+)(?:="([^"]*)")?\]/);
@@ -28,12 +28,12 @@ function fixture({loaded=true,width=1280,nums={}}={}){
   }
   const body=new Node('body'),document={body,activeElement:null,createElement:tag=>new Node(tag),querySelector:s=>body.querySelector(s),querySelectorAll:s=>body.querySelectorAll(s),addEventListener:(name,fn)=>events['document:'+name]=fn};
   const add=(id,parent=body,tag='div')=>{const node=new Node(tag);node.id=id;parent.append(node);return node;};
-  const stage=add('diagnosticStage'),sidebar=add('sidebar',stage),menu=add('diagnosticSectionMenu',sidebar),list=add('orderBar',menu,'ul');sidebar.rect={top:350,bottom:410,height:60};
+  const stage=add('diagnosticStage'),sidebar=add('sidebar',stage),menu=add('diagnosticSectionMenu',sidebar),list=add('orderBar',menu,'ul');sidebar.rect={top:350,bottom:410,height:60};add('diagnosticSectionsHelp',menu,'p');
   add('toggleDiagnosticSections',sidebar,'button');add('diagnosticCurrentSection',sidebar);const content=add('diagnosticStageContent',stage);add('diagnostic-results',content);const blocks=add('blocks',content),wrap=add('benchWrap',content);
   const panels=[{id:'both',name:'视频',kind:'video'},{id:'world',name:'世界三维',kind:'scene'},{id:'robot',name:'MuJoCo',kind:'mujoco'},{id:'nums',name:'数值',kind:'nums'},{id:'loss',name:'损失',kind:'loss'},{id:'bench',name:'评测',kind:'tool',wrapId:'benchWrap'}],PANEL_BY=Object.fromEntries(panels.map(p=>[p.id,p]));
   function addSection(id){const section=add('diagnostic-panel-'+id,blocks,'section');section.dataset.pid=id;section.className='panel';return section;}
   const videoSection=addSection('both'),video=new Node('video');video.currentTime=12.5;video.pause=()=>calls.push('pause');videoSection.append(video);addSection('world');
-  const state={loaded,nums,no_truth:false,rawOnly:false,order:panels.map(p=>p.id),hidden:new Set(['robot','bench']),panels:{both:{video}}};
+  const state={loaded,nums,metrics,no_truth:false,rawOnly:false,order:panels.map(p=>p.id),hidden:new Set(['robot','bench']),panels:{both:{video}}};
   const sandbox={document,state,PANEL_BY,PERSISTENT_PANELS:{benchWrap:wrap},diagnosticView:'results',info:{},Date,
     window:{innerWidth:width,innerHeight:800,scrollY:100,addEventListener:(name,fn)=>events[name]=fn,scrollTo:value=>calls.push(['scroll',value]),matchMedia:()=>({matches:false})},
     getComputedStyle:()=>({position:'static'}),requestAnimationFrame:fn=>{frames.push(fn);return frames.length;},$:s=>document.querySelector(s),
@@ -50,6 +50,28 @@ test('visible section navigation preserves DOM, playback time and does not rebui
   assert.equal(f.calls.includes('build'),false);assert.equal(f.video.currentTime,12.5);assert.equal(f.document.querySelector('#blocks section[data-pid="both"]'),f.videoSection);
   assert.equal(f.list.querySelector('li[data-id="world"] .onm').attributes['aria-current'],'location');
   assert.ok(f.calls.some(x=>Array.isArray(x)&&x[0]==='scroll'));
+});
+test('reading mode exposes only the current category names and short states until management is explicit',()=>{
+  const f=fixture();f.run('renderOrderBar()');
+  assert.equal(f.list.dataset.managing,'false');assert.equal(f.list.querySelector('li[data-id="bench"]').hidden,true);
+  assert.ok(f.list.querySelectorAll('li[data-id]').every(row=>row.draggable===false));
+  assert.ok(f.list.querySelectorAll('.section-manage-control').every(control=>control.hidden));
+  const row=f.list.querySelector('li[data-id="world"]'),event={altKey:true,key:'ArrowUp',preventDefault(){},stopPropagation(){}};row.querySelector('.onm').onkeydown(event);
+  assert.equal(f.state.order[0],'both','reading mode cannot reorder through a hidden keyboard shortcut');
+  const manage=f.document.querySelector('#manageDiagnosticSections');manage.onclick();
+  assert.equal(manage.attributes['aria-pressed'],'true');assert.equal(f.list.dataset.managing,'true');
+  assert.ok(f.list.querySelectorAll('.section-manage-control').every(control=>!control.hidden));
+  manage.onclick();assert.equal(manage.attributes['aria-pressed'],'false');assert.equal(f.calls.includes('build'),false);assert.equal(f.video.currentTime,12.5);
+});
+test('category switching preserves order and selected sections without opening a tool',async()=>{
+  const f=fixture();f.run("renderOrderBar();navigateDiagnosticSection('world')");const order=f.state.order.slice();
+  const results=f.document.querySelector('#diagnostic-sections-results'),tools=f.document.querySelector('#diagnostic-sections-tools');tools.onclick();
+  assert.equal(f.sandbox.diagnosticView,'tools');assert.equal(tools.attributes['aria-selected'],'true');assert.equal(f.list.querySelector('li[data-id="world"]').hidden,true);assert.equal(f.list.querySelector('li[data-id="bench"]').hidden,false);
+  assert.equal(f.state.hidden.has('bench'),true);assert.equal(f.wrap.parentNode.dataset.pid,undefined);assert.equal(f.calls.some(x=>Array.isArray(x)&&x[0]==='metadata'),false);
+  results.onclick();assert.equal(f.list.querySelector('li[data-id="world"] .onm').attributes['aria-current'],'location');
+  f.run("navigateDiagnosticSection('bench')");await Promise.resolve();results.onclick();tools.onclick();
+  assert.equal(f.list.querySelector('li[data-id="bench"] .onm').attributes['aria-current'],'location');
+  assert.deepEqual(f.state.order,order);assert.equal(f.calls.includes('build'),false);assert.equal(f.video.currentTime,12.5);
 });
 test('hidden robot navigation requires its separate explicit generate action',()=>{
   const f=fixture();f.run("renderOrderBar();navigateDiagnosticSection('robot')");
@@ -68,10 +90,23 @@ test('unloaded data and missing numeric/GT supervision have honest empty states'
   f.state.loaded=true;assert.equal(f.run("diagnosticSectionAvailability(PANEL_BY.nums).ready"),false);
   f.state.no_truth=true;f.run("navigateDiagnosticSection('loss')");assert.match(f.document.querySelector('#diagnosticSectionNotice p').textContent,/没有 GT/);assert.equal(f.document.querySelector('#diagnosticSectionNotice button').textContent,'查看已有结果');
 });
+test('GT and prediction without metric data never advertise an available loss panel',()=>{
+  const f=fixture({metrics:null});f.run("renderOrderBar();navigateDiagnosticSection('loss')");
+  assert.equal(f.run('diagnosticSectionAvailability(PANEL_BY.loss).ready'),false);
+  assert.equal(f.list.querySelector('li[data-id="loss"] .section-state').textContent,'暂无结果');
+  assert.match(f.document.querySelector('#diagnosticSectionNotice p').textContent,/未提供逐帧损失/);
+  assert.equal(f.document.querySelector('#diagnosticSectionNotice button').textContent,'查看已有结果');assert.equal(f.calls.includes('build'),false);
+});
 test('keyboard and drag ordering change CSS order without rebuilding mounted media',()=>{
-  const f=fixture();f.run('renderOrderBar()');const button=f.list.querySelector('li[data-id="world"] .onm'),event={altKey:true,key:'ArrowUp',preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;}};button.onkeydown(event);
+  const f=fixture();f.run('renderOrderBar()');f.document.querySelector('#manageDiagnosticSections').onclick();const button=f.list.querySelector('li[data-id="world"] .onm'),event={altKey:true,key:'ArrowUp',preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;}};button.onkeydown(event);
   assert.equal(f.state.order[0],'world');assert.equal(event.prevented,true);assert.equal(event.stopped,true);assert.equal(f.document.querySelector('#blocks section[data-pid="world"]').style.order,0);assert.equal(f.calls.includes('build'),false);assert.equal(f.video.currentTime,12.5);
   f.run("applyDiagnosticSectionOrder('world',{before:'loss'})");assert.equal(f.state.order.indexOf('world')+1,f.state.order.indexOf('loss'));assert.equal(f.calls.includes('build'),false);
+});
+test('category sorting keeps the other category in its original global slots and keyboard focus skips it',()=>{
+  const f=fixture();f.state.order=['both','bench','world','robot','nums','loss'];f.run('renderOrderBar()');f.document.querySelector('#manageDiagnosticSections').onclick();
+  f.run("applyDiagnosticSectionOrder('world',{delta:-1})");assert.equal(f.state.order[0],'world');assert.equal(f.state.order[1],'bench');assert.equal(f.state.order[2],'both');
+  const button=f.list.querySelector('li[data-id="world"] .onm');button.onkeydown({key:'End',preventDefault(){},stopPropagation(){}});assert.equal(f.document.activeElement,f.list.querySelector('li[data-id="loss"] .onm'));
+  assert.equal(f.calls.includes('build'),false);assert.equal(f.video.currentTime,12.5);
 });
 test('narrow menu closes on navigation and scroll offset reserves its future sticky height',()=>{
   const f=fixture({width:820});f.run('wireDiagnosticSections()');const toggle=f.document.querySelector('#toggleDiagnosticSections');toggle.onclick();assert.equal(toggle.attributes['aria-expanded'],'true');

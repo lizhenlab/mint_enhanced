@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MINT 单算法诊断 · 算法工作台</title>
-<link rel="stylesheet" href="style.css?v=20261101-section-sidebar">
+<link rel="stylesheet" href="style.css?v=20261101-diagnostic-workflow">
 </head>
 <body data-diagnostic-view="config">
 <div id="app">
@@ -27,6 +27,11 @@
 
   <details class="diagnostic-context"><summary>用途与算法工作台的关系</summary><p>常规推理和算法横向对照请使用算法工作台。这里用于分窗、平滑、手形、内参与逐帧 loss 诊断；已有预测可加入同输入比较，设置不会自动同步。</p></details>
   <nav class="diagnostic-steps" role="tablist" aria-label="单算法诊断视图"><button id="diagnosticTab-config" type="button" role="tab" data-diagnostic-view="config" aria-selected="true" aria-controls="diagnosticConfiguration">配置与运行</button><button id="diagnosticTab-results" type="button" role="tab" data-diagnostic-view="results" aria-selected="false" aria-controls="diagnosticStage" tabindex="-1">结果与损失</button><button id="diagnosticTab-tools" type="button" role="tab" data-diagnostic-view="tools" aria-selected="false" aria-controls="diagnosticStage" tabindex="-1">专项工具</button></nav>
+  <div id="diagnosticContextBar" class="diagnostic-context-bar" aria-label="当前诊断输入与模型">
+    <span class="diagnostic-context-item"><span>输入</span><strong id="diagnosticInputLabel">尚未选择输入</strong></span>
+    <span class="diagnostic-context-item"><span>模型</span><strong id="diagnosticModelLabel">等待模型信息</strong></span>
+    <span id="diagnosticResultState" class="diagnostic-result-state" role="status">尚无结果</span>
+  </div>
   <div class="status-rail">
     <span id="stepInfo" class="step" title="当前进行到哪一步">待操作</span>
     <span id="progWrap" class="progwrap" title="加载进度（推理为确定进度，其余为不确定动画）" style="display:none"><span id="progBar" class="progbar"></span></span>
@@ -34,22 +39,32 @@
   </div>
 
   <section id="diagnosticConfiguration" role="tabpanel" aria-labelledby="diagnosticTab-config">
-  <details class="control-card" id="taskHistory" data-i18n-ignore>
-    <summary>任务记录与恢复 <span id="cacheUsage"></span></summary>
-    <button type="button" id="refreshTasks">刷新</button>
-    <div id="taskList">加载中</div>
-  </details>
+
   <div class="diagnostic-section-title" id="diagnostic-input"><h2>1 · 输入与运行</h2><span>先选模型和视频，再显式开始推理。</span></div>
   <div class="diagnostic-run-actions">    <span id="inferenceActions" class="inference-actions">
       <span class="inference-actions-label">运行当前 MINT 输入</span>
-      <button id="loadModelBtn" class="primary secondary-action" title="在每张可见 GPU 上常驻一个当前 ckpt 模型副本；须加载完成后才能推理">加载模型</button>
-      <button id="loadBtn" class="primary infer-action" title="只有点击此按钮才会运行模型；选择输入和参数不会自动推理">▶ 开始推理</button>
-    <button id="loadRawBtn" class="ghost" aria-pressed="false" title="只看原始标注，不跑模型推理；再次点击返回已有 GT 对照">仅看原始 GT</button>
+      <button id="loadModelBtn" disabled class="primary secondary-action" title="加载当前检查点；推理时按调度策略分配 GPU，须模型就绪后开始">加载模型</button>
+      <button id="loadBtn" disabled class="primary infer-action" title="只有点击此按钮才会运行模型；选择输入和参数不会自动推理">▶ 开始推理</button>
+    <button id="loadRawBtn" disabled class="ghost" aria-pressed="false" title="只看原始标注，不跑模型推理；再次点击返回已有 GT 对照">仅看原始 GT</button>
     </span></div>
   <div class="control-grid">
     <section class="control-card source-card">
       <div class="control-title"><span>01</span> 模型与输入</div>
-      <div class="field wide-field checkpoint-field"><label>模型检查点</label>
+
+      <div class="diagnostic-input-browser">  <span class="diagnostic-field-label">输入目录</span>
+  <div class="side-hint">进入目录浏览；选择视频或 Episode 后，点击“开始推理”才会计算。</div>
+  <span class="brow" id="inBrow"><span id="inNav"><span id="inCrumb" class="crumb" title="已选路径,点某层可回退"></span><button id="inUp" title="返回上一级目录" hidden>⬆ 上一级</button></span>
+    <span id="inList" class="browlist" title="点目录进入 / 点视频文件选中输入（不会自动推理）"></span></span>
+</div>
+      <div id="epWrap" class="field episode-field" style="display:none"><label for="ep">Episode</label>
+        <span class="episode-stepper"><button id="epPrev" title="上一个">←</button>
+          <input id="ep" type="number" min="0" value="0" step="1">
+          <button id="epNext" title="下一个">→</button></span>
+        <span id="epTotal" class="k"></span>
+        <span id="epScan" class="step" style="display:none"></span>
+        <span id="epScanProg" class="progwrap" title="枚举 episode 进度" style="display:none"><span class="progbar"></span></span></div>
+      <details id="diagnosticModelBrowser" class="diagnostic-model-browser"><summary>更换模型 / 浏览检查点</summary>
+      <div class="field wide-field checkpoint-field"><label for="ckptPath">模型检查点路径</label>
         <span class="brow">
           <span class="checkpoint-path-row"><input id="ckptPath" type="text" spellcheck="false"
               placeholder="输入 checkpoint 文件或目录路径">
@@ -58,33 +73,22 @@
           <span id="ckptCrumb" class="crumb" title="当前浏览目录，点某层可回退"></span>
           <span id="ckptList" class="browlist" title="可浏览任意服务器目录；点权重文件直接选择，或进入含权重的目录后选择当前目录"></span>
         </span></div>
-      <div class="diagnostic-input-browser">  <label>输入目录</label>
-  <div class="side-hint">默认起点 output/…/lerobot；可沿面包屑上溯。到 lerobot 目录后选择 Episode；普通目录点击视频只会选中，不会自动推理。</div>
-  <span class="brow" id="inBrow"><span id="inNav"><span id="inCrumb" class="crumb" title="已选路径,点某层可回退"></span><button id="inUp" title="返回上一级目录" hidden>⬆ 上一级</button></span>
-    <span id="inList" class="browlist" title="点目录进入 / 点视频文件选中输入（不会自动推理）"></span></span>
-</div>
-      <div id="epWrap" class="field episode-field" style="display:none"><label>Episode</label>
-        <span class="episode-stepper"><button id="epPrev" title="上一个">←</button>
-          <input id="ep" type="number" min="0" value="0" step="1">
-          <button id="epNext" title="下一个">→</button></span>
-        <span id="epTotal" class="k"></span>
-        <span id="epScan" class="step" style="display:none"></span>
-        <span id="epScanProg" class="progwrap" title="枚举 episode 进度" style="display:none"><span class="progbar"></span></span></div>
+      </details>
     </section>
 
     <section class="control-card inference-card">
       <div class="control-title"><span>02</span> 推理策略</div>
       <div id="gpuSchedulerStatus" class="batch-devices" style="display:none" aria-live="polite" data-i18n-ignore></div>
-      <div class="field" data-i18n-ignore><label>视频视角</label><select id="videoView" title="Full keeps the image; left/right select one eye of a side-by-side stereo video. 视频不截断时间。"><option value="full">完整画面</option><option value="left">双目左眼</option><option value="right">双目右眼</option></select></div>
+      <div class="field" data-i18n-ignore><label for="videoView">视频视角</label><select id="videoView" title="Full keeps the image; left/right select one eye of a side-by-side stereo video. 视频不截断时间。"><option value="full">完整画面</option><option value="left">双目左眼</option><option value="right">双目右眼</option></select></div>
 
-      <div class="field"><label>相机推理</label><select id="camMode"
+      <div class="field"><label for="camMode">相机推理</label><select id="camMode"
         title="分窗=训练窗长；最大窗分窗=当前显卡 exact full 安全上限；流式=相机整段因果+KV cache；整段=上限内一次普通前向，超限时会先询问是否改用最大窗分窗">
         <option value="chunked">分窗 · Chunked</option>
         <option value="max_chunked" selected>最大窗分窗 · Max Chunked</option>
         <option value="streaming">流式 · Streaming</option>
         <option value="full">整段 · Full</option>
       </select></div>
-      <div class="field stacked"><label>手部拼窗</label><span class="seg" id="handModeSeg"
+      <div class="field stacked"><span class="diagnostic-field-label">手部拼窗</span><span class="seg" id="handModeSeg"
         title="切换只更新设置，不会自动推理；点击开始推理后生效">
         <button data-hand-mode="hard">原始硬切</button><button data-hand-mode="blend">线性融合</button><button data-hand-mode="smooth" class="on" title="线性融合后，使用 ego_pipeline 数据清理链的相机系 UKF+RTS 双向平滑">融合 + UKF平滑</button>
       </span></div>
@@ -96,19 +100,19 @@
           <option value="custom">Custom · 自定义</option>
         </select></div>
         <div class="ukf-inputs">
-          <label title="过程噪声；越大越允许快速运动，平滑越弱"><span>q</span><input id="ukfQ" type="number" min="0.1" max="2" step="0.05" value="0.6"></label>
-          <label title="观测噪声；越大越不跟随逐帧预测，平滑越强"><span>r</span><input id="ukfR" type="number" min="0.1" max="2" step="0.05" value="0.6"></label>
-          <label title="快速运动的自适应平滑；越大越抑制快速运动抖动"><span>beta</span><input id="ukfBeta" type="number" min="0" max="5" step="0.1" value="2"></label>
+          <label for="ukfQ" title="过程噪声；越大越允许快速运动，平滑越弱"><span>q</span><input id="ukfQ" type="number" min="0.1" max="2" step="0.05" value="0.6"></label>
+          <label for="ukfR" title="观测噪声；越大越不跟随逐帧预测，平滑越强"><span>r</span><input id="ukfR" type="number" min="0.1" max="2" step="0.05" value="0.6"></label>
+          <label for="ukfBeta" title="快速运动的自适应平滑；越大越抑制快速运动抖动"><span>beta</span><input id="ukfBeta" type="number" min="0" max="5" step="0.1" value="2"></label>
         </div>
         <small><b>默认：Production，与多算法比较一致</b> · 建议 q 0.4–1.0、r 0.3–1.0、beta 0.2–3.0；q ↑ 更跟手，r/beta ↑ 更平滑。安全范围 q/r 0.1–2.0、beta 0–5。</small>
       </div>
       </details>
     <details class="diagnostic-advanced geometry-card"><summary>高级：手形与内参诊断</summary><div class="diagnostic-advanced-fields">
-      <div class="field"><label>GT 手形</label><select id="gtBetas" title="只更新设置，点击开始推理后生效">
+      <div class="field"><label for="gtBetas">GT 手形</label><select id="gtBetas" title="只更新设置，点击开始推理后生效">
         <option value="per_frame">每帧</option><option value="mean">整段平均</option></select></div>
-      <div class="field"><label>预测手形</label><select id="predBetas" title="只更新设置，点击开始推理后生效">
+      <div class="field"><label for="predBetas">预测手形</label><select id="predBetas" title="只更新设置，点击开始推理后生效">
         <option value="per_frame">每帧</option><option value="mean">整段平均</option></select></div>
-      <div class="field"><label>预测内参</label><select id="predFov" title="只更新设置，点击开始推理后生效；2D、MuJoCo 与 Retargeting 共用">
+      <div class="field"><label for="predFov">预测内参</label><select id="predFov" title="只更新设置，点击开始推理后生效；2D、MuJoCo 与 Retargeting 共用">
         <option value="per_frame">每帧</option><option value="mean">整段平均</option></select></div>
 </div></details>
     </section>
@@ -117,19 +121,24 @@
   </div>
 
 
+  <details class="control-card" id="taskHistory" data-i18n-ignore>
+    <summary>任务记录与恢复 <span id="cacheUsage"></span></summary>
+    <button type="button" id="refreshTasks">刷新</button>
+    <div id="taskList">加载中</div>
+  </details>
 </section>
 </header>
 <main id="diagnosticStage" role="tabpanel" aria-labelledby="diagnosticTab-results">
   <aside id="sidebar" class="diagnostic-section-sidebar" aria-labelledby="diagnosticSectionsHeading">
     <div class="diagnostic-sidebar-heading"><h2 id="diagnosticSectionsHeading">栏目导航</h2><button id="toggleDiagnosticSections" type="button" aria-controls="diagnosticSectionMenu" aria-expanded="false"><span id="diagnosticCurrentSection">选择栏目</span><span aria-hidden="true">⌄</span></button></div>
     <div id="diagnosticSectionMenu" class="diagnostic-section-menu">
-      <p id="diagnosticSectionsHelp" class="side-hint">点击名称定位；右侧按钮切换显示，拖动手柄或使用上下按钮排序。</p>
+      <p id="diagnosticSectionsHelp" class="side-hint">点击栏目名称定位；需要调整显示或顺序时，使用“管理栏目”。</p>
       <nav aria-label="诊断结果与专项工具栏目"><ul id="orderBar"></ul></nav>
       <p class="diagnostic-section-note">仿真和重定向需手动开启，点击栏目不会自动生成。</p>
     </div>
   </aside>
   <div id="diagnosticStageContent" class="diagnostic-stage-content">
-  <div class="diagnostic-result-header" id="diagnostic-results"><div class="diagnostic-section-title"><h2>结果与损失</h2><span>视频、三维与数值联动；当前结果可加入统一比较。</span></div><div class="diagnostic-result-actions">      <div class="field"><label>叠加模式</label><select id="mode">
+  <div class="diagnostic-result-header" id="diagnostic-results"><div class="diagnostic-section-title"><h2>结果与损失</h2><span>视频、三维与数值联动；当前结果可加入统一比较。</span></div><div class="diagnostic-result-actions">      <div class="field"><label for="mode">叠加模式</label><select id="mode">
         <option value="mesh">网格 Mesh</option>
         <option value="skeleton">骨架 Skeleton</option>
         <option value="mesh_skel">网格 + 骨架</option>
@@ -471,9 +480,24 @@
 </div>
 
 </div>
+<footer id="diagnosticPlayback" class="diagnostic-playback" aria-label="诊断结果联动播放" hidden>
+  <div class="diagnostic-playback-buttons">
+    <button id="diagnosticPrevFrame" type="button" aria-label="前一帧" title="前一帧" disabled>‹</button>
+    <button id="diagnosticPlay" type="button" aria-label="播放" title="播放 / 暂停" disabled>播放</button>
+    <button id="diagnosticNextFrame" type="button" aria-label="后一帧" title="后一帧" disabled>›</button>
+  </div>
+  <div class="diagnostic-timeline-group">
+    <label for="diagnosticTimeline" class="diagnostic-visually-hidden">视频时间轴</label>
+    <input id="diagnosticTimeline" type="range" min="0" max="0" value="0" step="1" disabled>
+    <div class="diagnostic-playback-meta"><output id="diagnosticFrameLabel" for="diagnosticTimeline">第 0 / 0 帧</output><span id="diagnosticPlaybackStatus" role="status">等待结果媒体</span></div>
+  </div>
+  <label class="diagnostic-frame-jump" for="diagnosticFrameJump">跳至<input id="diagnosticFrameJump" type="number" min="1" max="1" value="1" step="1" disabled><span>帧</span></label>
+  <label for="diagnosticSpeed" class="diagnostic-visually-hidden">播放速度</label><select id="diagnosticSpeed" aria-label="播放速度" disabled><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
+</footer>
 <script src="i18n.js?v=20260816-3"></script>
 <script src="camera_baselines.js?v=20260814-1"></script>
 <script src="benchmark_suites.js?v=20260906-coverage"></script>
-<script src="app.js?v=20261101-section-sidebar"></script>
+<script src="app.js?v=20261101-diagnostic-workflow"></script>
+<script src="comparison-assets/diagnostic-ux.js?v=20261101-diagnostic-workflow"></script>
 </body>
 </html>

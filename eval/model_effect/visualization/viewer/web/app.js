@@ -247,6 +247,7 @@ function queueInference(msg){
   markPending(msg || (state.modelReady
     ? '设置已更新，点击 [▶ 开始推理] 才会运行模型'
     : '设置已更新，先加载模型，再点击 [▶ 开始推理]'));
+  updateLoadBtn();
   return true;
 }
 // 按钮旁的「当前步骤」指示（busy黄/ok绿/warn橙/err红）。
@@ -271,14 +272,17 @@ function updateLoadBtn(){
                      : (state.modelReady ? '✓ 模型已加载' : '⬇ 加载模型');
   }
   if(btn){
-    btn.disabled = state.cancelling || (!state.loading && !state.modelReady);
-    btn.title = state.modelReady ? '显式运行当前输入和设置；其他选择操作不会自动推理'
+    const inputReady=curDatasetRel!==null?EP_TOTAL>0:!!(state.no_truth&&state.vidName&&state.eid!=null);
+    btn.disabled = state.cancelling || (!state.loading && (!state.modelReady||!inputReady));
+    btn.title = !inputReady&&!state.loading?'请先选择服务器视频，或进入 LeRobot 数据集选择 Episode':state.modelReady ? '显式运行当前输入和设置；其他选择操作不会自动推理'
                                  : '请先点 [⬇ 加载模型] 载入模型后再推理';
   }
   for(const id of ['#camMode','#gtBetas','#predBetas','#predFov','#ukfQ','#ukfR','#ukfBeta','#videoView','#smoothingPreset']){
     const el=$(id); if(el) el.disabled=state.loading || (id==='#videoView' && !state.no_truth);
   }
   document.querySelectorAll('#handModeSeg button').forEach(el=>{ el.disabled=state.loading; });
+  for(const id of ['#inBrow','#diagnosticModelBrowser']){const el=$(id);if(el)el.inert=!!state.loading;}
+  const rawButton=$('#loadRawBtn');if(rawButton)rawButton.disabled=state.loading||!(curDatasetRel!==null&&EP_TOTAL>0);
   if(typeof renderBatch === 'function') renderBatch();
 }
 let modelReadyTimer = null;
@@ -301,8 +305,8 @@ async function pollModelReady(){
         const running = (gpu_scheduler.running_devices || []).length;
         const english = window.ViewerI18n && window.ViewerI18n.language === 'en';
         const policyLabel = gpu_scheduler.policy === 'shared'
-          ? (english ? 'GPU shared' : 'GPU 共享') : (english ? 'GPU idle' : 'GPU 空闲');
-        gpuStatus.textContent = `${policyLabel} ${available}/${gpu_scheduler.max_workers} · ${english ? 'active' : '工作'} ${running} · ${english ? 'queued' : '排队'} ${gpu_scheduler.queued}`
+          ? (english ? 'Shared GPU' : '共享 GPU') : (english ? 'Idle-only GPU' : '仅空闲 GPU');
+        gpuStatus.textContent = `${policyLabel} · ${english ? 'eligible' : '可调度'} ${available}/${gpu_scheduler.max_workers} · ${english ? 'running' : '运行中'} ${running} · ${english ? 'queued' : '排队'} ${gpu_scheduler.queued}`
           + (!available ? (english ? ' · Waiting for GPU headroom' : ' · 等待显存/负载余量') : '');
         gpuStatus.title = gpu_scheduler.probe_error || (gpu_scheduler.gpus || []).map(g=>
           `${g.device}: ${g.reason || '可用'}${g.foreign_pids.length ? ' PID '+g.foreign_pids.join(',') : ''}`).join('\n');
@@ -311,8 +315,11 @@ async function pollModelReady(){
     syncFullLimit(full_max_frames);
     state.modelReady = !!ready; state.modelLoading = !ready && !!loading; updateLoadBtn();
     if(ready){ if(!state.loading){
-      const gpu = state.modelDevices.length ? ` · ${state.modelDevices.length}卡 ${state.modelDevices.join(',')}` : '';
-      setStep('✓ 模型就绪'+gpu,'ok'); hideProg();
+      const english=window.ViewerI18n?.language==='en';
+      if(state.loaded)setStep(english?'✓ Result ready':'✓ 结果已就绪','ok');
+      else if(state.inferenceDirty)setStep(english?'○ Settings pending':'○ 设置待应用','warn');
+      else setStep(english?'✓ Model ready':'✓ 模型就绪','ok');
+      hideProg();
     } if(gpu_scheduler && ['idle','shared'].includes(gpu_scheduler.policy)) delay = 5000;
       else delay = null;
     }
@@ -365,11 +372,12 @@ function _epCtlDisabled(dis){ for(const id of ['#ep','#epPrev','#epNext']){ cons
 function setDatasetReady(total){
   EP_TOTAL = total; epSel.max = Math.max(0, EP_TOTAL - 1);
   $('#epTotal').textContent = `/ 共 ${EP_TOTAL} 个（序号 0 ~ ${Math.max(0, EP_TOTAL-1)}）`;
-  epSel.value = clampEp(epSel.value); _epCtlDisabled(false);
+  epSel.value = clampEp(epSel.value); _epCtlDisabled(state.loading);
   const s=$('#epScan'); if(s) s.style.display='none';
   const sp=$('#epScanProg'); if(sp){ sp.style.display='none'; sp.classList.remove('indet'); }
   markPending(EP_TOTAL > 0 ? '选择 Episode 后点击 [▶ 开始推理]（或随时 [仅看原始 GT]）'
                            : '该 lerobot 数据集无 episode');
+  updateLoadBtn();
 }
 function setDatasetScanning(){
   EP_TOTAL = 0; $('#epTotal').textContent = ''; _epCtlDisabled(true);   // 枚举中禁用 Episode 选择
@@ -424,20 +432,24 @@ if($('#videoView')) $('#videoView').addEventListener('change', () => queueInfere
 let inCur = '';
 let _inBrowseToken = 0;       // 目录请求代次：快速切目录时只接受最后一次响应，防旧目录晚到后覆盖新目录
 async function inGo(abs){
+  if(state.loading){info.textContent='当前输入正在处理，请先停止再切换目录';return;}
   const token = ++_inBrowseToken;
   const crumb = $('#inCrumb'), list = $('#inList');
+  const previousNodes=[...list.childNodes];
   list.innerHTML = '<span class="bmut">加载…</span>';
   let b;
   try{ b = await getJSON('/api/ibrowse?path=' + _enc(abs || '')); }
   catch(e){ if(token === _inBrowseToken) list.innerHTML = '<span class="bmut">读取失败</span>'; return; }
   if(token !== _inBrowseToken) return;
+  if(state.loading){list.replaceChildren(...previousNodes);return;}
   const nextPath = b.path || abs || '';
-  if(inCur && nextPath !== inCur && state.loaded){
+  if(inCur && nextPath !== inCur){
     // 输入上下文已改变，旧画面不能继续冒充当前目录；模型仍保留就绪，可直接对新选择推理。
     state.loaded = false; state.gt = state.pred = state.metrics = state.nums = null;
     state.metricsError = null;
     state.epIdx = state.epOrdinal = state.epTotal = null;
     state.sourceName = state.sourcePath = null; state.vidName = null;
+    state.eid=null;state.inferenceDirty=true;state.mediaContext=null;setRawOnly(false);
     info.title = '';
     buildPanels(false);
   }
@@ -469,6 +481,7 @@ async function inGo(abs){
       ? '已选视频「'+el.dataset.name+'」，点击 [▶ 开始推理] 才会运行模型'
       : '已选视频「'+el.dataset.name+'」，先加载模型，再点击 [▶ 开始推理]');
   });
+  updateLoadBtn();
 }
 
 const _joinAbs = (base,name) => base==='/' ? '/'+name : base.replace(/\/+$/,'')+'/'+name;
@@ -529,6 +542,7 @@ async function ckptGo(path){
 
 // 选 ckpt：校验成功后作废旧预测并置模型未就绪；不自动加载。
 async function switchCkptPath(path){
+  if(state.loading){info.textContent='当前输入正在处理，请先停止再切换模型';return;}
   path=String(path||'').trim();
   if(!path) return;
   console.log('[btn] 选择 checkpoint → '+path);
@@ -1434,10 +1448,10 @@ async function saveCurrentFrame(sourceId){
     }else snapshot=_snapshotVideoFrame(item.video);
     const filename=_frameCaptureFilename(spec,frame);
     await _downloadSnapshot(snapshot,filename);
-    state.frameCaptureMessage=`已保存帧 ${frame}`;
-    info.textContent=`已保存 ${spec.label} 当前帧 ${frame}：${filename}`;
+    state.frameCaptureMessage=`已保存样本帧 ${frame+1}`;
+    info.textContent=`已保存 ${spec.label} 样本帧 ${frame+1}（索引 ${frame}）：${filename}`;
     setTimeout(()=>{
-      if(state.frameCaptureMessage===`已保存帧 ${frame}`){
+      if(state.frameCaptureMessage===`已保存样本帧 ${frame+1}`){
         state.frameCaptureMessage=''; updateFrameCaptureButton();
       }
     },1800);
@@ -2166,7 +2180,7 @@ function renderScene(canvas, items, v, modeKey, video){
   const legend=[{t:'左手', c:'#4dd2ff', s:11}, {t:'右手', c:'#ffd34d', s:11}];
   if(plan.showCam) legend.push({t:'相机', c:'#ff8adf', s:11});
   drawChip(g, legend, 12, H-44, 'bl', true);
-  drawChip(g, [{t:`帧 ${cf} / ${state.nframes-1}`, c:'#e6edf3', s:11}], 12, H-10, 'bl');
+  drawChip(g, [{t:`样本帧 ${cf+1} / ${state.nframes}`, c:'#e6edf3', s:11}], 12, H-10, 'bl');
   drawScaleBar(g, W, H, scale);                         // 右下角比例尺：读实际位移距离
 }
 
@@ -2208,7 +2222,7 @@ function drawMetrics(){
   const win = M.clipwin ? `clip_len=${M.clip_len} stride=${M.stride} n_clips=${M.n_clips}（与训练同切窗）`
                         : `整段单窗（该段 ${M.nframes} 帧 &lt; clip_len=${M.clip_len}，非训练切窗）`;
   let h = `<div class="cap">切窗：${win}</div>`
-        + `<table class="mt"><thead><tr><th>输出头 / loss 项</th><th>值·当前帧 ${cf}</th><th>值·均值</th>`
+        + `<table class="mt"><thead><tr><th>输出头 / loss 项</th><th>值·样本帧 ${cf+1}</th><th>值·均值</th>`
         + `<th>权重</th><th>加权·当前</th><th>占比·当前</th><th>占比·均值</th></tr></thead><tbody>`;
   for(const g of groups){
     const badge = _grpBadge(g);
@@ -2275,12 +2289,12 @@ function drawIntegratedNums(b){
   if(!N){ el.innerHTML='<div class="mnote">当前结果未提供逐帧数值。</div>'; return; }
   if(b.frame==='cam'){
     const hc = N.hand_cam || {};
-    el.innerHTML = `<div class="ncap">逐帧数值（相机系）· 帧 ${cf}</div>`
+    el.innerHTML = `<div class="ncap">逐帧数值（相机系）· 样本帧 ${cf+1}</div>`
       + _entTable('左手', hc.left, cf)
       + _entTable('右手', hc.right, cf)
       + _meanBetasTable(N.mean);
   }else{
-    el.innerHTML = `<div class="ncap">逐帧数值（世界系）· 帧 ${cf}</div>`
+    el.innerHTML = `<div class="ncap">逐帧数值（世界系）· 样本帧 ${cf+1}</div>`
       + _entTable('相机', N.cam, cf, true)
       + _entTable('左手', N.hand && N.hand.left, cf)
       + _entTable('右手', N.hand && N.hand.right, cf)
@@ -5001,13 +5015,8 @@ function draw(){
   }
   if(!state.no_truth && !state.rawOnly && !state.hidden.has('loss')) drawMetrics();
   if(state.loaded){                                // 仅加载后覆盖 info，未加载时保留 pending 提示
-    const source = state.sourceName ? state.sourceName + ' · ' : '';
-    const name = state.no_truth ? (state.sourceName || state.vidName || `#${state.eid}`)
-               : source + (state.epIdx!=null ? `ep ${String(state.epIdx).padStart(4,'0')}` : `#${state.eid}`);
-    const idx = state.no_truth ? `视频项 #${state.eid}`
-              : `Episode 序号 ${state.epOrdinal!=null ? state.epOrdinal : '?'} / ${state.epTotal!=null ? state.epTotal : '?'}`;
-    const tail = state.rawOnly ? '· 仅原始GT（未推理）' : `· ckpt ${CKPT_TAG}`;
-    info.textContent = `${name} (${idx}) · ${state.mode} · fps ${state.fps} · ${state.nframes} 帧 ${tail}`;
+    const kind=state.rawOnly?'原始 GT · 未运行预测':state.no_truth?'仅预测 · 无 GT':'GT 与预测对照';
+    info.textContent = `${kind} · ${state.nframes} 帧 · ${state.fps} FPS`;
     info.title = state.sourcePath || '';
   }
 }
@@ -5079,14 +5088,33 @@ function toggleRetargetPanel(){
   buildPanels(true);
 }
 // Diagnostic section navigation changes presentation only; rendering remains explicit.
-const diagnosticSections={active:null,pending:null,wired:false,scrollFrame:null,suppressScrollUntil:0};
+const diagnosticSections={active:null,activeByMode:{results:null,tools:null},managing:false,pending:null,wired:false,scrollFrame:null,suppressScrollUntil:0};
 function diagnosticSectionMode(panel){return panel?.kind==='tool'?'tools':'results';}
+function diagnosticSectionCategory(){return diagnosticView==='tools'?'tools':'results';}
+function diagnosticSectionStatus(id){
+  const panel=PANEL_BY[id];if(!diagnosticSectionAvailability(panel).ready)return '暂无结果';
+  if(state.hidden.has(id))return panel.kind==='tool'?'未打开':['mujoco','retarget'].includes(panel.kind)?'待生成':'已隐藏';
+  return id===diagnosticSections.active?'当前':panel.kind==='tool'?'已打开':'已显示';
+}
+function ensureDiagnosticSectionControls(){
+  const ul=$('#orderBar');if(!ul||$('#diagnosticSectionControls'))return;
+  const controls=document.createElement('div');controls.id='diagnosticSectionControls';controls.className='diagnostic-nav-controls';
+  const tabs=document.createElement('div');tabs.className='diagnostic-section-tabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','栏目分类');
+  for(const [kind,label]of [['results','结果栏目'],['tools','专项工具']]){
+    const tab=document.createElement('button');tab.type='button';tab.id='diagnostic-sections-'+kind;tab.className='diagnostic-section-tab';tab.dataset.kind=kind;tab.textContent=label;tab.setAttribute('role','tab');tab.setAttribute('aria-controls','orderBar');
+    tab.onclick=()=>{showDiagnosticView(kind);syncDiagnosticSections();};
+    tab.onkeydown=event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();event.stopPropagation();const kind=event.key==='Home'?'results':event.key==='End'?'tools':tab.dataset.kind==='results'?'tools':'results';const target=$('#diagnostic-sections-'+kind);target?.onclick();target?.focus();};tabs.append(tab);
+  }
+  const manage=document.createElement('button');manage.type='button';manage.id='manageDiagnosticSections';manage.textContent='管理栏目';manage.setAttribute('aria-controls','orderBar');manage.onclick=()=>{diagnosticSections.managing=!diagnosticSections.managing;renderOrderBar();manage.focus({preventScroll:true});};
+  controls.append(tabs,manage);ul.parentNode.prepend(controls);
+}
 function diagnosticSectionAvailability(panel,context=state){
   if(!panel)return {ready:false,reason:'该栏目不可用。'};
   if(panel.kind==='tool')return {ready:true,reason:''};
   if(!context.loaded)return {ready:false,reason:'尚未加载当前输入的结果，请先在“配置与运行”中读取已有结果或显式运行推理。'};
   if(panel.kind==='nums'&&!context.nums)return {ready:false,reason:'当前结果未提供逐帧数值，仍可查看已有视频与三维结果。'};
   if(panel.kind==='loss'&&(context.no_truth||context.rawOnly))return {ready:false,reason:context.rawOnly?'当前仅查看原始 GT，尚无预测可计算逐帧损失。':'当前输入没有 GT，无法计算监督逐帧损失。'};
+  if(panel.kind==='loss'&&!context.metrics)return {ready:false,reason:'当前结果未提供逐帧损失数据，仍可查看已有视频、三维与数值结果。'};
   return {ready:true,reason:''};
 }
 function reorderDiagnosticSections(order,id,{delta=0,before=null}={}){
@@ -5100,11 +5128,21 @@ function syncDiagnosticSections(){
   const sidebar=$('#sidebar'),toggle=$('#toggleDiagnosticSections'),menu=$('#diagnosticSectionMenu');if(!sidebar)return;
   const narrow=window.innerWidth<=900,opened=!narrow||document.body.classList.contains('diagnostic-sections-open');
   if(toggle)toggle.setAttribute('aria-expanded',String(opened));if(menu)menu.setAttribute('aria-hidden',String(!opened));
-  const current=$('#diagnosticCurrentSection'),panel=PANEL_BY[diagnosticSections.active];if(current)current.textContent=panel?.name||'选择栏目';
+  const category=diagnosticSectionCategory(),selected=PANEL_BY[diagnosticSections.active];
+  if(selected&&diagnosticSectionMode(selected)===category)diagnosticSections.activeByMode[category]=diagnosticSections.active;
+  else diagnosticSections.active=diagnosticSections.activeByMode[category]||null;
+  const current=$('#diagnosticCurrentSection'),panel=PANEL_BY[diagnosticSections.active];if(current)current.textContent=panel?.name||(category==='tools'?'选择工具':'选择栏目');
+  const list=$('#orderBar');if(list){list.dataset.managing=String(diagnosticSections.managing);list.setAttribute('aria-labelledby','diagnostic-sections-'+category);}
+  for(const tab of document.querySelectorAll('.diagnostic-section-tab')){const on=tab.dataset.kind===category;tab.setAttribute('aria-selected',String(on));tab.tabIndex=on?0:-1;}
+  const manage=$('#manageDiagnosticSections');if(manage){manage.setAttribute('aria-pressed',String(diagnosticSections.managing));manage.textContent=diagnosticSections.managing?'完成管理':'管理栏目';}
+  const help=$('#diagnosticSectionsHelp');if(help)help.textContent=diagnosticSections.managing?'显示或隐藏栏目；拖动或 Alt＋↑/↓ 在当前分类内排序。':'点击栏目名称定位；显示与排序请进入“管理栏目”。';
   const pending=PANEL_BY[diagnosticSections.pending],notice=$('#diagnosticSectionNotice');if(notice&&pending&&diagnosticSectionMode(pending)!==diagnosticView){notice.hidden=true;diagnosticSections.pending=null;}
   for(const row of document.querySelectorAll('#orderBar li[data-id]')){
+    row.hidden=diagnosticSectionMode(PANEL_BY[row.dataset.id])!==category;row.draggable=diagnosticSections.managing;
+    for(const control of row.querySelectorAll('.section-manage-control'))control.hidden=!diagnosticSections.managing;
     const active=row.dataset.id===diagnosticSections.active&&diagnosticSectionMode(PANEL_BY[row.dataset.id])===diagnosticView;
     row.classList.toggle('active',active);const button=row.querySelector('.onm');if(button){if(active)button.setAttribute('aria-current','location');else button.removeAttribute('aria-current');}
+    const status=row.querySelector('.section-state');if(status)status.textContent=diagnosticSectionStatus(row.dataset.id);
   }
 }
 function diagnosticScrollOffset(){
@@ -5160,25 +5198,27 @@ function setDiagnosticSectionVisibility(id,show){
   else{state.hidden.add(id);if(section){section.hidden=true;section.querySelectorAll('video').forEach(video=>video.pause());}}
   diagnosticSections.pending=null;const notice=$('#diagnosticSectionNotice');if(notice)notice.hidden=true;
   diagnosticSections.active=show?id:diagnosticSections.active===id?null:diagnosticSections.active;
+  if(!show&&diagnosticSections.activeByMode[diagnosticSectionMode(panel)]===id)diagnosticSections.activeByMode[diagnosticSectionMode(panel)]=null;
   renderOrderBar();syncMujocoButton();updateExportButton();if(state.loaded)requestDraw();
   if(show)navigateDiagnosticSection(id);
 }
 function applyDiagnosticSectionOrder(id,options){
-  state.order=reorderDiagnosticSections(state.order,id,options);
+  const category=diagnosticSectionMode(PANEL_BY[id]),members=state.order.filter(key=>diagnosticSectionMode(PANEL_BY[key])===category),sorted=reorderDiagnosticSections(members,id,options);let index=0;
+  state.order=state.order.map(key=>diagnosticSectionMode(PANEL_BY[key])===category?sorted[index++]:key);
   for(const section of document.querySelectorAll('#blocks section[data-pid]'))section.style.order=state.order.indexOf(section.dataset.pid);
   renderOrderBar();const button=$('#orderBar')?.querySelector('li[data-id="'+id+'"] .onm');button?.focus({preventScroll:true});
 }
 function renderOrderBar(){
-  const ul=$('#orderBar');if(!ul)return;ul.replaceChildren();let dragId=null;
-  for(const id of state.order){const panel=PANEL_BY[id];if(!panel)continue;const hidden=state.hidden.has(id),available=diagnosticSectionAvailability(panel),row=document.createElement('li');row.draggable=true;row.dataset.id=id;row.className='oitem'+(hidden?' off':'');
-    const handle=document.createElement('span');handle.className='oh';handle.textContent='☰';handle.title='拖动排序；栏目按钮可用 Alt＋↑/↓ 排序';handle.setAttribute('aria-hidden','true');
+  const ul=$('#orderBar');if(!ul)return;ensureDiagnosticSectionControls();ul.replaceChildren();let dragId=null;
+  for(const id of state.order){const panel=PANEL_BY[id];if(!panel)continue;const hidden=state.hidden.has(id),available=diagnosticSectionAvailability(panel),members=state.order.filter(key=>diagnosticSectionMode(PANEL_BY[key])===diagnosticSectionMode(panel)),row=document.createElement('li');row.dataset.id=id;row.className='oitem'+(hidden?' off':'');
+    const handle=document.createElement('span');handle.className='oh section-manage-control';handle.textContent='☰';handle.title='拖动排序；栏目按钮可用 Alt＋↑/↓ 排序';handle.setAttribute('aria-hidden','true');
     const button=document.createElement('button');button.type='button';button.className='onm';button.setAttribute('aria-controls','diagnostic-panel-'+id);button.onclick=()=>navigateDiagnosticSection(id);
-    const name=document.createElement('span');name.textContent=panel.name;const status=document.createElement('small');status.className='section-state';status.textContent=!available.ready?'暂无结果':hidden?(panel.kind==='mujoco'||panel.kind==='retarget'?'未开启 · 需生成':'已隐藏'):'已显示';button.append(name,status);
-    const eye=document.createElement('button');eye.type='button';eye.className='oeye';eye.textContent=hidden?(panel.kind==='mujoco'||panel.kind==='retarget'?'开启':'显示'):'隐藏';eye.disabled=hidden&&!available.ready;eye.title=(hidden?(panel.kind==='mujoco'||panel.kind==='retarget'?'开启并生成 ':'显示 '):'隐藏 ')+panel.name;eye.setAttribute('aria-label',eye.title);eye.onclick=event=>{event.stopPropagation();if(hidden&&['mujoco','retarget'].includes(panel.kind)){navigateDiagnosticSection(id);return;}setDiagnosticSectionVisibility(id,hidden);};
-    const up=document.createElement('button');up.type='button';up.className='omove-up';up.textContent='↑';up.title='上移 '+panel.name;up.setAttribute('aria-label',up.title);up.disabled=state.order.indexOf(id)===0;up.onclick=event=>{event.stopPropagation();applyDiagnosticSectionOrder(id,{delta:-1});};
-    const down=document.createElement('button');down.type='button';down.className='omove-down';down.textContent='↓';down.title='下移 '+panel.name;down.setAttribute('aria-label',down.title);down.disabled=state.order.indexOf(id)===state.order.length-1;down.onclick=event=>{event.stopPropagation();applyDiagnosticSectionOrder(id,{delta:1});};row.append(handle,button,eye,up,down);
-    button.onkeydown=event=>{const buttons=[...ul.querySelectorAll('.onm')],index=buttons.indexOf(button);if(event.altKey&&['ArrowUp','ArrowDown'].includes(event.key)){event.preventDefault();event.stopPropagation();applyDiagnosticSectionOrder(id,{delta:event.key==='ArrowUp'?-1:1});return;}let next;if(event.key==='ArrowUp')next=(index+buttons.length-1)%buttons.length;else if(event.key==='ArrowDown')next=(index+1)%buttons.length;else if(event.key==='Home')next=0;else if(event.key==='End')next=buttons.length-1;else return;event.preventDefault();event.stopPropagation();buttons[next]?.focus();};
-    row.addEventListener('dragstart',()=>{dragId=id;row.classList.add('drag');});row.addEventListener('dragend',()=>{dragId=null;row.classList.remove('drag');});row.addEventListener('dragover',event=>{event.preventDefault();row.classList.add('over');});row.addEventListener('dragleave',()=>row.classList.remove('over'));row.addEventListener('drop',event=>{event.preventDefault();row.classList.remove('over');if(dragId&&dragId!==id)applyDiagnosticSectionOrder(dragId,{before:id});});ul.append(row);
+    const name=document.createElement('span');name.textContent=panel.name;const status=document.createElement('small');status.className='section-state';button.append(name,status);
+    const eye=document.createElement('button');eye.type='button';eye.className='oeye section-manage-control';eye.textContent=hidden?(panel.kind==='mujoco'||panel.kind==='retarget'?'开启':'显示'):'隐藏';eye.disabled=hidden&&!available.ready;eye.title=(hidden?(panel.kind==='mujoco'||panel.kind==='retarget'?'开启并生成 ':'显示 '):'隐藏 ')+panel.name;eye.setAttribute('aria-label',eye.title);eye.onclick=event=>{event.stopPropagation();if(hidden&&['mujoco','retarget'].includes(panel.kind)){navigateDiagnosticSection(id);return;}setDiagnosticSectionVisibility(id,hidden);};
+    const up=document.createElement('button');up.type='button';up.className='omove-up section-manage-control';up.textContent='↑';up.title='上移 '+panel.name;up.setAttribute('aria-label',up.title);up.disabled=members.indexOf(id)===0;up.onclick=event=>{event.stopPropagation();applyDiagnosticSectionOrder(id,{delta:-1});};
+    const down=document.createElement('button');down.type='button';down.className='omove-down section-manage-control';down.textContent='↓';down.title='下移 '+panel.name;down.setAttribute('aria-label',down.title);down.disabled=members.indexOf(id)===members.length-1;down.onclick=event=>{event.stopPropagation();applyDiagnosticSectionOrder(id,{delta:1});};row.append(handle,button,eye,up,down);
+    button.onkeydown=event=>{const buttons=[...ul.querySelectorAll('.onm')].filter(item=>!item.parentNode.hidden),index=buttons.indexOf(button);if(event.altKey&&['ArrowUp','ArrowDown'].includes(event.key)){if(diagnosticSections.managing){event.preventDefault();event.stopPropagation();applyDiagnosticSectionOrder(id,{delta:event.key==='ArrowUp'?-1:1});}return;}let next;if(event.key==='ArrowUp')next=(index+buttons.length-1)%buttons.length;else if(event.key==='ArrowDown')next=(index+1)%buttons.length;else if(event.key==='Home')next=0;else if(event.key==='End')next=buttons.length-1;else return;event.preventDefault();event.stopPropagation();buttons[next]?.focus();};
+    row.addEventListener('dragstart',event=>{if(!diagnosticSections.managing){event.preventDefault();return;}dragId=id;row.classList.add('drag');});row.addEventListener('dragend',()=>{dragId=null;row.classList.remove('drag');});row.addEventListener('dragover',event=>{if(!diagnosticSections.managing)return;event.preventDefault();row.classList.add('over');});row.addEventListener('dragleave',()=>row.classList.remove('over'));row.addEventListener('drop',event=>{if(!diagnosticSections.managing)return;event.preventDefault();row.classList.remove('over');if(dragId&&dragId!==id)applyDiagnosticSectionOrder(dragId,{before:id});});ul.append(row);
   }
   syncMujocoButton();syncDiagnosticSections();
 }

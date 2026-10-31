@@ -20,6 +20,7 @@ tests/*
 !tests/test_comparison_workspace.cjs
 !tests/test_research_ux.cjs
 !tests/test_comparison_layout.cjs
+!tests/test_comparison_interaction.cjs
 !tests/test_platform_views.cjs
 !tests/test_diagnostic_layout.cjs
 !tests/test_diagnostic_navigation.cjs

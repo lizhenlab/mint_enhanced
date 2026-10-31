@@ -62,7 +62,7 @@ function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;})
 function bootFixture(search,{activePane=null,taskOpen=false,source='',comparisonWait=null,pathname='/compare',hash=''}={}){
   const vm=require('node:vm'),fs=require('node:fs'),history=deferred(),parent=deferred(),calls=[];
   const nodes={source:{value:source},examples:{value:'',append(){}},dependencyStatus:{},platformDialog:{open:!!activePane},taskDialog:{open:taskOpen}};
-  const sandbox={URLSearchParams,location:{search,pathname,hash,replace:url=>calls.push(['replace',url])},localStorage:{getItem:()=>null},state:{specs:[],comparison:null},workspaceUI:{history:[]},platform:{pane:activePane||'data'},HUB_LABELS:{data:'Data',research:'Research',tools:'Tools'},
+  const sandbox={URLSearchParams,preferredComparison:require('../mint/comparison/web/workspace.js').preferredComparison,location:{search,pathname,hash,replace:url=>calls.push(['replace',url])},localStorage:{getItem:()=>null},state:{specs:[],comparison:null},workspaceUI:{history:[]},platform:{pane:activePane||'data'},HUB_LABELS:{data:'Data',research:'Research',tools:'Tools'},
     $:id=>nodes[id],el:()=>({}),buildAlgorithms(){},refreshComposerAlgorithms(){},updateImportFormats(){},notify:message=>calls.push(['notice',message]),
     api:path=>path==='api/algorithms'?Promise.resolve({algorithms:[]}):path==='api/comparison/examples'?Promise.resolve({examples:[{label:'Example',path:'/example.mp4'}]}):parent.promise,
     loadHistory:()=>history.promise.then(()=>{sandbox.workspaceUI.history=[{id:'remembered'}];}),
@@ -76,6 +76,11 @@ function bootFixture(search,{activePane=null,taskOpen=false,source='',comparison
   return {sandbox,nodes,history,parent,calls,promise:vm.runInContext(expression,context)};
 }
 async function microtasks(){for(let i=0;i<8;i++)await Promise.resolve();}
+
+test('the default workspace opens its preferred regular record after history is ready',async()=>{
+  const boot=bootFixture('');boot.history.resolve();await boot.promise;
+  assert.deepEqual(boot.calls.filter(row=>row[0]==='comparison').map(row=>row[1]),['remembered']);
+});
 
 test('a legacy diagnostic fragment is replaced before comparison startup or API reads',async()=>{
   const boot=bootFixture('',{pathname:'/proxy/8011/compare',hash:'#diagnostic-results'});await boot.promise;

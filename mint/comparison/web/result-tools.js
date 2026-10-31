@@ -68,6 +68,20 @@ function resultCandidate(runs,view){
   return ids.has(view.candidate)&&view.candidate!==view.reference?view.candidate:
     (view.selected||[]).find(id=>ids.has(id)&&id!==view.reference)||runs.find(run=>run.id!==view.reference)?.id||null;
 }
+function resultCandidateNavigation(runs,view){
+  const reference=runs.some(run=>run.id===view.reference)?view.reference:runs[0]?.id;
+  const eligible=runs.filter(run=>run.id!==reference),candidate=resultCandidate(runs,{...view,reference}),index=eligible.findIndex(run=>run.id===candidate);
+  return {candidate,index:index+1,total:eligible.length,previous:index>0?eligible[index-1].id:null,next:index>=0&&index+1<eligible.length?eligible[index+1].id:null};
+}
+function resultStateLabel(run){
+  if(!run)return '暂无候选';
+  const label=({completed:'已完成',partial:'部分结果',failed:'失败',cancelled:'已取消',interrupted:'已中断',cancelling:'正在取消',running:'运行中',queued:'排队中',waiting_gpu:'等待 GPU',waiting_sample:'准备输入',inference_complete:'前向完成，待发布'})[run.status]||run.status||(run.result?'已有结果':'等待结果');
+  return !run.result&&run.status==='completed'?label+' · 无几何结果':label;
+}
+function resultReferenceRole(run,pinned=false){
+  const declaredGT=run?.result?.reference_role==='user_declared_ground_truth';
+  return {declaredGT,badge:declaredGT?(pinned?'声明 GT · 基准':'声明 GT'):'算法基准',note:!run?'固定基准用于显示与指标配对，不改变结果的 GT 角色。':declaredGT?`${run.label}：用户声明 GT；误差以指标中标注的共同有效几何口径为准。`:`${run.label}：算法对照基准；选择基准不会将算法结果声明为 GT。`};
+}
 function displayResultIds(runs,view,width=1000){
   if(view.expanded&&runs.some(run=>run.id===view.expanded))return [view.expanded];
   const ids=new Set(runs.map(run=>run.id)),reference=ids.has(view.reference)?view.reference:runs[0]?.id;
@@ -97,19 +111,31 @@ function syncComparisonLayout(){
   if($('pairSide'))$('pairSide').value=resultView.pairSide;
   if($('candidateControl'))$('candidateControl').hidden=resultView.layout!=='pair'||!resultView.candidate;
   if($('candidateRun'))$('candidateRun').value=resultView.candidate||'';
+  const navigation=resultCandidateNavigation(state.comparison.runs,resultView),candidate=state.comparison.runs.find(run=>run.id===navigation.candidate);
+  for(const [id,target]of [['previousCandidate',navigation.previous],['nextCandidate',navigation.next]]){const button=$(id);if(button){button.disabled=!target;button.title=(id==='previousCandidate'?'上一个候选':'下一个候选')+(target?'：'+state.comparison.runs.find(run=>run.id===target)?.label:'（已到边界）');}}
+  const position=$('candidatePosition'),positionText=navigation.total?`${navigation.index} / ${navigation.total} · ${resultStateLabel(candidate)}`:'暂无候选';if(position&&position.textContent!==positionText)position.textContent=positionText;
+  const note=$('comparisonReferenceNote'),reference=state.comparison.runs.find(run=>run.id===resultView.reference),role=resultReferenceRole(reference,true);if(note){note.dataset.role=role.declaredGT?'declared-gt':'algorithm';if(note.textContent!==role.note)note.textContent=role.note;}
+}
+async function changeResultCandidate(id){
+  if(!state.comparison||id===resultView.reference||!state.comparison.runs.some(run=>run.id===id))return;
+  resultView.candidate=id;resultView.pairSide='candidate';resultView.expanded=null;
+  saveResultPreferences();applyResultVisibility();render(true);if(state.metricsRows)renderMetrics(state.metricsRows);
+  const token=state.pollToken;await ensureFrame(state.frame);if(token===state.pollToken)render(true);
 }
 function initializeComparisonToolbar(){
   const toolbar=document.querySelector('.result-toolbar'),old=document.querySelector('.view-toolbar');
   const layout=selectInput([['pair','基准 + 候选'],['overview','结果总览']],'pair');layout.id='resultLayout';layout.setAttribute('aria-label','比较布局');
-  const candidate=selectInput([],'');candidate.id='candidateRun';const candidateField=inputLabel('候选',candidate);candidateField.id='candidateControl';candidateField.className='inline-label candidate-control';
+  const candidate=selectInput([],'');candidate.id='candidateRun';candidate.setAttribute('aria-describedby','candidatePosition');const candidateField=el('div',undefined,'inline-label candidate-control');candidateField.id='candidateControl';const candidateLabel=el('label','候选');candidateLabel.htmlFor='candidateRun';const candidateSwitcher=el('span',undefined,'candidate-switcher'),previous=el('button','‹'),next=el('button','›');previous.id='previousCandidate';next.id='nextCandidate';previous.type=next.type='button';previous.setAttribute('aria-label','上一个候选结果');next.setAttribute('aria-label','下一个候选结果');previous.disabled=next.disabled=true;const position=el('output',undefined,'candidate-position');position.id='candidatePosition';position.setAttribute('role','status');position.setAttribute('aria-live','polite');position.setAttribute('aria-atomic','true');candidateSwitcher.append(previous,candidate,next);candidateField.append(candidateLabel,candidateSwitcher,position);
   const side=selectInput([['candidate','候选结果'],['reference','对照基准']],'candidate');side.id='pairSide';const sideField=inputLabel('当前画面',side);sideField.id='pairSideControl';sideField.className='inline-label';sideField.hidden=true;
   const advanced=el('details',undefined,'comparison-options');advanced.id='comparisonOptions';advanced.append(el('summary','显示与诊断'));const content=el('div',undefined,'comparison-options-content');advanced.append(content);
   const picker=$('resultPicker');picker.querySelector('.hint').textContent='勾选总览中展示的结果；“基准 + 候选”模式通过候选菜单切换。导出可选择全部结果或当前可见结果。';
   content.append(picker,$('comparePair'),$('showAllResults'),old.querySelector('label[title]'),old.querySelector('label:not([title])'),old.querySelector('.view-options'),$('resetView'),$('snapshot'),$('protocolPicker'),$('frameInspector'));
   const segment=old.querySelector('.segmented');toolbar.prepend(layout);$('referenceRun').closest('label').after(candidateField,sideField);toolbar.append(segment,advanced,$('focusMode'));old.hidden=true;
+  const referenceNote=el('p',undefined,'comparison-reference-note');referenceNote.id='comparisonReferenceNote';toolbar.after(referenceNote);$('referenceRun').setAttribute('aria-describedby','comparisonReferenceNote');
   $('resultPicker').querySelector('summary').title='仅影响总览选列，不改变基准和候选';
   layout.onchange=()=>{resultView.layout=layout.value;resultView.expanded=null;saveResultPreferences();applyResultVisibility();render(true);ensureFrame(state.frame).then(()=>render(true));};
-  candidate.onchange=()=>{resultView.candidate=candidate.value;resultView.pairSide='candidate';resultView.expanded=null;saveResultPreferences();applyResultVisibility();render(true);ensureFrame(state.frame).then(()=>render(true));if(state.metricsRows)renderMetrics(state.metricsRows);};
+  candidate.onchange=()=>changeResultCandidate(candidate.value).catch(error=>notify(error.message));
+  for(const [button,direction]of [[previous,'previous'],[next,'next']])button.onclick=()=>{const target=resultCandidateNavigation(state.comparison?.runs||[],resultView)[direction];if(target)changeResultCandidate(target).catch(error=>notify(error.message));};
   side.onchange=()=>{resultView.pairSide=side.value;saveResultPreferences();applyResultVisibility();render(true);ensureFrame(state.frame).then(()=>render(true));};
   document.addEventListener('click',event=>{if(advanced.open&&!advanced.contains(event.target))advanced.open=false;});
   document.addEventListener('keydown',event=>{if(event.key==='Escape')advanced.open=false;});
@@ -130,7 +156,7 @@ function applyResultVisibility(){
   for(const card of state.cards.values()){
     card.node.hidden=!visibleIds.has(card.run.id);
     card.node.classList.toggle('is-reference',card.run.id===resultView.reference);
-    card.reference.hidden=card.run.id!==resultView.reference;
+    const pinned=card.run.id===resultView.reference,role=resultReferenceRole(card.run,pinned);card.reference.hidden=!pinned&&!role.declaredGT;card.reference.textContent=role.badge;card.reference.title=role.note;
     card.enlarge.textContent=resultView.expanded===card.run.id?'返回对比':'单列放大';
   }
   // Reparenting a card may interrupt its video decoder. CSS order pins the reference without moving media.
@@ -166,7 +192,7 @@ function syncResultTools(value){
       check.onchange=()=>changeResultSelection(toggleResultSelection(resultView,run.id,check.checked)).catch(error=>notify(error.message));
       const name=el('span',run.label),id=el('small',run.id.slice(0,6));label.append(check,name,id);
       if(run.result?.reference_role==='user_declared_ground_truth')label.append(el('small','声明 GT','role-tag'));
-      $('resultSelectionList').append(label);const option=el('option',run.label+' · '+run.id.slice(0,6));option.value=run.id;$('referenceRun').append(option);
+      $('resultSelectionList').append(label);const option=el('option',run.label+(run.result?.reference_role==='user_declared_ground_truth'?' · 声明 GT':' · 算法结果')+' · '+run.id.slice(0,6));option.value=run.id;$('referenceRun').append(option);
       if(run.result){const inspect=el('option',run.label+' · '+run.id.slice(0,6));inspect.value=run.id;$('inspectRun').append(inspect);}
     }
     if([...$('inspectRun').options].some(option=>option.value===inspected))$('inspectRun').value=inspected;
@@ -225,4 +251,4 @@ function renderMetrics(rows){
   }
 }
 
-if(typeof module!=='undefined')module.exports={defaultResultSelection,normalizeResultSelection,toggleResultSelection,metricValue,metricPairScope,filterMetricRows,handPostprocessLabel,runProtocol,resultCandidate,displayResultIds,comparisonGridPlan,comparisonMetricSelection};
+if(typeof module!=='undefined')module.exports={defaultResultSelection,normalizeResultSelection,toggleResultSelection,metricValue,metricPairScope,filterMetricRows,handPostprocessLabel,runProtocol,resultCandidate,resultCandidateNavigation,resultStateLabel,resultReferenceRole,displayResultIds,comparisonGridPlan,comparisonMetricSelection};

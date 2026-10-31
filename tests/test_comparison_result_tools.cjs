@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {defaultResultSelection,normalizeResultSelection,toggleResultSelection,metricValue,metricPairScope,filterMetricRows,handPostprocessLabel,runProtocol}=require('../mint/comparison/web/result-tools.js');
+const {defaultResultSelection,normalizeResultSelection,toggleResultSelection,metricValue,metricPairScope,filterMetricRows,handPostprocessLabel,runProtocol,resultCandidateNavigation,resultStateLabel,resultReferenceRole}=require('../mint/comparison/web/result-tools.js');
 const runs=[{id:'m',label:'MINT',algorithm:'mint'},{id:'h',label:'HaWoR Full',algorithm:'hawor_full'},{id:'hc',label:'HaWoR Camera',algorithm:'hawor_camera'},{id:'a',label:'ACE',algorithm:'ace_kfree'}];
 
 test('default three-column view includes independent algorithm families',()=>{
@@ -37,6 +37,34 @@ test('missing, nonfinite, zero and small metre errors are formatted distinctly',
 test('choosing a baseline never promotes an algorithm discrepancy to GT accuracy',()=>{
   assert.equal(metricPairScope({scope:'algorithm_discrepancy_not_accuracy',reference:'m'}),'算法差异');
   assert.equal(metricPairScope({scope:'error_against_declared_GT'}),'参考误差');
+});
+test('candidate navigation follows all alternatives with explicit boundaries and never changes overview choices',()=>{
+  const view={reference:'m',candidate:'h',selected:['m','a'],layout:'overview',pairSide:'reference'},before=JSON.stringify(view);
+  assert.deepEqual(resultCandidateNavigation(runs,view),{candidate:'h',index:1,total:3,previous:null,next:'hc'});
+  assert.deepEqual(resultCandidateNavigation(runs,{...view,candidate:'a'}),{candidate:'a',index:3,total:3,previous:'hc',next:null});
+  assert.equal(resultCandidateNavigation(runs,{...view,candidate:'m'}).candidate,'a','a newly pinned candidate falls back to a selected alternative');
+  assert.deepEqual(resultCandidateNavigation([runs[0]],view),{candidate:null,index:0,total:0,previous:null,next:null});
+  assert.equal(JSON.stringify(view),before);
+});
+test('candidate status and role labels distinguish missing geometry and immutable declared GT',()=>{
+  const gt=Object.freeze({id:'gt',label:'Reference',algorithm:'reference',result:Object.freeze({reference_role:'user_declared_ground_truth'})});
+  assert.equal(resultStateLabel({status:'completed'}),'已完成 · 无几何结果');
+  assert.equal(resultStateLabel({status:'completed',result:{}}),'已完成');assert.equal(resultStateLabel({status:'running'}),'运行中');
+  assert.equal(resultReferenceRole(gt,true).badge,'声明 GT · 基准');assert.equal(resultReferenceRole(gt,false).badge,'声明 GT');
+  assert.equal(resultReferenceRole(runs[0],true).badge,'算法基准');assert.equal(resultReferenceRole(runs[0],true).declaredGT,false);
+  assert.match(resultReferenceRole(runs[0],true).note,/不会.*声明为 GT/);assert.equal(gt.result.reference_role,'user_declared_ground_truth');
+});
+test('changing a candidate preserves the metric group contract, overview choices and source roles',async()=>{
+  const vm=require('node:vm'),fs=require('node:fs'),source=fs.readFileSync(require.resolve('../mint/comparison/web/result-tools.js'),'utf8'),calls=[];
+  const gt={id:'gt',label:'GT',algorithm:'reference',result:{reference_role:'user_declared_ground_truth'}},all=[gt,...runs],state={comparison:{id:'comparison',runs:all},frame:27,pollToken:1,metricsRows:[{first_run:'gt',second_run:'h'}]};
+  let finishFrame;const frameWait=new Promise(resolve=>{finishFrame=resolve;}),context=vm.createContext({state});vm.runInContext(source,context);
+  const selected=vm.runInContext("Object.assign(resultView,{reference:'gt',candidate:'m',selected:['gt','m','a'],layout:'pair',pairSide:'reference',expanded:'a'});resultView.selected",context),original=JSON.stringify(all);
+  Object.assign(context,{saveResultPreferences:()=>calls.push('save'),applyResultVisibility:()=>calls.push('visibility'),render:()=>calls.push('render'),renderMetrics:rows=>calls.push(['metrics',rows]),ensureFrame:frame=>{calls.push(['frame',frame]);return frameWait;}});
+  const pending=vm.runInContext("changeResultCandidate('h')",context);
+  assert.equal(vm.runInContext('resultView.candidate',context),'h');assert.equal(vm.runInContext('resultView.reference',context),'gt');assert.equal(vm.runInContext('resultView.selected',context),selected);assert.equal(vm.runInContext('resultView.layout',context),'pair');assert.equal(vm.runInContext('resultView.pairSide',context),'candidate');assert.equal(vm.runInContext('resultView.expanded',context),null);
+  assert.deepEqual(calls.find(item=>Array.isArray(item)&&item[0]==='frame'),['frame',27]);assert.equal(calls.find(item=>Array.isArray(item)&&item[0]==='metrics')[1],state.metricsRows);
+  state.pollToken=2;finishFrame();await pending;assert.equal(calls.filter(item=>item==='render').length,1,'a stale frame fetch cannot render another comparison');
+  const count=calls.length;await vm.runInContext("changeResultCandidate('gt');changeResultCandidate('removed')",context);assert.equal(calls.length,count);assert.equal(JSON.stringify(all),original);
 });
 
 test('a new HaWoR inference is never labelled as an existing numerical result',()=>{

@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark"><title>MINT · 多算法工作台</title>
-  <link rel="stylesheet" href="comparison-assets/style.css?v=20261031-canonical-navigation">
-  <link rel="stylesheet" href="comparison-assets/comparison-layout.css?v=20261031-canonical-navigation">
-  <link rel="stylesheet" href="comparison-assets/platform-layout.css?v=20261031-canonical-navigation">
+  <link rel="stylesheet" href="comparison-assets/style.css?v=20261101-comparison-workflow">
+  <link rel="stylesheet" href="comparison-assets/comparison-layout.css?v=20261101-comparison-workflow">
+  <link rel="stylesheet" href="comparison-assets/platform-layout.css?v=20261101-comparison-workflow">
 </head>
 <body>
 <svg class="icon-definitions" aria-hidden="true"><defs>
@@ -52,14 +52,14 @@
       <section id="panel-view" class="workspace-panel view-panel" role="tabpanel" aria-labelledby="tab-view">
         <div class="result-toolbar" aria-label="结果选择与运行协议">
           <details id="resultPicker" class="result-picker"><summary><span id="resultSelectionCount">显示结果</span></summary><div class="result-popover"><p class="hint">勾选要显示的结果。对照基准固定在首列；视频导出包含全部结果，截图使用当前选列。</p><div id="resultSelectionList" class="result-selection-list" role="group" aria-label="选择显示结果"></div></div></details>
-          <label class="inline-label reference-control" title="固定在第一列并作为指标对照；选择基准不会将其声明为 GT">对照基准<select id="referenceRun" aria-label="固定对照基准"></select></label>
+          <label class="inline-label reference-control" for="referenceRun" title="固定在第一列并作为指标对照；选择基准不会将其声明为 GT">基准<select id="referenceRun" aria-label="固定对照基准"></select></label>
           <button id="comparePair" class="quiet-button">A/B 对照</button><button id="showAllResults" class="quiet-button">显示全部</button>
           <details id="protocolPicker" class="protocol-picker"><summary>运行协议与来源</summary><div id="protocolList" class="result-popover protocol-list"></div></details>
           <details id="frameInspector" class="inspector-picker"><summary>逐帧诊断</summary><div class="result-popover inspector-popover"><div class="inspector-head"><label>查看结果<select id="inspectRun"></select></label><button id="inspectPrev">上一帧</button><button id="inspectNext">下一帧</button></div><p id="inspectFrameLabel" class="hint"></p><p id="inspectRole" class="hint"></p><canvas id="inspectTrend" aria-label="腕部相机深度趋势"></canvas><div id="jointValues" class="metric-table-scroll"></div><p id="inspectCamera" class="hint"></p></div></details>
         </div>
-        <div class="view-toolbar"><div class="segmented" role="group" aria-label="画面布局"><button data-view-mode="split" aria-pressed="true" class="active">2D + 3D</button><button data-view-mode="2d" aria-pressed="false">2D 叠加</button><button data-view-mode="3d" aria-pressed="false">3D 空间</button></div><label class="inline-label" title="只切换 3D 与腕点数值的坐标；2D 始终投影到原相机">3D 坐标<select id="space"><option value="camera">相机系</option><option value="world">世界系</option></select></label><label class="inline-label">几何<select id="geometryStyle" aria-label="显示几何"><option value="skeleton">骨架</option><option value="mesh">网格</option><option value="mesh_skel">网格 + 骨架</option></select></label><div class="view-options"><label><input id="showBaseline" type="checkbox">叠加基准</label><label><input id="showTrails" type="checkbox">轨迹</label><label title="显示存在性较低但有有限几何的预测"><input id="showAbsent" type="checkbox">低存在性</label></div><button id="resetView" class="icon-button" aria-label="重置三维视角" title="重置三维视角"><svg class="icon"><use href="#i-refresh"/></svg></button><button id="snapshot" class="icon-button" aria-label="保存当前画面" title="保存当前画面"><svg class="icon"><use href="#i-camera"/></svg></button><button id="focusMode" class="icon-button" aria-label="专注查看" aria-pressed="false" title="专注查看（F），Esc 退出"><svg class="icon"><use href="#i-expand"/></svg></button></div>
+        <div class="view-toolbar"><div class="segmented" role="group" aria-label="画面布局"><button data-view-mode="split" aria-pressed="true" class="active">2D + 3D</button><button data-view-mode="2d" aria-pressed="false">2D 叠加</button><button data-view-mode="3d" aria-pressed="false">3D 空间</button></div><label class="inline-label" for="space" title="只切换 3D 与腕点数值的坐标；2D 始终投影到原相机">3D 坐标<select id="space"><option value="camera">相机系</option><option value="world">世界系</option></select></label><label class="inline-label" for="geometryStyle">几何<select id="geometryStyle" aria-label="显示几何"><option value="skeleton">骨架</option><option value="mesh">网格</option><option value="mesh_skel">网格 + 骨架</option></select></label><div class="view-options"><label><input id="showBaseline" type="checkbox">叠加基准</label><label><input id="showTrails" type="checkbox">轨迹</label><label title="显示存在性较低但有有限几何的预测"><input id="showAbsent" type="checkbox">低存在性</label></div><button id="resetView" class="icon-button" aria-label="重置三维视角" title="重置三维视角"><svg class="icon"><use href="#i-refresh"/></svg></button><button id="snapshot" class="icon-button" aria-label="保存当前画面" title="保存当前画面"><svg class="icon"><use href="#i-camera"/></svg></button><button id="focusMode" class="icon-button" aria-label="专注查看" aria-pressed="false" title="专注查看（F），Esc 退出"><svg class="icon"><use href="#i-expand"/></svg></button></div>
         <div id="runs" class="run-grid" data-view-mode="split" role="list" aria-label="联动结果"></div>
-        <div class="transport"><div class="playback-buttons"><button id="prev" class="icon-button" aria-label="前一帧" title="前一帧（←）"><svg class="icon"><use href="#i-prev"/></svg></button><button id="play" class="play-button" aria-label="播放"><svg class="icon"><use href="#i-play"/></svg></button><button id="next" class="icon-button" aria-label="后一帧" title="后一帧（→）"><svg class="icon"><use href="#i-next"/></svg></button></div><div class="timeline-control"><input id="timeline" type="range" min="0" max="0" value="0" aria-label="视频帧时间轴"><div class="timeline-meta"><output id="timeLabel">等待输入准备…</output><span class="keyboard-hint">← → 逐帧 · 空格播放 · F 专注</span></div></div><label class="jump-control">跳至<input id="frameJump" type="number" min="1" value="1" aria-label="跳转到样本帧"><span>帧</span></label><select id="speed" aria-label="播放速度"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></div>
+        <div class="transport"><div class="playback-buttons"><button id="prev" class="icon-button" aria-label="前一帧" title="前一帧（←）"><svg class="icon"><use href="#i-prev"/></svg></button><button id="play" class="play-button" aria-label="播放"><svg class="icon"><use href="#i-play"/></svg></button><button id="next" class="icon-button" aria-label="后一帧" title="后一帧（→）"><svg class="icon"><use href="#i-next"/></svg></button></div><div class="timeline-control"><input id="timeline" type="range" min="0" max="0" value="0" aria-label="视频帧时间轴"><div class="timeline-meta"><output id="timeLabel">等待输入准备…</output><span id="playbackStatus" class="keyboard-hint" role="status">← → 逐帧 · 空格播放 · F 专注</span></div></div><label class="jump-control" for="frameJump">跳至<input id="frameJump" type="number" min="1" value="1" aria-label="跳转到样本帧"><span>帧</span></label><select id="speed" aria-label="播放速度"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></div>
       </section>
       <section id="panel-metrics" class="workspace-panel scroll-panel" role="tabpanel" aria-labelledby="tab-metrics" hidden>
         <div class="section-heading"><div><p class="eyebrow">METRICS / COVERAGE</p><h2>同输入指标分析</h2></div><button id="refreshMetrics" class="quiet-button">刷新指标</button></div>
@@ -96,6 +96,10 @@
   </div><details id="importSection" class="import-section"><summary>导入已有算法结果 / 参考标注</summary><div class="import-grid"><label>算法<select id="importAlgorithm"></select></label><label>格式<select id="importFormat"><option value="normalized_npz">标准几何 NPZ</option></select></label><label class="wide-field">服务器结果路径<input id="importPath" placeholder="/data1/…/result.npz"></label><label class="wide-field">对应样本位置 JSON<textarea id="importMap" rows="2" placeholder="[0,1,2,…]，必须明确给出"></textarea></label><label id="importGridLabel">HaWoR 原生尺寸 JSON<input id="importGrid" placeholder="[1920,1080]"></label><label class="wide-field">来源说明<input id="importSource" placeholder="原算法、输入视频和运行记录；参考标注需声明 GT 来源"></label></div><div class="button-row"><button id="import">导入并解码</button><p class="hint">沿用上方输入协议。导入耗时不包含原推理耗时。</p></div></details></div>
   <div class="dialog-footer"><div><div id="formError" role="alert"></div><p class="hint">任务提交后可在后台持续运行；关闭面板不会中断已提交任务。</p></div><button id="start" class="primary"><svg class="icon"><use href="#i-play"/></svg>开始比较</button></div>
 </dialog>
+<dialog id="runDetailsDialog" class="run-details-dialog" aria-labelledby="runDetailsTitle">
+  <div class="dialog-heading"><div><p class="eyebrow">RESULT / PROVENANCE</p><h2 id="runDetailsTitle">结果详情与来源</h2></div><button id="closeRunDetails" class="icon-button" type="button" aria-label="关闭结果详情"><svg class="icon"><use href="#i-close"/></svg></button></div>
+  <div id="runDetailsBody" class="run-details-body"></div>
+</dialog>
 <dialog id="logDialog" class="log-dialog" aria-labelledby="logTitle"><div class="dialog-heading"><div><p class="eyebrow">RUN / DIAGNOSTICS</p><h2 id="logTitle">运行日志</h2></div><button id="closeLog" class="icon-button" aria-label="关闭运行日志"><svg class="icon"><use href="#i-close"/></svg></button></div><pre id="logText"></pre></dialog>
 <dialog id="platformDialog" class="platform-dialog workspace-page" aria-labelledby="platformTitle">
   <div class="dialog-heading"><div><p class="eyebrow">MINT WORKSPACE</p><h2 id="platformTitle">统一工作台</h2></div><button id="closePlatform" class="quiet-button" aria-label="返回比较工作区" title="返回比较工作区；数据选择和表单保留">← 返回比较</button></div>
@@ -123,13 +127,13 @@
   </div>
 </dialog>
 <dialog id="exportDialog" class="export-dialog" aria-labelledby="exportTitle"><div class="dialog-heading"><h2 id="exportTitle">导出结果</h2><button id="closeExportDialog" class="icon-button" aria-label="关闭导出配置"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="task-dialog-body"><label>视频包含结果<select id="exportScope"><option value="all">全部已完成结果</option><option value="visible">当前可见结果</option></select></label><label>叠加内容<select id="exportGeometry"><option value="skeleton">骨架</option><option value="mesh">网格</option><option value="mesh_skel">网格 + 骨架</option></select></label><label><input id="exportBaseline" type="checkbox">叠加当前对照基准骨架</label><p class="hint">视频保持完整样本时间轴。缺少顶点的结果使用骨架。数值 ZIP 从各结果卡片下载，比较报告包含全部指标。</p><button id="confirmVideoExport" class="primary">生成同步视频</button><button id="exportCurrentPNG">保存当前可见画面 PNG</button><button id="exportFullReport">下载完整比较报告</button></div></dialog>
-<script src="comparison-assets/workspace.js?v=20261031-canonical-navigation"></script>
-<script src="comparison-assets/source-browser.js?v=20261031-canonical-navigation"></script>
-<script src="comparison-assets/result-tools.js?v=20261031-canonical-navigation"></script>
-<script src="comparison-assets/geometry-tools.js?v=20261031-canonical-navigation"></script>
-<script src="comparison-assets/platform.js?v=20261031-canonical-navigation"></script>
-<script src="comparison-assets/research.js?v=20261031-canonical-navigation"></script>
-<script src="comparison-assets/enhancements.js?v=20261031-canonical-navigation"></script>
-<script src="comparison-assets/locale.js?v=20261031-canonical-navigation"></script>
-<script src="comparison-assets/app.js?v=20261031-canonical-navigation"></script>
+<script src="comparison-assets/workspace.js?v=20261101-comparison-workflow"></script>
+<script src="comparison-assets/source-browser.js?v=20261101-comparison-workflow"></script>
+<script src="comparison-assets/result-tools.js?v=20261101-comparison-workflow"></script>
+<script src="comparison-assets/geometry-tools.js?v=20261101-comparison-workflow"></script>
+<script src="comparison-assets/platform.js?v=20261101-comparison-workflow"></script>
+<script src="comparison-assets/research.js?v=20261101-comparison-workflow"></script>
+<script src="comparison-assets/enhancements.js?v=20261101-comparison-workflow"></script>
+<script src="comparison-assets/locale.js?v=20261101-comparison-workflow"></script>
+<script src="comparison-assets/app.js?v=20261101-comparison-workflow"></script>
 </body></html>

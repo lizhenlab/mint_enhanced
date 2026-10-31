@@ -58,6 +58,15 @@ async function refresh(id,token){const value=await api(`api/comparisons/${id}`);
   syncResultTools(value);updateCombination();render(true);await ensureFrame(state.frame);if(token!==state.pollToken)return;render(true);
   const key=value.runs.filter(r=>r.result).map(r=>r.id).join(',');if(key!==state.metricsKey){state.metricsKey=key;state.metricsRows=null;state.metricRequest=null;$('metrics').textContent='打开此页后计算共同有效帧的数值。';if(workspaceUI.tab==='metrics')loadComparisonMetrics().catch(error=>notify(error.message));}
 }
+function openRunDetails(card){
+  const dialog=$('runDetailsDialog'),body=$('runDetailsBody');if(!dialog||!body)return;
+  pause();$('runDetailsTitle').textContent=card.run.label+' · 详情与来源';
+  const declared=card.run.result?.reference_role==='user_declared_ground_truth';
+  body.replaceChildren(el('p',declared?'此结果为用户声明的 GT；平台保留原始来源声明。':'此结果保留自身的算法与来源；设为对照基准不会将其声明为 GT。','explanation'));
+  const source=state.comparison?.sample_request?.source?.path;if(source)body.append(el('p','比较输入：'+source,'run-details-source'));
+  for(const child of card.meta.children)body.append(child.cloneNode(true));
+  if(!dialog.open)dialog.showModal();
+}
 function createCard(run,index){
   const node=el('section',undefined,'run-card'),color=algorithmColor(run,index);node.style.setProperty('--run-color',color);node.setAttribute('aria-label',run.label+' 结果');node.setAttribute('role','listitem');
   const head=el('div',undefined,'run-head'),titleGroup=el('div',undefined,'run-title'),title=el('h2',run.label),status=el('div',undefined,'run-state'),gpu=el('span',undefined,'run-gpu'),reference=el('span','基准','reference-badge');reference.hidden=true;titleGroup.append(title,status);head.append(titleGroup,reference,gpu);
@@ -69,20 +78,22 @@ function createCard(run,index){
   const scene=el('div',undefined,'media-pane scene-pane'),label=el('span','3D · 相机系 · 米','canvas-label'),canvas=el('canvas',undefined,'canvas3d');canvas.setAttribute('aria-label',run.label+' 三维手部，可拖动旋转和滚轮缩放');scene.append(canvas,label);visuals.append(videoPane,scene);
   const numbers=el('div',undefined,'current-values'),summary=el('div',undefined,'run-summary'),coverage=el('span','等待结果','coverage'),origin=el('span',run.imported?'导入结果':'原生推理','run-origin');summary.append(coverage,origin);
   const meta=el('div',undefined,'run-meta');meta.hidden=true;meta.id='run-meta-'+run.id;
-  const actions=el('div',undefined,'run-bottom'),cancel=el('button','取消'),resume=el('button','恢复'),log=el('button','日志'),geometry=el('a','几何下载'),enlarge=el('button','单列放大'),details=el('button','详情','details-button');geometry.href=`api/comparison/runs/${run.id}/download`;geometry.download='';details.setAttribute('aria-expanded','false');details.setAttribute('aria-controls',meta.id);
+  const actions=el('div',undefined,'run-bottom'),cancel=el('button','取消'),resume=el('button','恢复'),log=el('button','查看日志'),geometry=el('a','下载几何'),enlarge=el('button','单列放大'),details=el('button','详情与来源','details-button');geometry.href=`api/comparison/runs/${run.id}/download`;geometry.download='';details.setAttribute('aria-haspopup','dialog');details.setAttribute('aria-controls','runDetailsDialog');
+  const actionMenu=el('details',undefined,'run-action-menu'),menuSummary=el('summary','更多'),menuContent=el('div',undefined,'run-action-menu-content');menuSummary.setAttribute('aria-label',run.label+' 更多操作');actionMenu.append(menuSummary,menuContent);menuContent.append(log,geometry,details);
+  actionMenu.addEventListener('toggle',()=>{if(actionMenu.open)for(const other of document.querySelectorAll('.run-action-menu[open]'))if(other!==actionMenu)other.open=false;});
   enlarge.setAttribute('aria-label',run.label+' 单列放大或返回对比');enlarge.onclick=async()=>{resultView.expanded=resultView.expanded===run.id?null:run.id;applyResultVisibility();render(true);const token=state.pollToken;await ensureFrame(state.frame);if(token===state.pollToken)render(true);};
   cancel.onclick=async()=>{try{await api(`api/comparison/runs/${run.id}/cancel`,{});await refresh(state.comparison.id,state.pollToken);}catch(e){notify(e.message);}};
   resume.onclick=async()=>{try{await api(`api/comparison/runs/${run.id}/resume`,{});poll(state.comparison.id,state.pollToken);await refresh(state.comparison.id,state.pollToken);}catch(e){notify(e.message);}};
-  log.onclick=async()=>{try{const value=await api(`api/comparison/runs/${run.id}/log`);$('logTitle').textContent=run.label+' · 运行日志';$('logText').textContent=value.text;$('logDialog').showModal();}catch(e){notify(e.message);}};
-  details.onclick=()=>{meta.hidden=!meta.hidden;details.textContent=meta.hidden?'详情':'收起';details.setAttribute('aria-expanded',String(!meta.hidden));requestAnimationFrame(()=>render(true));};
-  const inspect=el('button','逐帧分析');inspect.onclick=event=>{event.stopPropagation();inspectResult(run.id);};actions.append(log,geometry,inspect,enlarge,cancel,resume,details);node.append(head,protocol,visuals,numbers,summary,actions,meta);
+  log.onclick=async()=>{actionMenu.open=false;const token=state.pollToken;try{const value=await api(`api/comparison/runs/${run.id}/log`);if(token!==state.pollToken)return;$('logTitle').textContent=run.label+' · 运行日志';$('logText').textContent=value.text;$('logDialog').showModal();}catch(e){if(token===state.pollToken)notify(e.message);}};
+  details.onclick=()=>{actionMenu.open=false;openRunDetails({run:state.cards.get(run.id)?.run||run,meta});};geometry.onclick=()=>{actionMenu.open=false;};
+  const inspect=el('button','逐帧分析');inspect.onclick=event=>{event.stopPropagation();inspectResult(run.id);};actions.append(inspect,enlarge,cancel,resume,actionMenu);node.append(head,protocol,visuals,numbers,summary,actions,meta);
   let drag=null;canvas.addEventListener('pointerdown',event=>{drag=[event.clientX,event.clientY];canvas.setPointerCapture(event.pointerId);});canvas.addEventListener('pointermove',event=>{if(!drag)return;state.orbit.yaw+=(event.clientX-drag[0])*.008;state.orbit.pitch=Math.max(-1.4,Math.min(1.4,state.orbit.pitch+(event.clientY-drag[1])*.008));drag=[event.clientX,event.clientY];render(true);});
   for(const event of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(event,()=>drag=null);
   canvas.addEventListener('wheel',event=>{event.preventDefault();state.orbit.zoom=Math.max(.2,Math.min(8,state.orbit.zoom*Math.exp(-event.deltaY*.001)));render(true);},{passive:false});
-  if(index===0){const token=state.pollToken;video.addEventListener('loadedmetadata',()=>{if(token===state.pollToken&&state.comparison?.sample&&state.frame>0)video.currentTime=state.frame/state.comparison.sample.fps+.0001;});video.addEventListener('loadeddata',()=>captureVideo(video,false));video.addEventListener('seeked',()=>captureVideo(video,false));video.addEventListener('ended',pause);
-    if(video.requestVideoFrameCallback){const onFrame=(_now,metadata)=>{if(token!==state.pollToken)return;if(workspaceUI.mode!=='3d')captureVideo(video,true,metadata.mediaTime);video.requestVideoFrameCallback(onFrame);};video.requestVideoFrameCallback(onFrame);}}
-  video.addEventListener('error',()=>notify('输入播放代理暂不可用，仍可逐帧查看已完成的三维结果。'));
-  return {node,title,status,gpu,reference,protocol,execution,enlarge,video,videoBox,overlay,canvas,label,numbers,meta,cancel,resume,geometry,coverage,origin,color,run,trajectory:null,trajectoryKey:''};
+  if(index===0){const token=state.pollToken;video.addEventListener('loadedmetadata',()=>{if(token===state.pollToken&&state.comparison?.sample&&state.frame>0)video.currentTime=state.frame/state.comparison.sample.fps+.0001;});video.addEventListener('loadeddata',()=>captureVideo(video,false));video.addEventListener('seeked',()=>captureVideo(video,false));video.addEventListener('ended',()=>{if(token===state.pollToken)pause();});
+    if(video.requestVideoFrameCallback){const onFrame=(_now,metadata)=>{if(token!==state.pollToken)return;if(workspaceUI.mode!=='3d')captureVideo(video,true,metadata.mediaTime);video.requestVideoFrameCallback(onFrame);};video.requestVideoFrameCallback(onFrame);}
+    for(const event of ['loadedmetadata','loadeddata','canplay','waiting','stalled','error','emptied','seeked'])video.addEventListener(event,()=>{if(token===state.pollToken){if(event==='error'&&state.playing)pause();else syncPlaybackReadiness();}});}
+  return {node,title,status,gpu,reference,protocol,execution,enlarge,inspect,video,videoBox,overlay,canvas,label,numbers,meta,cancel,resume,geometry,coverage,origin,color,run,trajectory:null,trajectoryKey:''};
 }
 function updateCard(card,run,sample){
   card.run=run;card.node.dataset.status=run.status;const progress=run.progress||{};
@@ -91,6 +102,7 @@ function updateCard(card,run,sample){
   card.status.title=run.error||card.status.textContent;const gpu=runGpuSummary(run);card.gpu.textContent=gpu.text;card.gpu.title=gpu.title;
   const execution=runExecutionSummary(run);card.execution.textContent=execution;card.execution.hidden=!execution;
   card.cancel.disabled=TERMINAL.has(run.status);card.cancel.hidden=TERMINAL.has(run.status);card.resume.hidden=!TERMINAL.has(run.status)||run.status==='completed';card.geometry.hidden=!run.result;
+  card.inspect.disabled=!run.result;card.inspect.title=run.result?'查看当前结果的逐帧数值':'结果发布后可逐帧分析';
   card.coverage.textContent=run.result?`${run.result.frames}/${sample?.frames||run.result.frames} 帧`:sample?`${sample.frames} 帧 · 等待结果`:'准备共享输入';
   card.origin.textContent=run.reuse?'复用原生结果':run.imported?'已有结果导入':run.result?.component_sources?'相机组合':run.result?.reused_native_stages_from?'阶段复用':run.algorithm==='mint'&&run.result?.native_timings?.forward_worker_seconds===0?'窗口结果复用':'原生推理';card.origin.title=run.reuse?'本次未运行网络；所示 GPU 与耗时属于原运行':run.result?.reused_native_stages_from?'已复用：'+run.result.reused_native_stages_from.stages.map(name=>STAGES[name]||name).join('、'):card.origin.textContent==='窗口结果复用'?'窗口未执行新的 GPU 前向；耗时包含读取、拼接和后处理，不代表冷启动耗时':'';
   if(sample&&!card.video.src&&card===state.cards.values().next().value){card.video.src=`comparison-media/${sample.id}.mp4`;card.video.load();}
@@ -141,11 +153,31 @@ function draw3D(card,data,bounds){const ratio=window.devicePixelRatio||1,w=Math.
   const meshDrawn=drawMesh3D(card,data,proj);drawBaseline(card,ctx,proj,world);if(geometryMode()==='mesh'&&meshDrawn)return;
   for(let slot=0;slot<2;slot++){if(!visible(p,i,slot)||!joints?.[slot])continue;const points=joints[slot];ctx.strokeStyle=handColor(slot);ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=2*ratio;for(const [a,b]of p.connections){if(points[a]?.some(x=>x===null)||points[b]?.some(x=>x===null))continue;ctx.beginPath();ctx.moveTo(...proj(points[a]));ctx.lineTo(...proj(points[b]));ctx.stroke();}for(const point of points){if(!point||point.some(x=>x===null))continue;ctx.beginPath();ctx.arc(...proj(point),2.2*ratio,0,Math.PI*2);ctx.fill();}}
 }
-function render(force=false){updateResultLayoutHint();if(!state.comparison?.sample)return;if(!force&&state.lastRendered===state.frame)return;state.lastRendered=state.frame;const sample=state.comparison.sample;$('timeline').value=state.frame;if(document.activeElement!==$('frameJump'))$('frameJump').value=state.frame+1;$('timeLabel').textContent=`第 ${state.frame+1}/${sample.frames} 帧 · 源索引 ${sample.source_frame_indices[state.frame]}（0 起） · ${fmt(sample.timestamps_s[state.frame],3)}s`;
+function render(force=false){updateResultLayoutHint();syncPlaybackReadiness();if(!state.comparison?.sample)return;if(!force&&state.lastRendered===state.frame)return;state.lastRendered=state.frame;const sample=state.comparison.sample;$('timeline').value=state.frame;if(document.activeElement!==$('frameJump'))$('frameJump').value=state.frame+1;$('timeLabel').textContent=`第 ${state.frame+1}/${sample.frames} 帧 · 源索引 ${sample.source_frame_indices[state.frame]}（0 起） · ${fmt(sample.timestamps_s[state.frame],3)}s`;
   const all=[];for(const card of visibleResultCards()){const d=dataFor(card),points=($('space').value==='world'?d?.payload.joints_world_m:d?.payload.joints_camera_m)?.[d?.index];if(points)for(const [slot,hand] of points.entries()){if(!visible(d.payload,d.index,slot))continue;for(const point of hand||[])if(point?.every(Number.isFinite))all.push(point);}if($('space').value==='world'&&$('showTrails').checked&&card.trajectory?.camera_world_m)for(const point of card.trajectory.camera_world_m)if(point?.every(Number.isFinite))all.push(point);}
   const min=[0,0,0],max=[0,0,0];if(all.length)for(let axis=0;axis<3;axis++){min[axis]=Math.min(...all.map(p=>p[axis]));max[axis]=Math.max(...all.map(p=>p[axis]));}const bounds={center:min.map((v,i)=>(v+max[i])/2),span:Math.max(.3,...min.map((v,i)=>max[i]-v))};
   for(const card of visibleResultCards()){const data=dataFor(card);if(workspaceUI.mode!=='3d')drawOverlay(card,data);if(workspaceUI.mode!=='2d')draw3D(card,data,bounds);if(!data){card.numbers.replaceChildren(el('span',card.run.result?'当前帧数据加载中…':'等待几何结果'));}if(data){const {payload:p,index:i}=data;card.numbers.replaceChildren(...[0,1].map(slot=>{const isWorld=$('space').value==='world';const wrist=(isWorld?p.joints_world_m:p.joints_camera_m)?.[i]?.[slot]?.[0];return el('span',`${slot?'R':'L'} ${wrist?.every(Number.isFinite)?wrist.map(v=>fmt(v*100,1)).join(' / ')+' cm':isWorld&&!p.joints_world_m?'无世界坐标':'缺失'}${p.filled?.[i]?.[slot]?' · 补全':''}${p.presence?.[i]?.[slot]===false?' · 低存在性':''}`); }));}}
   updateFrameInspector();
+}
+// Media readiness is separate from geometry: frame inspection stays usable without video.
+function comparisonPlaybackState(sample,video,frame){
+  const count=Number(sample?.frames),hasSample=Number.isInteger(count)&&count>0;
+  const validFrame=hasSample?Math.max(0,Math.min(count-1,Number.isFinite(frame)?Math.round(frame):0)):0;
+  const ready=hasSample&&!!video&&video.readyState>=2&&!video.error&&!video.seeking;
+  return {ready,previous:hasSample&&validFrame>0,next:hasSample&&validFrame<count-1,seek:hasSample,
+    note:!hasSample?'等待共享输入准备…':video?.error?'预览不可用 · 仍可逐帧查看三维结果':
+      video?.seeking?'正在定位视频帧…':!ready?'视频预览准备中 · 可逐帧查看三维结果':'← → 逐帧 · 空格播放 · F 专注'};
+}
+function syncPlaybackReadiness(){
+  const value=comparisonPlaybackState(state.comparison?.sample,masterVideo(),state.frame);
+  const flags={play:!value.ready&&!state.playing,prev:!value.previous,next:!value.next,timeline:!value.seek,frameJump:!value.seek,snapshot:!value.seek||state.cards.size===0};
+  for(const [id,disabled]of Object.entries(flags)){const node=$(id);if(node)node.disabled=disabled;}
+  const label=$('playbackStatus');if(label){if(label.textContent!==value.note)label.textContent=value.note;label.title=value.note;label.dataset.state=masterVideo()?.error?'error':!value.seek?'waiting':!value.ready?'loading':'ready';}
+  const playButton=$('play');if(playButton)playButton.title=state.playing?'暂停（空格）':value.ready?'播放（空格）':value.note;
+}
+function comparisonShortcutAllowed(event){
+  return !event.defaultPrevented&&!event.isComposing&&!event.altKey&&!event.metaKey&&!event.ctrlKey&&
+    !event.target?.closest?.('input,textarea,select,button,a,summary,video,[contenteditable],[role="tab"],[role="slider"]');
 }
 function masterVideo(){return state.cards.values().next().value?.video;}
 function captureVideo(video,advance=false,mediaTime=video?.currentTime){
@@ -154,9 +186,21 @@ function captureVideo(video,advance=false,mediaTime=video?.currentTime){
   if(!state.frameBuffer)state.frameBuffer=el('canvas');const ctx=resizeCanvas(state.frameBuffer,...sample.proxy_pixel_grid);ctx.drawImage(video,0,0,state.frameBuffer.width,state.frameBuffer.height);
   ensureFrame(state.frame).then(()=>render(true));render(true);
 }
-function pause(){state.playing=false;updatePlayControl(false);for(const card of state.cards.values())card.video.pause();}
-async function seek(frame){if(!state.comparison?.sample)return;pause();state.frame=Math.max(0,Math.min(state.comparison.sample.frames-1,frame));const video=masterVideo();if(video?.readyState>=1){const target=state.frame/state.comparison.sample.fps+.0001;if(Math.abs(video.currentTime-target)>.00005)video.currentTime=target;else captureVideo(video,false);}await ensureFrame(state.frame);render(true);}
-async function play(){if(state.playing){pause();return;}if(!state.comparison?.sample)return;try{const video=masterVideo();if(!video)throw new Error('等待输入代理');const token=state.pollToken;video.playbackRate=state.rate;state.playing=true;updatePlayControl(true);await video.play();if(token!==state.pollToken||!state.playing)video.pause();}catch(error){if(!state.playing&&error.name==='AbortError')return;pause();notify('视频尚未准备好：'+error.message);}}
+function pause(){state.playIntent=(state.playIntent||0)+1;state.playing=false;updatePlayControl(false);for(const card of state.cards.values())card.video.pause();syncPlaybackReadiness();}
+async function seek(frame){
+  if(!state.comparison?.sample||!Number.isFinite(frame))return;const token=state.pollToken;
+  pause();state.frame=Math.max(0,Math.min(state.comparison.sample.frames-1,Math.round(frame)));const video=masterVideo();
+  if(video?.readyState>=1&&!video.error){const target=state.frame/state.comparison.sample.fps+.0001;if(Math.abs(video.currentTime-target)>.00005)video.currentTime=target;else captureVideo(video,false);}
+  syncPlaybackReadiness();await ensureFrame(state.frame);if(token===state.pollToken)render(true);
+}
+async function play(){
+  if(state.playing){pause();return;}const video=masterVideo(),token=state.pollToken;
+  if(!comparisonPlaybackState(state.comparison?.sample,video,state.frame).ready){syncPlaybackReadiness();return;}
+  const intent=state.playIntent=(state.playIntent||0)+1;
+  try{video.playbackRate=state.rate;state.playing=true;updatePlayControl(true);await video.play();if(token!==state.pollToken||video!==masterVideo())video.pause();else if(!state.playing)video.pause();}
+  catch(error){if(token!==state.pollToken||video!==masterVideo()||intent!==state.playIntent)return;if(!state.playing&&error.name==='AbortError')return;pause();notify('视频暂不可播放：'+error.message);}
+  if(token===state.pollToken)syncPlaybackReadiness();
+}
 function tick(){const video=masterVideo();if(state.playing&&video&&(!video.requestVideoFrameCallback||workspaceUI.mode==='3d'||video.closest('.run-card')?.hidden))captureVideo(video,true);requestAnimationFrame(tick);}
 function updateCombination(){for(const [id,worldOnly]of [['handRun',false],['cameraRun',true]]){const select=$(id),old=select.value;select.replaceChildren();for(const run of state.comparison.runs){if(!run.result||(worldOnly&&!('T_world_camera'in run.result.arrays)))continue;const option=el('option',run.label+' · '+run.id.slice(0,6));option.value=run.id;select.append(option);}if([...select.options].some(o=>o.value===old))select.value=old;}}
 async function loadComparisonMetrics(){
@@ -187,10 +231,12 @@ $('snapshot').onclick=async()=>{
 };
 window.addEventListener('resize',()=>render(true));
 document.addEventListener('keydown',event=>{
-  if(event.altKey||event.metaKey||event.ctrlKey||document.querySelector('dialog[open]')||!state.comparison||workspaceUI.tab!=='view')return;
-  if(document.activeElement.closest('input,textarea,select,button,a,summary,[contenteditable=true]'))return;
+  if(!comparisonShortcutAllowed(event)||document.querySelector('dialog[open]')||!state.comparison||workspaceUI.tab!=='view')return;
   if(event.key==='ArrowRight'){event.preventDefault();seek(state.frame+1);}if(event.key==='ArrowLeft'){event.preventDefault();seek(state.frame-1);}if(event.code==='Space'){event.preventDefault();play();}if(event.key.toLowerCase()==='f'){event.preventDefault();setFocusMode(!workspaceUI.focus);}
 });
+document.addEventListener('click',event=>{for(const menu of document.querySelectorAll('.run-action-menu[open]'))if(!menu.contains(event.target))menu.open=false;});
+document.addEventListener('keydown',event=>{if(event.key==='Escape')for(const menu of document.querySelectorAll('.run-action-menu[open]'))menu.open=false;});
+if($('closeRunDetails'))$('closeRunDetails').onclick=()=>$('runDetailsDialog').close();
 window.addEventListener('popstate',()=>{const query=new URLSearchParams(location.search);if(query.get('hub'))return;const id=query.get('id');if(id)openComparison(id,{history:false}).catch(e=>notify(e.message));});
 initializeWorkspace();
 (async()=>{try{
@@ -213,7 +259,7 @@ initializeWorkspace();
   if(query.get('run')&&!id){const requestedRun=query.get('run'),parents=await api('api/comparison/runs/'+encodeURIComponent(requestedRun)+'/parent');query=new URLSearchParams(location.search);id=query.get('id')||(query.get('run')===requestedRun?parents.comparisons[0]:null);}
   if(!id&&!explicitRoute(query)&&!$('platformDialog').open){
     let remembered;try{remembered=localStorage.getItem('mint.compare.last');}catch(_){}
-    id=workspaceUI.history.some(v=>v.id===remembered)?remembered:workspaceUI.history[0]?.id;
+    id=preferredComparison(workspaceUI.history,remembered)?.id;
   }
   // A navigation made while the request is pending retains its pane and route.
   if(id&&state.comparison?.id!==id)await openComparison(id,{replace:true,keepPlatform:true});

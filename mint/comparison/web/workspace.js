@@ -34,6 +34,7 @@ function showNotice(message,error=true){
   if(message)workspaceUI.noticeTimer=setTimeout(()=>{host.hidden=true;},error?12000:6500);
 }
 function comparisonState(value){
+  if(!value.runs.length)return 'attention';
   if(value.runs.some(run=>!TERMINAL.has(run.status)))return 'active';
   return value.runs.some(run=>run.status!=='completed')?'attention':'completed';
 }
@@ -49,27 +50,50 @@ function comparisonDisplayName(value){
   if(title&&title!==file&&!/^(?:\d+:)?(?:None|null|undefined)(?::\d+)?$/i.test(title))return title;
   return /^\d+\.[^.]+$/i.test(file)&&parts.length>2?`${parts.slice(-3,-1).join(' / ')} · ${file}`:/^(?:video|input|source|clip)\.[^.]+$/i.test(file)&&parts.length>1?`${parts.at(-2)} · ${file}`:file;
 }
+function comparisonSourceSummary(value){
+  const request=value.sample_request||{},selection=value.dataset_context?.selection,path=request.source?.path||'';
+  const view=({full:'完整画面',left:'左眼',right:'右眼'})[request.view]||request.view||'完整画面';
+  const episode=selection?`${selection.root?.split('/').filter(Boolean).at(-1)||'LeRobot'} · Episode ${selection.episode}${selection.video_key?' · '+selection.video_key:''}`:'';
+  const name=episode||comparisonDisplayName({...value,title:''});
+  const range=`源索引 ${request.start_frame??0} 起（0 起） · ${request.max_frames==null?'至片尾':'最多 '+request.max_frames+' 帧'} · ${Number(request.target_fps)>0?request.target_fps+' FPS':'保留源 FPS'}`;
+  return {path,name,view,range,label:`${name} · ${view}`,description:[path,episode,view,range].filter(Boolean).join('\n')};
+}
+function comparisonReferenceSummary(value){
+  const declared=value.runs.filter(run=>run.result?.reference_role==='user_declared_ground_truth');
+  return declared.length?`声明 GT 参考：${declared.map(run=>run.label||run.algorithm).join('、')}；与其对照可计算参考误差，其他配对只表示算法差异。`:'未附声明 GT 参考；算法间数值只表示差异，不代表准确率。';
+}
+function comparisonSearchText(value){
+  const source=comparisonSourceSummary(value);
+  return [value.title,value.id,comparisonDisplayName(value),source.description,...value.runs.flatMap(run=>[run.label,run.algorithm,run.checkpoint])].filter(Boolean).join(' ').toLocaleLowerCase();
+}
+function preferredComparison(history,remembered){
+  return history.find(value=>value.id===remembered)||history.find(value=>comparisonRecordKind(value)==='regular'&&value.runs?.some(run=>run.algorithm!=='reference'))||history[0]||null;
+}
+function comparisonJumpFrame(value,total){
+  if(String(value).trim()===''||!Number.isFinite(Number(value))||!Number.isInteger(Number(value))||!Number.isInteger(total)||total<1)return null;
+  return Math.max(0,Math.min(total-1,Number(value)-1));
+}
 function historyGroups(rows){
-  const groups=new Map();for(const row of rows){const request=row.sample_request||{},key=`${request.source?.path||row.id}|${request.view||'full'}`;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}return [...groups.entries()];
+  const groups=new Map();for(const row of rows){const request=row.sample_request||{},selection=row.dataset_context?.selection,key=JSON.stringify([request.source?.path||row.id,request.view||'full',selection?.root??null,selection?.episode??null,selection?.video_key??null]);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(row);}return [...groups.entries()];
 }
 function renderHistoryList(){
   const host=$('history'),scroll=host.scrollTop,query=$('historySearch').value.trim().toLocaleLowerCase();host.replaceChildren();
   const rows=workspaceUI.history.filter(value=>(workspaceUI.filter==='all'||comparisonState(value)===workspaceUI.filter)&&
     (query||$('historyScope')?.value==='all'||state.comparison?.id===value.id||comparisonRecordKind(value)==='regular')&&
-    [value.title,value.id,value.sample_request?.source?.path,...value.runs.map(r=>r.label)].join(' ').toLocaleLowerCase().includes(query));
+    comparisonSearchText(value).includes(query));
   $('historyCount').textContent=`${rows.length}/${workspaceUI.history.length}`;
   for(const [key,entries]of historyGroups(rows)){
-    const group=el('details',undefined,'history-group');group.open=workspaceUI.historyCollapsed?.has(key)!==true;const heading=el('summary',`${comparisonDisplayName({...entries[0],title:''})} · ${entries.length} 次比较`);heading.title=entries[0].sample_request?.source?.path||'';group.append(heading);group.ontoggle=()=>{workspaceUI.historyCollapsed??=new Set();if(group.open)workspaceUI.historyCollapsed.delete(key);else workspaceUI.historyCollapsed.add(key);};
+    const group=el('details',undefined,'history-group');group.open=workspaceUI.historyCollapsed?.has(key)!==true;const source=comparisonSourceSummary(entries[0]),heading=el('summary',`${source.label} · ${entries.length} 次比较`);heading.title=[source.path,source.label,'帧范围和 FPS 以各条记录为准'].filter(Boolean).join('\n');group.append(heading);group.ontoggle=()=>{workspaceUI.historyCollapsed??=new Set();if(group.open)workspaceUI.historyCollapsed.delete(key);else workspaceUI.historyCollapsed.add(key);};
     const groupItems=el('div',undefined,'history-group-items');group.append(groupItems);host.append(group);
     for(const value of entries){
     const row=el('button',undefined,'history-row');row.dataset.comparison=value.id;row.classList.toggle('active',state.comparison?.id===value.id);
     if(state.comparison?.id===value.id)row.setAttribute('aria-current','page');
     const status=comparisonState(value),done=value.runs.filter(r=>r.status==='completed').length;
-    const title=el('span',comparisonDisplayName(value),'history-row-title');row.append(title);row.title=[value.title,value.id].join(' · ');
+    const title=el('span',comparisonDisplayName(value),'history-row-title');row.append(title);title.title=title.textContent;row.title=[comparisonDisplayName(value),comparisonSourceSummary(value).description,comparisonReferenceSummary(value),'比较 ID：'+value.id].join('\n');
     const kind=comparisonRecordKind(value);if(kind!=='regular')row.append(el('small',kind==='reference'?'参考结果记录':'系统 / 验收记录','history-record-kind'));
     const names=[...new Set(value.runs.map(r=>r.label))].join(' · '),description=el('small',names);description.title=names;row.append(description);
-    const label=el('span',status==='active'?`${done}/${value.runs.length} 完成 · 运行中`:status==='completed'?`${value.runs.length} 个结果 · 已完成`:`${done}/${value.runs.length} 完成 · 需查看`,'history-state');label.dataset.state=status;row.append(label);
-    const request=value.sample_request||{},range=el('small',`${{full:'完整画面',left:'左眼',right:'右眼'}[request.view]||''} · 源索引 ${request.start_frame??0} 起 · ${request.max_frames==null?'全片':request.max_frames+' 帧'}`);row.append(range);
+    const label=el('span',!value.runs.length?'尚无结果记录':status==='active'?`${done}/${value.runs.length} 完成 · 运行中`:status==='completed'?`${value.runs.length} 个结果 · 已完成`:`${done}/${value.runs.length} 完成 · 需查看`,'history-state');label.dataset.state=status;row.append(label);
+    const request=comparisonSourceSummary(value),range=el('small',`${request.view} · ${request.range}`);range.title=range.textContent;row.append(range);
     row.onclick=()=>{if(window.innerWidth<=1100){workspaceUI.mobileSidebar=false;applyLayout();}openComparison(value.id).catch(e=>notify(e.message));};groupItems.append(row);
     }
   }
@@ -81,15 +105,15 @@ function updateHistorySelection(){
 }
 function syncSessionSummary(value){
   const done=value.runs.filter(r=>r.status==='completed').length,status=comparisonState(value);
-  $('sessionStatus').textContent=status==='completed'?`${done} 个结果已完成`:`${done}/${value.runs.length} 完成${status==='active'?' · 运行中':' · 需查看'}`;
-  $('sessionStatus').dataset.state=status;$('sessionTitle').title=value.title;
+  $('sessionStatus').textContent=!value.runs.length?'尚无结果记录':status==='completed'?`${done} 个结果已完成`:`${done}/${value.runs.length} 完成${status==='active'?' · 运行中':' · 需查看'}`;
+  $('sessionStatus').dataset.state=status;$('sessionStatus').title=comparisonReferenceSummary(value);$('sessionTitle').title=[comparisonDisplayName(value),comparisonSourceSummary(value).description,'比较 ID：'+value.id].join('\n');
   const prior=workspaceUI.history.findIndex(v=>v.id===value.id);
   if(prior>=0){const changed=workspaceUI.history[prior].runs.map(r=>r.status).join()!==value.runs.map(r=>r.status).join();workspaceUI.history[prior]=value;if(changed)renderHistoryList();}
   if(typeof refreshPlatformContext==='function')refreshPlatformContext();
   const sample=value.sample;
-  for(const id of ['play','prev','next','timeline','frameJump','snapshot'])$(id).disabled=!sample;
+  if(typeof syncPlaybackReadiness==='function')syncPlaybackReadiness();
   const results=value.runs.filter(r=>r.result).length;$('exportVideo').disabled=!sample||!results||!!state.exporting;
-  if(sample){$('frameJump').max=sample.frames;$('sampleInfo').title=value.sample_request.source.path;}
+  if(sample){$('frameJump').max=sample.frames;$('sampleInfo').title=comparisonSourceSummary(value).description+'\n'+comparisonReferenceSummary(value);}
 }
 function openTaskDialog(importMode=false){
   if($('platformDialog').open)$('platformDialog').close();
@@ -127,9 +151,13 @@ function validateTaskInput(checkAlgorithms=true){
 function updatePlayControl(playing){$('play').replaceChildren(icon(playing?'pause':'play'));$('play').setAttribute('aria-label',playing?'暂停':'播放');$('play').title=playing?'暂停（空格）':'播放（空格）';}
 function algorithmColor(run,index){return run.algorithm==='mint'?'#b9f45a':run.algorithm.startsWith('hawor')?'#58d5d2':run.algorithm.startsWith('ace')?'#ffb87a':COLORS[index%COLORS.length];}
 function runGpuSummary(run){
+  if(run.reuse)return {text:'本次未推理',title:'复用已校验结果；原运行的 GPU 用量和耗时见运行详情'};
   const live=run.progress?.gpu_scheduler;
-  if(live&&!TERMINAL.has(run.status))return {text:`GPU ${live.running_devices?.length||0}/${live.max_workers??run.options?.max_gpus??'—'}`,title:(live.running_devices||[]).length?'当前物理 GPU：'+live.running_devices.join(', '):'当前阶段暂无已分配的 GPU；分母是允许上限'};
-  if(run.result?.parallel_stages){const values=Object.values(run.result.parallel_stages);return {text:`峰值 ${Math.max(0,...values.map(v=>v.peak_running_workers||0))} GPU`,title:values.map(v=>`${v.gpu_devices?.length||0} 张卡，${fmt(v.wall_seconds,1)} 秒`).join('；')};}
+  if(live&&!TERMINAL.has(run.status)){
+    const running=Array.isArray(live.running_devices)?live.running_devices:null,eligible=Array.isArray(live.eligible_devices)?live.eligible_devices.length:'未报告';
+    return {text:running?`运行 ${running.length} GPU`:'GPU 分配未报告',title:[running?.length?'当前分配：'+running.join(', '):running?'当前阶段暂无已分配的 GPU':'当前阶段未报告 GPU 分配',`可调度 ${eligible} 张 · 允许上限 ${live.max_workers??run.options?.max_gpus??'未报告'}`, '可调度不表示已分配；实际并发随阶段与负载变化'].join('\n')};
+  }
+  if(run.result?.parallel_stages){const values=Object.values(run.result.parallel_stages),peaks=values.map(v=>v.peak_running_workers).filter(Number.isFinite);return {text:peaks.length?`峰值 ${Math.max(0,...peaks)} GPU`:'GPU 历史记录',title:values.map(v=>`${v.gpu_devices?.length||0} 张卡，${fmt(v.wall_seconds,1)} 秒`).join('；')};}
   if(!TERMINAL.has(run.status)&&run.options?.max_gpus)return {text:`上限 ${run.options.max_gpus} GPU`,title:'允许上限；当前阶段未报告实时分配数量'};
   return {text:'',title:''};
 }
@@ -170,9 +198,10 @@ function initializeWorkspace(){
   for(const id of ['openImport','manageImport'])$(id).onclick=()=>openTaskDialog(true);
   $('closeTask').onclick=()=>$('taskDialog').close();
   $('importAlgorithm').onchange=updateImportFormats;$('importFormat').onchange=()=>{$('importGridLabel').hidden=$('importFormat').value!=='hawor_world_npz';};
-  $('frameJump').onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();if($('frameJump').checkValidity())seek(Number($('frameJump').value)-1);else $('frameJump').reportValidity();}};
-  $('frameJump').onchange=()=>{if($('frameJump').checkValidity())seek(Number($('frameJump').value)-1);};
+  const jumpToFrame=()=>{const field=$('frameJump'),frame=comparisonJumpFrame(field.value,state.comparison?.sample?.frames);if(frame===null){if(field.value.trim())field.reportValidity();return;}field.value=String(frame+1);seek(frame);};
+  $('frameJump').onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();jumpToFrame();}};
+  $('frameJump').onchange=jumpToFrame;
   document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!document.querySelector('dialog[open]')&&workspaceUI.focus)setFocusMode(false);});
   window.addEventListener('resize',applyLayout);
 }
-if(typeof module!=='undefined'&&module.exports)module.exports={comparisonRecordKind,comparisonDisplayName,historyGroups,runExecutionSummary,durationLabel};
+if(typeof module!=='undefined'&&module.exports)module.exports={comparisonRecordKind,comparisonDisplayName,comparisonSourceSummary,comparisonReferenceSummary,comparisonSearchText,preferredComparison,comparisonJumpFrame,historyGroups,runGpuSummary,runExecutionSummary,durationLabel};

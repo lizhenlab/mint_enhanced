@@ -204,6 +204,10 @@ initializeWorkspace();
   let query=new URLSearchParams(location.search);
   if(!explicitRoute(query)&&!$('platformDialog').open&&!$('taskDialog').open){await historyReady;query=new URLSearchParams(location.search);}
   if($('taskDialog').open)return;
+  // A module link must become visible before loading its optional comparison context.
+  const initialHub=query.get('hub');
+  if(initialHub&&HUB_LABELS[initialHub]&&(!$('platformDialog').open||platform.pane!==initialHub))await openPlatform(initialHub);
+  query=new URLSearchParams(location.search);
   let id=query.get('id');
   if(query.get('run')&&!id){const requestedRun=query.get('run'),parents=await api('api/comparison/runs/'+encodeURIComponent(requestedRun)+'/parent');query=new URLSearchParams(location.search);id=query.get('id')||(query.get('run')===requestedRun?parents.comparisons[0]:null);}
   if(!id&&!explicitRoute(query)&&!$('platformDialog').open){

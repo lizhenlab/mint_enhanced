@@ -59,14 +59,14 @@ test('numeric video filenames include their action or sequence context',()=>{
 });
 
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
-function bootFixture(search,{activePane=null,taskOpen=false,source=''}={}){
+function bootFixture(search,{activePane=null,taskOpen=false,source='',comparisonWait=null}={}){
   const vm=require('node:vm'),fs=require('node:fs'),history=deferred(),parent=deferred(),calls=[];
   const nodes={source:{value:source},examples:{value:'',append(){}},dependencyStatus:{},platformDialog:{open:!!activePane},taskDialog:{open:taskOpen}};
-  const sandbox={URLSearchParams,location:{search},localStorage:{getItem:()=>null},state:{specs:[],comparison:null},workspaceUI:{history:[]},platform:{pane:activePane},HUB_LABELS:{data:'Data',research:'Research',tools:'Tools'},
+  const sandbox={URLSearchParams,location:{search},localStorage:{getItem:()=>null},state:{specs:[],comparison:null},workspaceUI:{history:[]},platform:{pane:activePane||'data'},HUB_LABELS:{data:'Data',research:'Research',tools:'Tools'},
     $:id=>nodes[id],el:()=>({}),buildAlgorithms(){},refreshComposerAlgorithms(){},updateImportFormats(){},notify:message=>calls.push(['notice',message]),
     api:path=>path==='api/algorithms'?Promise.resolve({algorithms:[]}):path==='api/comparison/examples'?Promise.resolve({examples:[{label:'Example',path:'/example.mp4'}]}):parent.promise,
     loadHistory:()=>history.promise.then(()=>{sandbox.workspaceUI.history=[{id:'remembered'}];}),
-    openComparison:async(id,options)=>{calls.push(['comparison',id,options]);sandbox.state.comparison={id};},inspectResult:id=>calls.push(['inspect',id]),seek:frame=>calls.push(['seek',frame]),
+    openComparison:async(id,options)=>{calls.push(['comparison',id,options]);if(comparisonWait)await comparisonWait.promise;sandbox.state.comparison={id};},inspectResult:id=>calls.push(['inspect',id]),seek:frame=>calls.push(['seek',frame]),
     openCollection:async id=>calls.push(['collection',id]),openPlatform:async pane=>{calls.push(['platform',pane]);nodes.platformDialog.open=true;sandbox.platform.pane=pane;}};
   const sourceText=fs.readFileSync(require.resolve('../mint/comparison/web/app.js'),'utf8');
   const expression=sourceText.slice(sourceText.lastIndexOf('(async()=>{try{')).replace(/tick\(\);\s*$/,'');
@@ -81,6 +81,18 @@ test('an explicit comparison opens before slow history completes and preserves a
   assert.equal(boot.calls[0][2].keepPlatform,true);
   assert.equal(boot.calls.some(row=>row[0]==='platform'),false);
   boot.history.resolve();await boot.promise;
+});
+
+test('a closed default data pane opens before its slow comparison context and history finish',async()=>{
+  const comparisonWait=deferred(),boot=bootFixture('?id=direct&hub=data',{comparisonWait});
+  await microtasks();
+  assert.equal(boot.nodes.platformDialog.open,true);
+  assert.equal(boot.sandbox.platform.pane,'data');
+  assert.deepEqual(boot.calls.map(row=>row[0]),['platform','comparison']);
+  assert.equal(boot.calls[1][2].keepPlatform,true);
+  comparisonWait.resolve();await boot.promise;
+  assert.equal(boot.calls.filter(row=>row[0]==='platform').length,1);
+  boot.history.resolve();
 });
 
 test('a module chosen while default history is loading cancels remembered-comparison navigation',async()=>{

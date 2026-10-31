@@ -49,7 +49,7 @@ function selectedAlgorithmsFrom(container){
 function hubError(error){$('platformError').textContent=error?.message||String(error);}
 function selectionSummary(){
   const values=[...platform.selection.values()],episodes=values.filter(value=>value.dataset).length;
-  $('collectionSelectionSummary').textContent=`已选择 ${values.length} 项 · ${episodes} 个 Episode · ${values.length-episodes} 个视频`;
+  $('collectionSelectionSummary').textContent=`批量列表：已选择 ${values.length} 项 · ${episodes} 个 Episode · ${values.length-episodes} 个视频`;
 }
 function addInputCheckbox(host,key,value,label,description){
   const row=el('label',undefined,'collection-entry'),check=el('input');check.type='checkbox';check.checked=platform.selection.has(key);
@@ -113,6 +113,7 @@ function switchHub(tab){
   if(tab==='catalog')refreshArtifactCatalog().catch(hubError);
   if(tab==='quality')refreshQualityContext().catch(hubError);
   if(tab==='research')refreshResearchChoices().catch(hubError);
+  window.dispatchEvent(new CustomEvent('mint-platform-open',{detail:tab}));
   pollPlatform();
 }
 async function pollPlatform(){
@@ -130,9 +131,9 @@ async function refreshWorkspaceTasks(){
   for(const task of value.tasks){const row=el('tr'),name=el('td');name.append(el('strong',task.label),el('small',task.source||task.kind));const progress=task.progress||{},phase=progress.stage||progress.phase;row.append(name,el('td',statusLabel(task.status)+(phase?' · '+(STAGES[phase]||phase):'')),el('td',progress.total?`${progress.done||0}/${progress.total}${progress.unit==='frames'?' 帧':progress.unit==='optimizer_steps'?' 步':''}`:'—'));const actions=el('td');
     if(task.waiting_reason)name.append(el('small',task.waiting_reason,'waiting-reason'));if(task.eta)name.append(el('small',`当前阶段预计剩余 ${Math.ceil(task.eta.seconds)} 秒 · 估算`));
     const history=researchButton('阶段记录',async()=>researchDetails(await api(`api/comparison/tasks/${task.kind}/${task.id}`)));actions.append(history);
-    const open=el('button','打开');open.onclick=()=>{if(task.kind==='batch'||task.kind==='evaluation')openCollection(task.id).catch(hubError);else if(task.kind==='render'){platform.renderJob=task.id;switchHub('tools');}else if(task.kind==='workflow'){switchHub('research');inspectWorkflow(task.id).catch(hubError);}else if(task.comparison_id){$('platformDialog').close();openComparison(task.comparison_id).then(()=>inspectResult(task.id)).catch(error=>notify(error.message));}else if(task.url)location.href=task.url;};open.disabled=!(['batch','evaluation','render','workflow'].includes(task.kind)||task.comparison_id||task.url);actions.append(open);
-    const terminal=TERMINAL.has(task.status)||task.status==='evicted';if(['inference','batch','evaluation','render','export','workflow'].includes(task.kind)&&task.status!=='completed'){
-      const action=el('button',terminal?'恢复':'取消');action.onclick=async()=>{try{if(task.kind==='inference')await api(`api/comparison/runs/${task.id}/${terminal?'resume':'cancel'}`,{});else if(task.kind==='render'){if(terminal){platform.renderJob=task.id;await resumeRenderTool(task.id);}else await api(`api/comparison/tools/${task.id}/cancel`,{});}else if(task.kind==='export')await api(`api/comparison/exports/${task.id}/${terminal?'resume':'cancel'}`,{});else if(task.kind==='workflow')await api(`api/comparison/workflows/${task.id}/${terminal?'resume':'cancel'}`,{});else await api(`api/comparison/collections/${task.id}/${terminal?'resume':'cancel'}`,{});await refreshWorkspaceTasks();}catch(error){hubError(error);}};actions.append(action);
+    const open=el('button','打开');open.onclick=()=>{if(task.kind==='batch'||task.kind==='evaluation')openCollection(task.id).catch(hubError);else if(task.kind==='render'){platform.renderJob=task.id;switchHub('tools');}else if(task.kind==='workflow'){switchHub('research');inspectWorkflow(task.id).catch(hubError);}else if(task.kind==='study'){nextUI.study=task.id;openPlatform('research').catch(hubError);}else if(task.comparison_id){$('platformDialog').close();openComparison(task.comparison_id).then(()=>inspectResult(task.id)).catch(error=>notify(error.message));}else if(task.url)location.href=task.url;};open.disabled=!(['batch','evaluation','render','workflow','study'].includes(task.kind)||task.comparison_id||task.url);actions.append(open);
+    const terminal=TERMINAL.has(task.status)||task.status==='evicted';if(['inference','batch','evaluation','render','export','workflow','study'].includes(task.kind)&&task.status!=='completed'){
+      const action=el('button',terminal?'恢复':'取消');action.onclick=async()=>{try{if(task.kind==='inference')await api(`api/comparison/runs/${task.id}/${terminal?'resume':'cancel'}`,{});else if(task.kind==='render'){if(terminal){platform.renderJob=task.id;await resumeRenderTool(task.id);}else await api(`api/comparison/tools/${task.id}/cancel`,{});}else if(task.kind==='export')await api(`api/comparison/exports/${task.id}/${terminal?'resume':'cancel'}`,{});else if(task.kind==='study')await api(`api/comparison/studies/${task.id}/${terminal?'resume':'cancel'}`,{});else if(task.kind==='workflow')await api(`api/comparison/workflows/${task.id}/${terminal?'resume':'cancel'}`,{});else await api(`api/comparison/collections/${task.id}/${terminal?'resume':'cancel'}`,{});await refreshWorkspaceTasks();}catch(error){hubError(error);}};actions.append(action);
     }
     if(task.error){const error=el('small',task.error,'task-error');name.append(error);}row.append(actions);table.append(row);
   }
@@ -240,10 +241,11 @@ function cloneComposerAlgorithms(host){
   for(const box of $('algorithmOptions').children)if(box.dataset.algorithm!=='reference'){
     const clone=box.cloneNode(true),from=box.querySelectorAll('input,textarea,select'),to=clone.querySelectorAll('input,textarea,select');
     from.forEach((field,index)=>{to[index].value=field.value;if(field.type==='checkbox')to[index].checked=field.checked;});
+    if(host.dataset.onlyMint==='true')clone.querySelector('input[type=checkbox]').checked=clone.dataset.algorithm==='mint';
     for(const picker of clone.querySelectorAll('.checkpoint-browser')){picker.querySelector('.checkpoint-browser-body')?.remove();picker.querySelector('.alias-options')?.remove();picker.open=false;if(picker.dataset.modelAliases)wireModelAliasBrowser(picker);else wireCheckpointBrowser(picker);}host.append(clone);
   }
 }
-function refreshComposerAlgorithms(){for(const kind of ['batch','evaluation']){const host=$(kind+'-algorithms');if(host?.dataset.waiting)cloneComposerAlgorithms(host);}}
+function refreshComposerAlgorithms(){for(const id of ['batch-algorithms','evaluation-algorithms','nativeAlgorithms','studyAlgorithms']){const host=$(id);if(host?.dataset.waiting)cloneComposerAlgorithms(host);}}
 async function runDiagnostic(profile){
   const buttons=[...document.querySelectorAll('[data-diagnostic]')];for(const button of buttons)button.disabled=true;$('diagnosticStatus').textContent='正在独立进程检查…';$('diagnosticResults').replaceChildren();
   try{const value=await api('api/comparison/diagnostics',{profile}),table=el('table');

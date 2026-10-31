@@ -25,11 +25,13 @@ def camera_normalization_schema_errors(root):
     return errors
 
 
-def _write_dataset(destination, episodes, *, origin):
+def _write_dataset(destination, episodes, *, origin, hand_supervision='none'):
     import pyarrow as pa
     import pyarrow.parquet as pq
     from decord import VideoReader
     destination = Path(destination)
+    if hand_supervision not in {'none', 'mano', 'pseudo_mano'}:
+        raise ValueError('Declare camera-only or actual MANO parameter supervision')
     if (destination / 'meta/info.json').exists():
         raise FileExistsError('Training dataset versions are immutable')
     destination.mkdir(parents=True, exist_ok=True)
@@ -80,12 +82,22 @@ def _write_dataset(destination, episodes, *, origin):
     vector_types = {'cam_trans': (3, pa.float32()), 'cam_quat': (4, pa.float32()),
                     'cam_fov': (2, pa.float32()), 'state_mask': (2, pa.bool_()),
                     'hand_kept': (2, pa.bool_())}
+    for side in ('left', 'right'):
+        for name, width in (('transl_cam', 3), ('orient6d', 6), ('pose6d', 90), ('betas', 10)):
+            field = side + '_mano_' + name
+            vector_types[field] = (width, pa.float32())
+            if hand_supervision in {'mano', 'pseudo_mano'} and field not in combined:
+                raise ValueError('MANO supervision requires ' + field)
+        vector_types[side + '_kpt21'] = (63, pa.float32())
     columns = {}
     for key, values in combined.items():
         if key in vector_types:
             width, dtype = vector_types[key]
+            vector = np.asarray(values)
+            if vector.shape != (start, width) or not np.isfinite(vector).all():
+                raise ValueError(f'Training {key} requires finite [{start},{width}] values')
             columns[key] = pa.FixedSizeListArray.from_arrays(
-                pa.array(np.asarray(values).reshape(-1), type=dtype), width)
+                pa.array(vector.reshape(-1), type=dtype), width)
         else:
             columns[key] = pa.array(values)
     pq.write_table(pa.table(columns), parquet)
@@ -97,9 +109,12 @@ def _write_dataset(destination, episodes, *, origin):
         'data_path': 'data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet',
         'video_path': 'videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4',
         'features': {'observation.images.ego': {'dtype': 'video', 'shape': shape, 'names': ['height', 'width', 'channels']}}}
+    record.update(hand_frame='camera', hand_supervision=hand_supervision)
     provenance = {'schema': 1, 'label_origin': origin, 'videos': videos,
                   'data': file_identity(parquet), 'episodes': file_identity(ep),
-                  'supervision': 'camera pose and FoV only; no synthesized MANO ground truth'}
+                  'supervision': 'model-generated MANO and camera pseudo labels' if hand_supervision == 'pseudo_mano' else
+                                 'dataset-labelled MANO parameters and camera' if hand_supervision == 'mano' else
+                                 'camera pose and FoV only; no synthesized MANO ground truth'}
     if any(file_identity(v['path']) != v for v in videos):
         raise ValueError('Source video changed during data conversion')
     atomic_json(destination / 'source_manifest.json', provenance)

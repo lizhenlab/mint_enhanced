@@ -22,6 +22,7 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
     workspace_instance = []
     research_instance = []
     workflow_instance = []
+    study_instance = []
     def manager():
         with lock:
             if not manager_instance:
@@ -77,11 +78,20 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
                 hub.workflows = workflow_instance[0]
             return workflow_instance[0]
 
+    def studies():
+        from .studies import StudyManager
+        value, registry, jobs, hub = manager(), research(), workflows(), workspace()
+        with lock:
+            if not study_instance:
+                study_instance.append(StudyManager(value, registry, jobs))
+                hub.studies = study_instance[0]
+            return study_instance[0]
+
     @blueprint.record_once
     def register_services(state):
         # The viewer calls this after construction. Recovery must not depend on a
         # browser opening a task page after a process restart.
-        state.app.extensions['mint_comparison_start'] = lambda: (manager(), collections(), tools(), exports(), workspace(), workflows(), workspace().start())
+        state.app.extensions['mint_comparison_start'] = lambda: (manager(), collections(), tools(), exports(), workspace(), workflows(), studies(), workspace().start())
 
     def body():
         value = request.get_json(silent=True)
@@ -228,6 +238,43 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
     def workflow_preflight():
         return jsonify(workflows().preflight(**body()))
 
+    @blueprint.get('/api/comparison/native/catalog')
+    def native_catalog():
+        from .native_sources import dataset_catalog
+        return jsonify(dataset_catalog(request.args.get('root', '/dataset')))
+
+    @blueprint.get('/api/comparison/native/sequences')
+    def native_sequences():
+        from .native_sources import sequences
+        return jsonify(sequences(request.args['dataset'], request.args['root'], group=request.args.get('group', ''),
+            split=request.args.get('split', 'test'), offset=request.args.get('offset', 0), limit=request.args.get('limit', 50)))
+
+    @blueprint.post('/api/comparison/native/<dataset_id>/compare')
+    def native_compare(dataset_id):
+        record = research().get(dataset_id, 'dataset')
+        native = record.get('native')
+        if not native:
+            raise ValueError('Select a prepared native dataset version')
+        from .native_sources import prepare_native
+        native = prepare_native(native['plan'], Path(native['reference']).parent)
+        data = body()
+        if set(data) - {'selections', 'calibration', 'title', 'execution'}:
+            raise ValueError('Unknown native comparison fields')
+        shared = {'source': native['source'], 'view': 'full', 'target_fps': 0,
+                  'camera': native['camera'] if data.get('calibration', False) else None}
+        from .preflight import inspect_request
+        check = inspect_request(manager(), **shared, selections=data['selections'], execution=data.get('execution'))
+        if not check['ready']:
+            return jsonify(error='；'.join(check['errors']), preflight=check), 400
+        comparison = manager().create(**shared, selections=data['selections'], execution=data.get('execution'),
+            title=data.get('title') or record['name'])
+        reference = manager().create(**shared, selections=[{'algorithm': 'reference'}],
+            import_entry={'path': native['reference'], 'format': 'normalized_npz', 'frame_map': list(range(native['frames'])),
+                          'declared_source': json.dumps({'native_dataset': native['plan']['dataset'], 'split': native['plan']['split'],
+                              'label_role': native['details']['label_role'], 'version': native['id'], 'units': 'm'})},
+            comparison_key='native-reference:' + native['id'] + ':' + str(bool(data.get('calibration', False))))
+        return jsonify(manager().attach(comparison['id'], reference['runs'][0]['id'])), 201
+
     @blueprint.post('/api/comparison/workflows')
     def create_workflow():
         return jsonify(workflows().create(**body())), 201
@@ -235,6 +282,69 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
     @blueprint.get('/api/comparison/workflows/<workflow_id>')
     def get_workflow(workflow_id):
         return jsonify(workflows().get(workflow_id))
+
+    @blueprint.get('/api/comparison/workflows/<workflow_id>/curves')
+    def workflow_curves(workflow_id):
+        from .training_curves import read_curves
+        return jsonify(read_curves(workflows(), workflow_id, maximum=request.args.get('maximum', 800)))
+
+    @blueprint.post('/api/comparison/studies')
+    def create_study():
+        return jsonify(studies().create(**body())), 201
+
+    @blueprint.get('/api/comparison/studies/<study_id>')
+    def study_state(study_id):
+        return jsonify(studies().get(study_id))
+
+    @blueprint.post('/api/comparison/studies/<study_id>/<action>')
+    def study_action(study_id, action):
+        if action not in {'cancel', 'resume'}:
+            raise ValueError('Choose cancel/resume')
+        return jsonify(getattr(studies(), action)(study_id))
+
+    @blueprint.get('/api/comparison/runs/<run_id>/breakdown')
+    def breakdown(run_id):
+        from .diagnostics import run_breakdown
+        return jsonify(run_breakdown(manager(), run_id, request.args['reference_run']))
+
+    @blueprint.get('/api/comparison/runs/<run_id>/annotation-context')
+    def annotation_context(run_id):
+        from .annotations import AnnotationService
+        return jsonify(AnnotationService(manager(), research()).context(run_id, int(request.args.get('frame', 0))))
+
+    @blueprint.post('/api/comparison/annotations')
+    def save_annotation():
+        from .annotations import AnnotationService
+        return jsonify(AnnotationService(manager(), research()).save(**body())), 201
+
+    @blueprint.get('/api/comparison/annotations/history')
+    def annotation_history():
+        from .annotations import AnnotationService
+        return jsonify(AnnotationService(manager(), research()).history(request.args['run_id'], int(request.args['frame']),
+            limit=request.args.get('limit', 50)))
+
+    @blueprint.get('/api/comparison/runs/<run_id>/image')
+    def source_image(run_id):
+        import io
+        import numpy as np
+        from PIL import Image
+        from decord import VideoReader
+        from mint.runtime import file_identity
+        from .prepare import select_view
+        run = manager().run(run_id, summary=True)
+        sample = json.loads((manager().root / 'inputs' / run['sample_id'] / 'sample.json').read_text())
+        frame = int(request.args.get('frame', 0))
+        if not 0 <= frame < sample['frames']:
+            raise ValueError('Frame escapes input timeline')
+        source = sample['request']['source']
+        if file_identity(source['path']) != source:
+            raise ValueError('Source video changed')
+        reader = VideoReader(source['path'], num_threads=1)
+        rgb = select_view(reader[int(sample['source_frame_indices'][frame])].asnumpy()[None], sample['request']['view'])[0]
+        if rgb.shape[:2] != (sample['height'], sample['width']):
+            raise ValueError('Image grid changed')
+        buffer = io.BytesIO(); Image.fromarray(np.asarray(rgb)).save(buffer, format='PNG'); buffer.seek(0)
+        return send_file(buffer, mimetype='image/png', max_age=0)
 
     @blueprint.post('/api/comparison/workflows/<workflow_id>/<action>')
     def workflow_action(workflow_id, action):

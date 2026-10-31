@@ -26,6 +26,7 @@ class WorkspaceServices:
         self._indexed_at = 0
         self._run_cache = {}
         self.workflows = None
+        self.studies = None
 
     def start(self):
         if getattr(self, '_watcher', None):
@@ -201,6 +202,8 @@ class WorkspaceServices:
                 continue
         if self.workflows is not None:
             rows.extend(self.workflows.task_rows())
+        if self.studies is not None:
+            rows.extend(self.studies.task_rows())
         return rows
 
     def refresh_index(self):

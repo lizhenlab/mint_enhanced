@@ -17,13 +17,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--profile', choices=('train', 'qa', 'data'), required=True)
+    parser.add_argument('--profile', choices=('train', 'qa', 'data', 'native-data'), required=True)
     parser.add_argument('--base-python', default=str(ROOT / '.venv/bin/python'))
     args = parser.parse_args()
     base = Path(args.base_python).expanduser().absolute()
     if not base.is_file():
         parser.error('Select the existing MINT inference interpreter')
-    name = {'train': 'training', 'qa': 'platform-qa', 'data': 'data'}[args.profile]
+    name = {'train': 'training', 'qa': 'platform-qa', 'data': 'data', 'native-data': 'data'}[args.profile]
     destination = ROOT / '.environments' / name
     if destination.is_symlink() or destination.exists() and not destination.is_dir():
         parser.error('Environment destination must be a MINT-owned directory')
@@ -34,7 +34,7 @@ def main():
     site = next((destination / 'lib').glob('python*/site-packages'))
     (site / 'mint-inference-readonly.pth').write_text(information['purelib'] + '\n')
     requirements = ROOT / 'environments' / ('requirements-train.txt' if args.profile == 'train' else
-        'requirements-data.txt' if args.profile == 'data' else 'requirements-platform-qa.txt')
+        'requirements-data.txt' if args.profile == 'data' else 'requirements-native-data.txt' if args.profile == 'native-data' else 'requirements-platform-qa.txt')
     subprocess.run([str(destination / 'bin/python'), '-m', 'pip', 'install', '-r', str(requirements)], check=True)
     from mint.runtime import atomic_json, file_identity
     packages = subprocess.check_output([str(destination / 'bin/python'), '-m', 'pip', 'freeze'], text=True)

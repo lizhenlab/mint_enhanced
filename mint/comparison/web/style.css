@@ -152,3 +152,15 @@ dialog{color:var(--text);background:var(--surface);border:1px solid #426050;bord
 .execution-fields{padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:12px}.hub-table small{display:block;overflow-wrap:anywhere}
 @media(min-width:1100px){#hub-research{grid-template-columns:1fr 1fr}#hub-research>.hub-secondary{grid-column:1/-1}}
 @media(max-width:600px){.research-output{font-size:11px}.platform-tabs{gap:4px}.platform-tabs button{padding:8px 10px}.quality-issue span{min-width:100%}}
+.next-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start;margin:10px 0}
+.next-sections{grid-column:1/-1;align-self:start;display:flex;align-items:center;flex-wrap:wrap;gap:6px;position:sticky;top:0;z-index:2;background:#0b1713;padding:9px 0;border-bottom:1px solid var(--line);margin-bottom:12px}
+.next-sections button{flex:0 0 auto;min-height:32px}
+#hub-research>.next-wide{grid-column:1/-1}
+#hub-research>.panel{scroll-margin-top:60px}
+.next-grid>div{min-width:0}.next-grid label{margin:8px 0}.next-grid button{align-self:end}
+.next-chart{display:block;width:100%;height:240px;background:#091411;border:1px solid var(--line);border-radius:8px;margin:12px 0}
+.next-annotation{display:block;max-width:100%;width:min(100%,1024px);height:auto;touch-action:none;cursor:crosshair;border:1px solid var(--line);border-radius:8px}
+#nativeProgress,#studySummary,#annotationStatus,#nextMessage{overflow-wrap:anywhere;color:var(--cyan)}
+#nativeAlgorithms,#studyAlgorithms{max-height:430px;overflow:auto;margin:8px 0}
+#hub-quality table,#hub-research table{font-variant-numeric:tabular-nums}
+@media(max-width:760px){.next-grid{grid-template-columns:minmax(0,1fr)}.next-chart{height:190px}}

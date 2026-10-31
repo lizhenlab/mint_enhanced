@@ -1,0 +1,11 @@
+# Minimal working native-backend production route; inference deps remain in .venv.
+ray==2.55.1
+msgpack==1.1.2
+h5py==3.11.0
+protobuf==7.36.2
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+referencing==0.37.0
+rpds-py==0.30.0
+attrs==26.1.0
+typing-extensions==4.16.0

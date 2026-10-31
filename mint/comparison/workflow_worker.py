@@ -85,7 +85,28 @@ def main():
         progress(stage='preparing', done=0, total=1, attempt=attempt)
         if cancelled():
             raise InterruptedError('Workflow cancelled before execution')
-        if kind in {'prepare_training', 'curate_dataset'}:
+        if kind == 'native_import':
+            from .native_sources import prepare_native, native_source_key
+            plan = request['snapshots']['native_plan']
+            output = prepare_native(plan, manager.root / 'native-sources' / digest(plan), cancelled=cancelled, progress=progress)
+            training = output.get('training')
+            dataset = registry.put('dataset', {'name': request['name'], 'status': 'native_prepared',
+                'native': output, 'root': training['root'] if training else None,
+                'training_ready': bool(training), 'split': plan['split'], 'frames': output['frames'],
+                'supervision': output['supervision'], 'source_keys': [native_source_key(plan)],
+                'workflow_id': request['id'], 'identity': file_identity(Path(output['reference']).parent / 'native.json')})
+            output['dataset_id'] = dataset['id']
+        elif kind == 'produce_pseudo':
+            from .production import produce
+            output = produce(request['snapshots']['production_plan'], folder / 'production',
+                acceleration_limit=p['acceleration_limit'], cancelled=cancelled, progress=progress)
+            data = output['dataset']
+            record = registry.put('dataset', {'name': request['name'], **data, 'status': 'native_pseudo_labels',
+                'label_role': 'model_generated_pseudo_labels', 'split': p['split'],
+                'training_ready': p['split'] == 'train', 'source_keys': [v['source_key'] for v in output['plan']],
+                'workflow_id': request['id'], 'requires_training_opt_in': 'data.allow_pseudo_labels=true'})
+            output['dataset_id'] = record['id']
+        elif kind in {'prepare_training', 'curate_dataset'}:
             from .training_data import prepare_existing_camera_dataset, export_reviewed_camera_dataset
             destination = folder / f'dataset-attempt-{attempt:04d}'
             if kind == 'prepare_training':
@@ -114,9 +135,12 @@ def main():
                 devices, leases = acquire_devices(p['gpus'], progress, cancelled)
                 env['CUDA_VISIBLE_DEVICES'] = ','.join(devices)
                 env['MINT_TRAIN_PROGRESS_PATH'] = str(folder / 'progress.json')
+                env['MINT_TRAIN_ATTEMPT'] = str(attempt)
             if kind == 'train':
                 import yaml
                 config = yaml.safe_load(Path(p['config']).read_text())
+                if 'allow_pseudo_labels' in p:
+                    config.setdefault('data', {})['allow_pseudo_labels'] = p['allow_pseudo_labels']
                 if p.get('dataset_id'):
                     config['data']['root'] = registry.get(p['dataset_id'], 'dataset')['root']
                 config['data'].setdefault('camera_translation_normalization', {})['cache_dir'] = str(folder / 'normalization-cache')

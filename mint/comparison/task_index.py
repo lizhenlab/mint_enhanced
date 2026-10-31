@@ -69,7 +69,7 @@ class TaskIndex:
                 row['waiting_reason'] = detail or WAIT_REASONS.get(phase) or WAIT_REASONS.get(row['status'])
                 row['recovery_policy'] = row.get('recovery_policy') or (
                     'automatic_replay' if row['kind'] in {'batch', 'evaluation', 'export'} else
-                    'explicit_resume' if row['kind'] in {'inference', 'render', 'workflow'} else 'backend_specific')
+                    'explicit_resume' if row['kind'] in {'inference', 'render', 'workflow', 'study'} else 'backend_specific')
                 if old.get('status') != row['status'] or old_phase != phase:
                     db.execute('INSERT INTO platform_events(task_key,at,event,payload) VALUES(?,?,?,?)',
                         (key, now, 'state', json.dumps({'status': row['status'], 'phase': phase, 'attempt': row['attempt'],

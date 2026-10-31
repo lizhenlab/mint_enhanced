@@ -199,7 +199,7 @@ class ComparisonManager:
                     entry['image_size'] = grid
                 identity['import'] = entry
             if intent['cache'] == 'fresh':
-                identity['fresh_nonce'] = uuid.uuid4().hex
+                identity['fresh_nonce'] = digest({'fresh_comparison': comparison_key}) if comparison_key else uuid.uuid4().hex
             run_id = digest(identity)
             request = {**identity, 'id': run_id, 'backend': spec, 'sample_request': sample,
                        'sample_manifest': str(self.root / 'inputs' / sample['id'] / 'sample.json')}

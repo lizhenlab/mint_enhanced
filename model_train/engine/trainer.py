@@ -335,6 +335,16 @@ class Trainer:
                         self.logger.log(step, metrics)
                     if self.acc.is_main_process and os.environ.get('MINT_TRAIN_PROGRESS_PATH'):
                         from mint.runtime import atomic_json
+                        from mint.comparison.training_curves import append_metrics
+                        from pathlib import Path
+                        curve_metrics = {k: float(v.detach().item()) if hasattr(v, 'detach') else float(v) for k, v in logs.items()}
+                        curve_metrics['time/step_s'] = step_s
+                        curve_metrics['time/data_s'] = data_s
+                        curve_metrics['lr'] = float(self.optimizer.param_groups[0]['lr'])
+                        if torch.cuda.is_available():
+                            curve_metrics['memory/peak_allocated_mib'] = torch.cuda.max_memory_allocated() / 2**20
+                        append_metrics(Path(os.environ['MINT_TRAIN_PROGRESS_PATH']).with_name('metrics.jsonl'), step,
+                            curve_metrics, epoch=epoch, attempt=os.environ.get('MINT_TRAIN_ATTEMPT', '1'))
                         atomic_json(os.environ['MINT_TRAIN_PROGRESS_PATH'], {'stage': 'training', 'done': step,
                             'total': self.max_steps if not use_epoch else None, 'epoch': epoch,
                             'updated_at': time.time(), 'pid': os.getpid(),

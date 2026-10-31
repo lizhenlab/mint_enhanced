@@ -13,7 +13,23 @@ from .evaluation import aggregate_pairs
 from .registry import PROJECT
 from .results import paired_metrics
 
-KINDS = {'artifact', 'protocol', 'evaluation', 'review', 'dataset', 'model', 'experiment', 'deployment'}
+KINDS = {'artifact', 'protocol', 'evaluation', 'review', 'dataset', 'model', 'experiment', 'deployment', 'annotation'}
+
+
+def training_source_keys(manager, training):
+    """Include canonical native origins for older immutable registry versions."""
+    from .native_sources import native_source_key, source_provenance
+    keys = set(training.get('source_keys', [])) | {e['source_key'] for e in training.get('entries', []) if e.get('source_key')}
+    if training.get('native'):
+        keys.add(native_source_key(training['native']['plan']))
+    for entry in training.get('entries', []):
+        if entry.get('run_id'):
+            request = json.loads(manager.row(entry['run_id'])['payload'])
+            keys.add(source_provenance(manager, request['sample_request']['source'])['source_key'])
+    for entry in training.get('provenance', {}).get('label_origin', {}).get('plan', []):
+        if entry.get('sample', {}).get('source'):
+            keys.add(source_provenance(manager, entry['sample']['source'])['source_key'])
+    return keys
 
 
 class ResearchRegistry:
@@ -164,7 +180,18 @@ class ResearchRegistry:
         for key in comparisons:
             comparison = self.manager.comparison(key, include_sample=False)
             split = splits.get(key, 'test')
-            source_key = digest(comparison.get('dataset_context', {}).get('identity') or comparison['sample_request']['source'])
+            with self.manager.db() as db:
+                native_row = db.execute("SELECT payload FROM research_records WHERE kind='dataset' AND json_extract(payload,'$.native.source')=? LIMIT 1",
+                    (comparison['sample_request']['source']['path'],)).fetchone()
+            native = json.loads(native_row['payload'])['native'] if native_row else None
+            if native:
+                official = native['plan']['split']
+                if split != {'val': 'validation'}.get(official, official):
+                    raise ValueError('Frozen protocol split conflicts with the native official partition')
+                from .native_sources import native_source_key
+                source_key = native_source_key(native['plan'])
+            else:
+                source_key = digest(comparison.get('dataset_context', {}).get('identity') or comparison['sample_request']['source'])
             if source_key in seen and seen[source_key] != split:
                 raise ValueError('The same source/episode cannot appear in multiple protocol splits')
             seen[source_key] = split
@@ -274,14 +301,17 @@ class ResearchRegistry:
             if not run['result']:
                 raise ValueError('Reviewed geometry is no longer available')
             request = json.loads(self.manager.row(row['run_id'])['payload'])
-            source_key = digest(request['sample_request']['source'])
+            from .native_sources import source_provenance
+            origin = source_provenance(self.manager, request['sample_request']['source'])
+            source_key = origin['source_key']
             with self.manager.db() as db:
                 parents = db.execute('SELECT payload FROM comparisons WHERE instr(payload,?)>0', (row['run_id'],)).fetchall()
             for parent in parents:
                 context = json.loads(parent['payload']).get('dataset_context')
                 if context:
                     source_key = digest(context['identity']); break
-            entries.append({'source_key': source_key, 'review_id': row['id'], 'run_id': row['run_id'], 'sample_id': row['sample_id'],
+            entries.append({'source_key': source_key, 'official_split': origin['official_split'],
+                'review_id': row['id'], 'run_id': row['run_id'], 'sample_id': row['sample_id'],
                 'start': row['start'], 'end': row['end'], 'result_identity': file_identity(self.manager.root / 'runs' / row['run_id'] / 'result/result.json'),
                 'label_role': row['label_role']})
         result = self.put('dataset', {'name': str(name)[:200], 'entries': entries, 'status': 'reviewed_manifest',
@@ -364,7 +394,7 @@ class ResearchRegistry:
             training = self.get(model['dataset_id'], 'dataset')
             evaluation_samples = {e['sample_id'] for e in self.get(evaluation['protocol_id'], 'protocol')['entries'] if e['split'] == evaluation['split']}
             test_entries = [e for e in self.get(evaluation['protocol_id'], 'protocol')['entries'] if e['split'] == evaluation['split']]
-            train_sources = set(training.get('source_keys', [])) | {e['source_key'] for e in training.get('entries', []) if e.get('source_key')}
+            train_sources = training_source_keys(self.manager, training)
             if evaluation_samples & {e['sample_id'] for e in training.get('entries', [])} or train_sources & {e['source_key'] for e in test_entries}:
                 raise ValueError('Training curation overlaps the evaluation split')
         with self.manager.db() as db:

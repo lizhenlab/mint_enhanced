@@ -17,6 +17,7 @@ tests/*
 !tests/test_server_file_browser.py
 !tests/test_comparison_result_tools.cjs
 !tests/test_platform_lifecycle.py
+!tests/test_native_platform.py
 !eval/model_effect/benchmark/tests/
 !eval/model_effect/benchmark/tests/**
 !eval/model_effect/benchmark/dist/aliyun/tests/

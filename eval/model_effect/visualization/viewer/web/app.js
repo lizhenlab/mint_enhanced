@@ -145,6 +145,7 @@ function syncDiagnosticView(){
   if(config) config.hidden=diagnosticView!=='config';
   if(stage){ stage.hidden=diagnosticView==='config';stage.setAttribute('aria-labelledby','diagnosticTab-'+diagnosticView); }
   if(empty) empty.hidden=diagnosticView!=='results'||state.loaded;
+  if(typeof syncDiagnosticSections==='function')syncDiagnosticSections();
   const resultHeader=$('#diagnostic-results');if(resultHeader) resultHeader.hidden=diagnosticView!=='results';
   const tools=$('#diagnostic-tools');if(tools) tools.open=diagnosticView==='tools';
   document.querySelectorAll('.diagnostic-steps button[data-diagnostic-view]').forEach(button=>{
@@ -190,6 +191,7 @@ function wireDiagnosticViews(){
     if(mode)showDiagnosticView(mode,{focus:true});
   });
   showDiagnosticView(initialDiagnosticView(location.search,location.hash),{updateURL:false});
+  if(typeof wireDiagnosticSections==='function')wireDiagnosticSections();
 }
 const clampEp = v => EP_TOTAL ? Math.min(EP_TOTAL-1, Math.max(0, Math.floor(+v||0))) : 0;
 function effectiveHandMode(){
@@ -998,10 +1000,14 @@ function _invalidateWorldVideo(pan){
 
 // 按 state.order（跳过 hidden）渲染各模块。隐藏的机器人面板不会创建视频或请求渲染；
 // 手动开启后，每种机器人方法各占一栏；有 GT 时栏内显示 GT | PRED，并等待整体·2D先完成。
-// preserveTime：尽量保留主视频进度。渲染后同步右侧顺序调节栏。
+// preserveTime：保留主视频进度；隐藏的2D时钟节点复用，重建后同步左侧栏目导航。
 function buildPanels(preserveTime){
   const cont = $('#blocks');
   const t = (preserveTime && masterVideo) ? (masterVideo.currentTime||0) : 0;
+  const displaySignature=JSON.stringify({eid:state.eid,mode:state.mode,layout:state.layout,camMode:state.camMode,handMode:state.handMode,ukf:state.ukf,gtBetas:state.gtBetas,predBetas:state.predBetas,predFov:state.predFov,rawOnly:state.rawOnly});
+  const retainedMaster=preserveTime&&state.loaded&&state.hidden.has('both_2d')?state.panels.both_2d:null;
+  const retainedMasterSection=retainedMaster?.video?diagnosticSectionElement('both_2d'):null;
+  if(retainedMasterSection)retainedMasterSection.remove();
   watchMasterVideo(null);                            // 先取消旧 video 的帧回调，再销毁 DOM
   // 清空 #blocks 前先摘出持久节点(loss + 工具面板)保护:innerHTML='' 会连带销毁
   // 其子 DOM 与已绑事件;这些节点跨重建复用,摘出后按顺序再挂(隐藏则游离不挂,节点不丢)。
@@ -1024,14 +1030,21 @@ function buildPanels(preserveTime){
     primary2DSettled=true; resolvePrimary2D();
   };
   const appendPanel = (sec,id)=>{
+    sec.id='diagnostic-panel-'+id;sec.tabIndex=-1;sec.style.order=state.order.indexOf(id);
     cont.appendChild(sec);
   };
   for(const id of state.order){
-    if(state.hidden.has(id)) continue;
+    if(state.hidden.has(id)&&id!=='both_2d') continue;
     const P = PANEL_BY[id]; if(!P) continue;
     // 工具面板(bench/logdiff)与 loaded 无关,始终可渲染;数据面板(video/scene/nums/loss)需已加载 episode。
     if(!loaded && P.kind!=='tool') continue;
-    const sec = document.createElement('section'); sec.className='panel'; sec.dataset.pid=id;
+    if(id==='both_2d'&&retainedMasterSection){
+      retainedMasterSection.dataset.clockOnly=String(retainedMaster.displaySignature!==displaySignature);
+      retainedMasterSection.hidden=true;appendPanel(retainedMasterSection,id);state.panels[id]=retainedMaster;vids.push(retainedMaster.video);hasPrimary2D=true;
+      if(retainedMaster.video.readyState>=2||retainedMaster.video.error)settlePrimary2D();else{retainedMaster.video.addEventListener('loadeddata',settlePrimary2D,{once:true});retainedMaster.video.addEventListener('error',settlePrimary2D,{once:true});}
+      continue;
+    }
+    const sec = document.createElement('section'); sec.className='panel'; sec.dataset.pid=id;sec.hidden=state.hidden.has(id);
     if(P.kind==='video'){
       const comparisonTools=!state.no_truth&&!state.rawOnly ? `<span id="layoutWrap" class="tool-field gt-layout-controls"><label>GT 对照</label><span class="seg" id="layoutSeg">
         <button data-layout="overlay" class="${state.layout==='overlay'?'on':''}" title="在同一画面叠加 GT 与 PRED">GT/PRED 叠加</button><button data-layout="side" class="${state.layout==='side'?'on':''}" title="把 GT 与 PRED 分成左右画面">GT/PRED 并排</button></span></span>` : '';
@@ -1039,7 +1052,7 @@ function buildPanels(preserveTime){
         <div class="vwrap"><video class="v2d" preload="auto"></video><div class="vbadge">2D 渲染中…</div></div>`;
       wireLayoutControls(sec);
       appendPanel(sec,id);
-      const pan = { id, kind:'video', content:P.content, video:sec.querySelector('.v2d') };
+      const pan = { id, kind:'video', content:P.content, video:sec.querySelector('.v2d'), displaySignature };
       const badge = sec.querySelector('.vbadge'); let vdone=false;
       if(id==='both_2d') hasPrimary2D=true;
       pan.video.addEventListener('loadeddata', ()=>{
@@ -2259,7 +2272,7 @@ function drawIntegratedNums(b){
   const N = state.nums, cf = frameOf(masterVideo);   // 跟随首个可见视频帧
   if(b._lastNumF === cf && b._numsOn === !!N) return;   // 帧未变且数据态未变 → 免重建
   b._lastNumF = cf; b._numsOn = !!N;
-  if(!N){ el.innerHTML=''; return; }
+  if(!N){ el.innerHTML='<div class="mnote">当前结果未提供逐帧数值。</div>'; return; }
   if(b.frame==='cam'){
     const hc = N.hand_cam || {};
     el.innerHTML = `<div class="ncap">逐帧数值（相机系）· 帧 ${cf}</div>`
@@ -2462,13 +2475,7 @@ function selectDatasetAnalysis(analysisType){
 }
 
 function showDatasetAnalysis(on){
-  if(on) showDiagnosticView('tools');
-  if(on) state.hidden.delete('analysis'); else state.hidden.add('analysis');
-  buildPanels(true);
-  if(on){
-    const section=document.querySelector('#blocks section[data-pid="analysis"]');
-    if(section) section.scrollIntoView({behavior:'smooth',block:'start'});
-  }
+  if(on)navigateDiagnosticSection('analysis');else setDiagnosticSectionVisibility('analysis',false);
 }
 
 async function startDatasetAnalysis(){
@@ -2528,7 +2535,6 @@ async function startDatasetAnalysisPoll(){
       state.analysis={...state.analysis,...status};
       if(status.summary) state.analysis.summary=status.summary;
       renderDatasetAnalysis();
-      if(status.running && state.hidden.has('analysis')) showDatasetAnalysis(true);
       if(status.result_ready && status.cache_key!==_analysisLoadedKey){
         _analysisLoadedKey=status.cache_key||'latest';
         state.analysis.page=1;
@@ -2953,14 +2959,9 @@ function wireBatch(){
   renderBatch();
 }
 function showBatch(on){
-  if(on) showDiagnosticView('tools');
-  if(on) state.hidden.delete('batch'); else state.hidden.add('batch');
-  buildPanels(true);
-  if(on){
-          loadBatchModels();
-          const s=document.querySelector('#blocks section[data-pid="batch"]');
-          if(s) s.scrollIntoView({behavior:'smooth', block:'start'}); }
+  if(on)navigateDiagnosticSection('batch');else setDiagnosticSectionVisibility('batch',false);
 }
+
 async function startBatch(){
   if(state.batch.running) return;
   const dirPicker=$('#batchDirPicker'); if(dirPicker) dirPicker.hidden=true;
@@ -3027,7 +3028,6 @@ async function startBatchPoll(){
       const s=await getJSON('/api/batch/status');
       state.batch={...state.batch, ...s};
       renderBatch();
-      if((s.running || s.manifest || s.error) && state.hidden.has('batch')) showBatch(true);
       if(!s.running){ _batchPolling=false; break; }
     }catch(e){}
     await new Promise(r=>setTimeout(r,700));
@@ -3131,13 +3131,9 @@ function wireBench(){
   wireBenchTableExport();
   renderBench();
 }
-// benchmark 面板已纳入栏目系统:显隐=切 state.hidden 并重建(与调节栏 👁 同一套);on 时滚动到位。
+// 专项工具复用持久 DOM；显式打开/隐藏不重建已有结果视频。
 function showBench(on){
-  if(on) showDiagnosticView('tools');
-  if(on) state.hidden.delete('bench'); else state.hidden.add('bench');
-  buildPanels(true);
-  if(on){ const s = document.querySelector('#blocks section[data-pid="bench"]');
-          if(s) s.scrollIntoView({behavior:'smooth', block:'start'}); }
+  if(on)navigateDiagnosticSection('bench');else setDiagnosticSectionVisibility('bench',false);
 }
 
 function _benchSetOptions(select, values, placeholder){
@@ -4158,10 +4154,6 @@ async function startBenchPoll(){
                        ? s.selection.auto_ukf_best : state.bench.autoUkf,
                      selection:s.selection||{}};   // 保留 caps/viz（不被状态覆盖）
       renderBench();
-      if((s.running || s.report || s.error) && state.hidden.has('bench')){
-        showBench(true);                         // 隐藏时才自动展开(避免每次轮询都重建面板)
-        if(!state.bench.caps){ loadBenchCaps(); loadBenchSizes(); loadBenchGpus(); loadBenchAliyunDefaults(); }
-      }
       if(!s.running){
         _benchPolling = false;
         loadBenchHistory();
@@ -4840,14 +4832,11 @@ function wireLogDiff(){
   if(B) B.onchange = loadLdScopes;
   renderLd();
 }
-// 配置/代码变更面板同样纳入栏目系统:显隐=切 state.hidden 并重建;on 时滚动到位。
+// 配置/代码变更与左侧栏目导航共用持久工具节点。
 function showLd(on){
-  if(on) showDiagnosticView('tools');
-  if(on) state.hidden.delete('logdiff'); else state.hidden.add('logdiff');
-  buildPanels(true);
-  if(on){ const s = document.querySelector('#blocks section[data-pid="logdiff"]');
-          if(s) s.scrollIntoView({behavior:'smooth', block:'start'}); }
+  if(on)navigateDiagnosticSection('logdiff');else setDiagnosticSectionVisibility('logdiff',false);
 }
+
 async function loadLdRuns(){
   let data = null;
   try{ data = await getJSON('/api/logdiff/runs'); }catch(e){}
@@ -4923,7 +4912,6 @@ async function startLdPoll(){
       state.logdiff = {...state.logdiff, running:s.running, phase:s.phase, result:s.result,
                        error:s.error, log:s.log||[]};
       renderLd();
-      if((s.running || s.result || s.error) && state.hidden.has('logdiff')) showLd(true);   // 隐藏时才自动展开(避免每次轮询都重建面板)
       if(!s.running){ _ldPolling = false; break; }
     }catch(e){}
     await new Promise(r=>setTimeout(r, 800));
@@ -5090,35 +5078,115 @@ function toggleRetargetPanel(){
   console.log('[btn] Wuji Hand Retargeting → '+(!state.hidden.has('wuji_retarget_3d')));
   buildPanels(true);
 }
-// 右侧顺序调节栏：列 state.order，每项 ☰拖动手柄排序 + 👁 显隐（再点恢复）。
+// Diagnostic section navigation changes presentation only; rendering remains explicit.
+const diagnosticSections={active:null,pending:null,wired:false,scrollFrame:null,suppressScrollUntil:0};
+function diagnosticSectionMode(panel){return panel?.kind==='tool'?'tools':'results';}
+function diagnosticSectionAvailability(panel,context=state){
+  if(!panel)return {ready:false,reason:'该栏目不可用。'};
+  if(panel.kind==='tool')return {ready:true,reason:''};
+  if(!context.loaded)return {ready:false,reason:'尚未加载当前输入的结果，请先在“配置与运行”中读取已有结果或显式运行推理。'};
+  if(panel.kind==='nums'&&!context.nums)return {ready:false,reason:'当前结果未提供逐帧数值，仍可查看已有视频与三维结果。'};
+  if(panel.kind==='loss'&&(context.no_truth||context.rawOnly))return {ready:false,reason:context.rawOnly?'当前仅查看原始 GT，尚无预测可计算逐帧损失。':'当前输入没有 GT，无法计算监督逐帧损失。'};
+  return {ready:true,reason:''};
+}
+function reorderDiagnosticSections(order,id,{delta=0,before=null}={}){
+  const next=order.slice(),index=next.indexOf(id);if(index<0)return next;
+  if(before!==null){if(before===id||!next.includes(before))return next;next.splice(index,1);next.splice(next.indexOf(before),0,id);return next;}
+  const target=Math.max(0,Math.min(next.length-1,index+delta));if(index!==target){next.splice(index,1);next.splice(target,0,id);}return next;
+}
+function diagnosticSectionElement(id){return document.querySelector('#blocks section[data-pid="'+id+'"]');}
+function closeDiagnosticSections(){document.body.classList.remove('diagnostic-sections-open');syncDiagnosticSections();}
+function syncDiagnosticSections(){
+  const sidebar=$('#sidebar'),toggle=$('#toggleDiagnosticSections'),menu=$('#diagnosticSectionMenu');if(!sidebar)return;
+  const narrow=window.innerWidth<=900,opened=!narrow||document.body.classList.contains('diagnostic-sections-open');
+  if(toggle)toggle.setAttribute('aria-expanded',String(opened));if(menu)menu.setAttribute('aria-hidden',String(!opened));
+  const current=$('#diagnosticCurrentSection'),panel=PANEL_BY[diagnosticSections.active];if(current)current.textContent=panel?.name||'选择栏目';
+  const pending=PANEL_BY[diagnosticSections.pending],notice=$('#diagnosticSectionNotice');if(notice&&pending&&diagnosticSectionMode(pending)!==diagnosticView){notice.hidden=true;diagnosticSections.pending=null;}
+  for(const row of document.querySelectorAll('#orderBar li[data-id]')){
+    const active=row.dataset.id===diagnosticSections.active&&diagnosticSectionMode(PANEL_BY[row.dataset.id])===diagnosticView;
+    row.classList.toggle('active',active);const button=row.querySelector('.onm');if(button){if(active)button.setAttribute('aria-current','location');else button.removeAttribute('aria-current');}
+  }
+}
+function diagnosticScrollOffset(){
+  let offset=12;for(const selector of ['.masthead','.diagnostic-steps']){const node=document.querySelector(selector);if(!node)continue;const style=getComputedStyle(node),rect=node.getBoundingClientRect();if(['sticky','fixed'].includes(style.position)&&rect.top<=2)offset=Math.max(offset,rect.bottom+12);}
+  const sidebar=$('#sidebar');if(window.innerWidth<=900&&sidebar)offset=Math.max(offset,sidebar.getBoundingClientRect().height+12);
+  return offset;
+}
+function scrollDiagnosticSection(node){
+  closeDiagnosticSections();diagnosticSections.suppressScrollUntil=Date.now()+650;
+  requestAnimationFrame(()=>{const reduce=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;window.scrollTo({top:Math.max(0,window.scrollY+node.getBoundingClientRect().top-diagnosticScrollOffset()),behavior:reduce?'auto':'smooth'});node.tabIndex=-1;node.focus({preventScroll:true});});
+}
+function updateDiagnosticSectionFromScroll(){
+  if(diagnosticView==='config'||diagnosticSections.pending||Date.now()<diagnosticSections.suppressScrollUntil)return;
+  const offset=diagnosticScrollOffset(),visible=(state.order||[]).flatMap(id=>{
+    const panel=PANEL_BY[id],node=diagnosticSectionElement(id);if(!node||state.hidden.has(id)||diagnosticSectionMode(panel)!==diagnosticView)return [];
+    const rect=node.getBoundingClientRect();return rect.bottom>offset&&rect.top<window.innerHeight?[{id,rect}]:[];
+  });
+  const target=visible.find(item=>item.rect.top<=offset+30)||visible.sort((a,b)=>Math.abs(a.rect.top-offset)-Math.abs(b.rect.top-offset))[0];
+  if(target&&target.id!==diagnosticSections.active){diagnosticSections.active=target.id;syncDiagnosticSections();}
+}
+function showDiagnosticSectionNotice(id){
+  const panel=PANEL_BY[id],available=diagnosticSectionAvailability(panel);let notice=$('#diagnosticSectionNotice');
+  if(!notice){notice=document.createElement('section');notice.id='diagnosticSectionNotice';notice.className='diagnostic-section-notice';const host=$('#diagnosticStageContent')||$('#diagnosticStage'),heading=$('#diagnostic-results');if(heading?.parentNode===host)heading.after(notice);else host.prepend(notice);}
+  notice.replaceChildren();notice.hidden=false;diagnosticSections.pending=id;
+  const title=document.createElement('h3');title.textContent=panel.name;
+  const text=document.createElement('p');text.setAttribute('role','status');text.textContent=available.ready?(panel.kind==='mujoco'||panel.kind==='retarget'?'此栏目尚未开启。请显式点击“开启并生成”，再使用当前输入生成仿真或重定向结果。':'此栏目尚未显示，点击“显示此栏目”后再定位。'):available.reason;
+  const action=document.createElement('button');action.type='button';action.className='primary';action.textContent=!available.ready?(state.loaded?'查看已有结果':'前往配置与运行'):panel.kind==='mujoco'||panel.kind==='retarget'?'开启并生成':'显示此栏目';
+  action.onclick=()=>{if(!available.ready){closeDiagnosticSections();if(!state.loaded)showDiagnosticView('config',{focus:true});else{notice.hidden=true;diagnosticSections.pending=null;const existing=state.order.find(key=>!state.hidden.has(key)&&['video','scene'].includes(PANEL_BY[key]?.kind)&&diagnosticSectionElement(key));if(existing)navigateDiagnosticSection(existing);else showDiagnosticView('results',{focus:true});}return;}setDiagnosticSectionVisibility(id,true);};notice.append(title,text,action);scrollDiagnosticSection(notice);
+}
+function loadDiagnosticToolMetadata(id){
+  const actions=id==='bench'?[loadBenchModels,loadBenchCaps,loadBenchSizes,loadBenchGpus,loadBenchAliyunDefaults]:id==='batch'?[loadBatchModels]:id==='logdiff'?[loadLdRuns]:[];
+  for(const action of actions)Promise.resolve().then(()=>action()).catch(error=>{if(info)info.textContent='工具信息读取失败：'+error.message;});
+  if(id==='analysis')renderDatasetAnalysis();
+}
+function mountDiagnosticTool(id){
+  const panel=PANEL_BY[id];if(panel?.kind!=='tool')return null;let section=diagnosticSectionElement(id);
+  if(!section){const wrap=PERSISTENT_PANELS[panel.wrapId];if(!wrap)return null;section=document.createElement('section');section.className='panel';section.dataset.pid=id;section.id='diagnostic-panel-'+id;section.tabIndex=-1;wrap.style.display='';section.append(wrap);$('#blocks').append(section);state.panels[id]={id,kind:'tool',wrapId:panel.wrapId};}
+  state.hidden.delete(id);section.hidden=false;section.style.order=state.order.indexOf(id);return section;
+}
+function navigateDiagnosticSection(id){
+  const panel=PANEL_BY[id];if(!panel)return;showDiagnosticView(diagnosticSectionMode(panel));diagnosticSections.active=id;diagnosticSections.pending=null;
+  const notice=$('#diagnosticSectionNotice');if(notice)notice.hidden=true;
+  let section=diagnosticSectionElement(id);
+  if(panel.kind==='tool'){const firstOpen=state.hidden.has(id)||!section;section=mountDiagnosticTool(id);if(firstOpen)loadDiagnosticToolMetadata(id);renderOrderBar();}
+  if(!diagnosticSectionAvailability(panel).ready||state.hidden.has(id)||!section){showDiagnosticSectionNotice(id);syncDiagnosticSections();return;}
+  section.hidden=false;syncDiagnosticSections();scrollDiagnosticSection(section);
+}
+function setDiagnosticSectionVisibility(id,show){
+  const panel=PANEL_BY[id];if(!panel)return;const available=diagnosticSectionAvailability(panel);
+  if(show&&!available.ready){showDiagnosticSectionNotice(id);return;}
+  let section=diagnosticSectionElement(id);
+  if(show){state.hidden.delete(id);if(panel.kind==='tool'){section=mountDiagnosticTool(id);loadDiagnosticToolMetadata(id);}else if(!section||(id==='both_2d'&&section.dataset.clockOnly==='true')){buildPanels(true);section=diagnosticSectionElement(id);}if(section)section.hidden=false;}
+  else{state.hidden.add(id);if(section){section.hidden=true;section.querySelectorAll('video').forEach(video=>video.pause());}}
+  diagnosticSections.pending=null;const notice=$('#diagnosticSectionNotice');if(notice)notice.hidden=true;
+  diagnosticSections.active=show?id:diagnosticSections.active===id?null:diagnosticSections.active;
+  renderOrderBar();syncMujocoButton();updateExportButton();if(state.loaded)requestDraw();
+  if(show)navigateDiagnosticSection(id);
+}
+function applyDiagnosticSectionOrder(id,options){
+  state.order=reorderDiagnosticSections(state.order,id,options);
+  for(const section of document.querySelectorAll('#blocks section[data-pid]'))section.style.order=state.order.indexOf(section.dataset.pid);
+  renderOrderBar();const button=$('#orderBar')?.querySelector('li[data-id="'+id+'"] .onm');button?.focus({preventScroll:true});
+}
 function renderOrderBar(){
-  const ul = $('#orderBar'); if(!ul) return;
-  ul.innerHTML = state.order.map(id=>{
-    const P = PANEL_BY[id], hid = state.hidden.has(id);
-    return `<li draggable="true" data-id="${id}" class="oitem${hid?' off':''}">`
-      + `<span class="oh">☰</span><span class="onm">${P?P.name:id}</span>`
-      + `<button class="oeye" title="显示/隐藏">${hid?'🚫':'👁'}</button></li>`;
-  }).join('');
-  ul.querySelectorAll('.oeye').forEach(btn => btn.onclick = e=>{
-    e.stopPropagation(); const id = btn.closest('li').dataset.id;
-    if(state.hidden.has(id)) state.hidden.delete(id); else state.hidden.add(id);
-    if(!state.hidden.has(id)&&PANEL_BY[id]?.kind==='tool')showDiagnosticView('tools');
-    buildPanels(true);
-  });
-  syncMujocoButton();
-  let dragId = null;
-  ul.querySelectorAll('li').forEach(li=>{
-    li.addEventListener('dragstart', ()=>{ dragId=li.dataset.id; li.classList.add('drag'); });
-    li.addEventListener('dragend',   ()=>{ li.classList.remove('drag'); dragId=null; });
-    li.addEventListener('dragover',  e=>{ e.preventDefault(); li.classList.add('over'); });
-    li.addEventListener('dragleave', ()=>{ li.classList.remove('over'); });
-    li.addEventListener('drop', e=>{ e.preventDefault(); li.classList.remove('over');
-      const tgt = li.dataset.id; if(!dragId || dragId===tgt) return;
-      const o = state.order.slice(); o.splice(o.indexOf(dragId), 1);   // 摘出被拖项
-      o.splice(o.indexOf(tgt), 0, dragId);                             // 插到目标项之前
-      state.order = o; buildPanels(true);
-    });
-  });
+  const ul=$('#orderBar');if(!ul)return;ul.replaceChildren();let dragId=null;
+  for(const id of state.order){const panel=PANEL_BY[id];if(!panel)continue;const hidden=state.hidden.has(id),available=diagnosticSectionAvailability(panel),row=document.createElement('li');row.draggable=true;row.dataset.id=id;row.className='oitem'+(hidden?' off':'');
+    const handle=document.createElement('span');handle.className='oh';handle.textContent='☰';handle.title='拖动排序；栏目按钮可用 Alt＋↑/↓ 排序';handle.setAttribute('aria-hidden','true');
+    const button=document.createElement('button');button.type='button';button.className='onm';button.setAttribute('aria-controls','diagnostic-panel-'+id);button.onclick=()=>navigateDiagnosticSection(id);
+    const name=document.createElement('span');name.textContent=panel.name;const status=document.createElement('small');status.className='section-state';status.textContent=!available.ready?'暂无结果':hidden?(panel.kind==='mujoco'||panel.kind==='retarget'?'未开启 · 需生成':'已隐藏'):'已显示';button.append(name,status);
+    const eye=document.createElement('button');eye.type='button';eye.className='oeye';eye.textContent=hidden?(panel.kind==='mujoco'||panel.kind==='retarget'?'开启':'显示'):'隐藏';eye.disabled=hidden&&!available.ready;eye.title=(hidden?(panel.kind==='mujoco'||panel.kind==='retarget'?'开启并生成 ':'显示 '):'隐藏 ')+panel.name;eye.setAttribute('aria-label',eye.title);eye.onclick=event=>{event.stopPropagation();if(hidden&&['mujoco','retarget'].includes(panel.kind)){navigateDiagnosticSection(id);return;}setDiagnosticSectionVisibility(id,hidden);};
+    const up=document.createElement('button');up.type='button';up.className='omove-up';up.textContent='↑';up.title='上移 '+panel.name;up.setAttribute('aria-label',up.title);up.disabled=state.order.indexOf(id)===0;up.onclick=event=>{event.stopPropagation();applyDiagnosticSectionOrder(id,{delta:-1});};
+    const down=document.createElement('button');down.type='button';down.className='omove-down';down.textContent='↓';down.title='下移 '+panel.name;down.setAttribute('aria-label',down.title);down.disabled=state.order.indexOf(id)===state.order.length-1;down.onclick=event=>{event.stopPropagation();applyDiagnosticSectionOrder(id,{delta:1});};row.append(handle,button,eye,up,down);
+    button.onkeydown=event=>{const buttons=[...ul.querySelectorAll('.onm')],index=buttons.indexOf(button);if(event.altKey&&['ArrowUp','ArrowDown'].includes(event.key)){event.preventDefault();event.stopPropagation();applyDiagnosticSectionOrder(id,{delta:event.key==='ArrowUp'?-1:1});return;}let next;if(event.key==='ArrowUp')next=(index+buttons.length-1)%buttons.length;else if(event.key==='ArrowDown')next=(index+1)%buttons.length;else if(event.key==='Home')next=0;else if(event.key==='End')next=buttons.length-1;else return;event.preventDefault();event.stopPropagation();buttons[next]?.focus();};
+    row.addEventListener('dragstart',()=>{dragId=id;row.classList.add('drag');});row.addEventListener('dragend',()=>{dragId=null;row.classList.remove('drag');});row.addEventListener('dragover',event=>{event.preventDefault();row.classList.add('over');});row.addEventListener('dragleave',()=>row.classList.remove('over'));row.addEventListener('drop',event=>{event.preventDefault();row.classList.remove('over');if(dragId&&dragId!==id)applyDiagnosticSectionOrder(dragId,{before:id});});ul.append(row);
+  }
+  syncMujocoButton();syncDiagnosticSections();
+}
+function wireDiagnosticSections(){
+  if(diagnosticSections.wired)return;diagnosticSections.wired=true;const toggle=$('#toggleDiagnosticSections');
+  if(toggle)toggle.onclick=()=>{document.body.classList.toggle('diagnostic-sections-open');syncDiagnosticSections();};
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&document.body.classList.contains('diagnostic-sections-open')){event.preventDefault();closeDiagnosticSections();toggle?.focus();}});
+  window.addEventListener('resize',syncDiagnosticSections);window.addEventListener('scroll',()=>{if(diagnosticSections.scrollFrame)return;diagnosticSections.scrollFrame=requestAnimationFrame(()=>{diagnosticSections.scrollFrame=null;updateDiagnosticSectionFromScroll();});},{passive:true});renderOrderBar();
 }
 
 // 新视频帧或交互使视图失效时才重画；fallback 仅做廉价帧号比较，不再每个 RAF 全量绘制。

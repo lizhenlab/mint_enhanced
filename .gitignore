@@ -22,6 +22,7 @@ tests/*
 !tests/test_comparison_layout.cjs
 !tests/test_platform_views.cjs
 !tests/test_diagnostic_layout.cjs
+!tests/test_diagnostic_navigation.cjs
 !tests/test_platform_lifecycle.py
 !tests/test_native_platform.py
 !eval/model_effect/benchmark/tests/

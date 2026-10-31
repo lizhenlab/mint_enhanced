@@ -52,6 +52,9 @@ test('leaving results pauses hidden playback and keyboard tabs select the target
 });
 test('opening a legacy benchmark reveals its tool view without starting a benchmark',()=>{
   const {run,context,nodes}=fixture();
+  // showBench delegates to navigation; this fixture isolates the mode boundary.
+  context.navigateDiagnosticSection=id=>{context.state.hidden.delete(id);run("showDiagnosticView('tools')");};
+  context.setDiagnosticSectionVisibility=(id,on)=>{if(!on)context.state.hidden.add(id);};
   const start=source.indexOf('function showBench(on){'),end=source.indexOf('function _benchSetOptions',start);
   vm.runInContext(source.slice(start,end),context);
   run('showBench(true)');

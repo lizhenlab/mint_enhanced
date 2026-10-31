@@ -5,6 +5,7 @@ import json
 import os
 import time
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -45,18 +46,39 @@ class WorkspaceServices:
         self._watcher = threading.Thread(target=watch, name='workspace-index', daemon=True)
         self._watcher.start()
 
+    def _legacy_item(self, eid):
+        """Read the public Store item contract, with compatibility for old adapters.
+
+        The real Viewer uses an append-only list indexed by nonnegative eid;
+        earlier bridge fixtures/adapters used dictionaries. A released/stale
+        cache entry must not turn the whole workspace listing into an error.
+        """
+        if isinstance(eid, bool) or not isinstance(eid, (int, np.integer)) or eid < 0:
+            return None
+        try:
+            getter = getattr(self.legacy, 'item', None)
+            value = getter(int(eid)) if callable(getter) else getattr(self.legacy, '_items', {})[eid]
+        except (IndexError, KeyError, TypeError):
+            return None
+        return dict(value) if isinstance(value, Mapping) else None
+
     def cached_predictions(self):
         if self.legacy is None:
             return []
         rows = []
         for key, prediction in getattr(self.legacy, '_pred', {}).copy().items():
             eid, camera_mode, hand_mode = key
-            item = self.legacy._items.get(eid, {})
+            item = self._legacy_item(eid)
             raw = self.legacy._raw.get(eid)
-            if not raw or not isinstance(prediction.get('hand'), np.ndarray):
+            if item is None or not raw or not isinstance(prediction.get('hand'), np.ndarray):
                 continue
-            source = item.get('path') or raw.get('video')
-            if not source or not Path(source).is_file():
+            episode = item.get('ep') or {}
+            source = item.get('path') or raw.get('video') or (episode.get('video') if isinstance(episode, Mapping) else None)
+            try:
+                source = str(Path(source)) if source else None
+                if not source or not Path(source).is_file():
+                    continue
+            except (OSError, TypeError, ValueError):
                 continue
             hand_frame = 'camera' if item.get('kind') == 'lerobot' else item.get('hand_frame', getattr(self.legacy, 'default_hand_frame', 'camera'))
             identity = {'key': list(key), 'model': getattr(self.legacy.predictor, '_cache_model_identity', None), 'hand_frame': hand_frame,
@@ -76,7 +98,9 @@ class WorkspaceServices:
         if prediction is None or raw is None:
             raise ValueError('Cached prediction was released; retry after loading the saved result')
         self.legacy._validate_input_version(entry['eid'])
-        item = self.legacy._items[entry['eid']]
+        item = self._legacy_item(entry['eid'])
+        if item is None:
+            raise ValueError('Cached input metadata was released; reload the saved result')
         if getattr(self.legacy.predictor, '_cache_model_identity', None) != entry['identity']['model']:
             raise ValueError('Workspace model changed; select its new cached result')
         import hashlib

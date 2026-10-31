@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MINT 单算法诊断 · 算法工作台</title>
-<link rel="stylesheet" href="style.css?v=20261031-canonical-navigation">
+<link rel="stylesheet" href="style.css?v=20261101-section-sidebar">
 </head>
 <body data-diagnostic-view="config">
 <div id="app">
@@ -120,6 +120,15 @@
 </section>
 </header>
 <main id="diagnosticStage" role="tabpanel" aria-labelledby="diagnosticTab-results">
+  <aside id="sidebar" class="diagnostic-section-sidebar" aria-labelledby="diagnosticSectionsHeading">
+    <div class="diagnostic-sidebar-heading"><h2 id="diagnosticSectionsHeading">栏目导航</h2><button id="toggleDiagnosticSections" type="button" aria-controls="diagnosticSectionMenu" aria-expanded="false"><span id="diagnosticCurrentSection">选择栏目</span><span aria-hidden="true">⌄</span></button></div>
+    <div id="diagnosticSectionMenu" class="diagnostic-section-menu">
+      <p id="diagnosticSectionsHelp" class="side-hint">点击名称定位；右侧按钮切换显示，拖动手柄或使用上下按钮排序。</p>
+      <nav aria-label="诊断结果与专项工具栏目"><ul id="orderBar"></ul></nav>
+      <p class="diagnostic-section-note">仿真和重定向需手动开启，点击栏目不会自动生成。</p>
+    </div>
+  </aside>
+  <div id="diagnosticStageContent" class="diagnostic-stage-content">
   <div class="diagnostic-result-header" id="diagnostic-results"><div class="diagnostic-section-title"><h2>结果与损失</h2><span>视频、三维与数值联动；当前结果可加入统一比较。</span></div><div class="diagnostic-result-actions">      <div class="field"><label>叠加模式</label><select id="mode">
         <option value="mesh">网格 Mesh</option>
         <option value="skeleton">骨架 Skeleton</option>
@@ -154,7 +163,7 @@
         <span class="export-progress-track"><span id="exportProgressBar"></span></span>
         <span id="exportProgressText">0% · 等待导出</span>
       </span>
-</div><details id="sidebar" class="diagnostic-layout"><summary>调整结果栏目与显示顺序</summary><p class="side-hint">拖动栏目调整顺序，点击眼睛切换显示。仿真、重定向和专项工具保持按需开启。</p><ul id="orderBar"></ul></details></div>
+</div></div>
 
   <div id="diagnosticResultEmpty" class="empty-state" hidden><div><b>尚未加载诊断结果</b><p>在配置中选择输入并显式运行，或读取原始 GT。切换视图不会启动推理。</p><button type="button" data-diagnostic-view="config">前往配置与运行</button></div></div>
   <div id="blocks"></div>
@@ -457,6 +466,7 @@
     </div>
     <div class="benchtable" id="ldTable"></div>
   </div>
+  </div>
 </main>
 </div>
 
@@ -464,6 +474,6 @@
 <script src="i18n.js?v=20260816-3"></script>
 <script src="camera_baselines.js?v=20260814-1"></script>
 <script src="benchmark_suites.js?v=20260906-coverage"></script>
-<script src="app.js?v=20261031-canonical-navigation"></script>
+<script src="app.js?v=20261101-section-sidebar"></script>
 </body>
 </html>

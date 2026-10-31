@@ -243,6 +243,58 @@ def test_cached_workspace_bridge_is_idempotent_and_does_not_infer(manager, tmp_p
     assert changed['id']!=first['id']
 
 
+
+@pytest.mark.parametrize('source_metadata', ['raw', 'episode'])
+def test_cached_workspace_bridge_reads_real_list_and_lerobot_video_metadata(manager, tmp_path, source_metadata):
+    from mint.comparison.workspace import WorkspaceServices
+    source = video(tmp_path)
+    prediction = {'hand': np.arange(5 * 218, dtype=np.float32).reshape(5, 218),
+                  'pose_enc': np.zeros((5, 9), np.float32)}
+    item = {'kind': 'lerobot', 'ep': {'video': source, 'video_start': 12}, 'fps': 30}
+    raw = {'fps': 30, 'source_indices': np.arange(12, 17)}
+    if source_metadata == 'raw':
+        raw['video'] = source
+        item['ep'] = {'video_start': 12}  # raw() is authoritative for decoded input.
+    legacy = SimpleNamespace(_items=[item], _raw={0: raw},
+        _pred={(0, 'max_chunked', 'smooth'): prediction},
+        predictor=SimpleNamespace(_cache_model_identity='model-list-v1'), ckpt_path='/original/model',
+        _validate_input_version=lambda eid: None)
+    calls = []
+    # The production Store exposes item(eid), and the bridge must use that contract.
+    def item_at(eid):
+        calls.append(eid)
+        return legacy._items[eid]
+    legacy.item = item_at
+    service = WorkspaceServices(manager, None, None, legacy)
+    rows = service.cached_predictions()
+    assert len(rows) == 1 and rows[0]['eid'] == 0 and rows[0]['source'] == source
+    assert rows[0]['identity']['hand_frame'] == 'camera' and calls == [0]
+    first = service.import_prediction(rows[0]['id'])
+    again = service.import_prediction(rows[0]['id'])
+    assert first['id'] == again['id']
+    request = json.loads(manager.row(first['run_ids'][0])['payload'])
+    assert request['import']['format'] == 'mint_npz' and request['import']['hand_frame'] == 'camera'
+    assert first['sample_request']['start_frame'] == 12
+    assert first['sample_request']['max_frames'] == 5
+    with np.load(request['import']['path'], allow_pickle=False) as saved:
+        np.testing.assert_array_equal(saved['hand'], prediction['hand'])
+        np.testing.assert_array_equal(saved['pose_enc'], prediction['pose_enc'])
+    # No raw()/pred() entry points exist on the fixture: exporting only reads cache.
+    assert manager.run(first['run_ids'][0])['imported']
+
+
+def test_cached_workspace_bridge_skips_stale_list_ids_without_selecting_last_item(manager, tmp_path):
+    from mint.comparison.workspace import WorkspaceServices
+    source = video(tmp_path)
+    prediction = {'hand': np.ones((2, 218), np.float32)}
+    legacy = SimpleNamespace(_items=[{'kind': 'video', 'path': source}],
+        _raw={eid: {'video': source, 'fps': 30} for eid in (0, -1, 4)},
+        _pred={(eid, 'chunked', 'hard'): prediction for eid in (0, -1, 4)},
+        predictor=SimpleNamespace(_cache_model_identity='list-v1'), ckpt_path='/original/model')
+    service = WorkspaceServices(manager, None, None, legacy)
+    assert [row['eid'] for row in service.cached_predictions()] == [0]
+
+
 def test_imported_world_hand_geometry_is_converted_by_its_own_camera(tmp_path, monkeypatch):
     from mint.comparison import native
     from mint.runtime import file_identity

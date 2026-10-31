@@ -1161,10 +1161,6 @@ pre.ld-patch span { display: block; }
 .diagnostic-result-actions {display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
 .diagnostic-result-actions > .field {gap:9px;}
 .diagnostic-result-actions > button {min-height:33px;padding:5px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--cyan);font-size:12px;cursor:pointer;}
-#sidebar.diagnostic-layout {position:static;display:block;width:auto;height:auto;min-height:0;padding:0;margin:12px 0 0;border:0;background:none;box-shadow:none;}
-#sidebar.diagnostic-layout > summary {color:var(--mut);font-size:12px;cursor:pointer;}
-#sidebar.diagnostic-layout > .side-hint {margin:10px 0;}
-#sidebar.diagnostic-layout #orderBar {display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));max-height:220px;margin:0;}
 .diagnostic-tools {display:block;margin:0 0 18px;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:rgba(9,19,16,.65);scroll-margin-top:14px;}
 .diagnostic-tools > summary {font-size:13px;color:var(--cyan);cursor:pointer;}
 .diagnostic-tools > p {font-size:11px;color:var(--mut);line-height:1.6;margin:10px 0;}
@@ -1201,3 +1197,46 @@ body[data-diagnostic-view=results] #metricsWrap>.cap{font-size:11px;line-height:
 #diagnosticResultEmpty button{padding:8px 14px;border:1px solid var(--line);border-radius:7px;color:var(--cyan);background:var(--surface-2);cursor:pointer}
 .diagnostic-loss-guide{position:static!important;padding:8px 10px;cursor:pointer;color:var(--mut);font-size:11px}
 .diagnostic-loss-guide p{margin:9px 0 0;line-height:1.7;max-width:1100px}
+
+/* The diagnostic sections stay in view while the result canvas scrolls. */
+body[data-diagnostic-view=results] #diagnosticStage,body[data-diagnostic-view=tools] #diagnosticStage{display:grid;grid-template-columns:220px minmax(0,1fr);align-items:start;gap:18px;max-width:1800px}
+#diagnosticStageContent{min-width:0;width:100%}
+body[data-diagnostic-view=tools] #diagnosticStageContent{display:flex;flex-direction:column;gap:14px}
+#sidebar.diagnostic-section-sidebar{position:sticky;top:12px;display:block;align-self:start;flex:none;width:auto;height:auto;max-height:calc(100dvh - 24px);margin:0;padding:14px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:none;overflow:visible}
+body[data-diagnostic-view=config] #sidebar{display:none}
+.diagnostic-sidebar-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.diagnostic-sidebar-heading h2{margin:0;font-size:14px;letter-spacing:.04em;color:var(--fg)}
+#toggleDiagnosticSections{display:none;align-items:center;gap:8px;min-height:32px;max-width:75%;padding:5px 9px;border:1px solid var(--line);border-radius:7px;background:var(--surface-2);color:var(--cyan);cursor:pointer;font-size:12px}
+#diagnosticCurrentSection{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.diagnostic-section-menu{max-height:calc(100dvh - 90px);overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+#diagnosticSectionsHelp{margin:0 0 10px;font-size:11px;line-height:1.65}
+#sidebar.diagnostic-section-sidebar #orderBar{display:flex;flex-direction:column;gap:6px;max-height:none;overflow:visible;margin:0;padding:0;list-style:none}
+#sidebar.diagnostic-section-sidebar #orderBar li.oitem{position:relative;display:grid;grid-template-columns:14px minmax(0,1fr) 38px;align-items:start;gap:6px;min-height:62px;padding:7px 5px 7px 7px;cursor:default;opacity:1;border:1px solid var(--line-soft);background:var(--surface-2)}
+#sidebar.diagnostic-section-sidebar #orderBar li.oitem.active,#sidebar.diagnostic-section-sidebar #orderBar li.oitem:has(.onm[aria-current=location]){border-color:#8bb750;background:#b9f45a0d;box-shadow:inset 2px 0 var(--acid)}
+#sidebar.diagnostic-section-sidebar #orderBar li.oitem.off .onm{color:var(--mut)}
+#sidebar.diagnostic-section-sidebar #orderBar li.oitem.over{border-color:var(--acid);background:#b9f45a14}
+#sidebar.diagnostic-section-sidebar #orderBar li.oitem.drag{opacity:.5}
+#sidebar.diagnostic-section-sidebar #orderBar .oh{grid-column:1;align-self:start;padding-top:5px;color:var(--mut);cursor:grab;user-select:none}
+#sidebar.diagnostic-section-sidebar #orderBar .onm{display:flex;min-width:0;flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:5px;min-height:44px;padding:3px 0;border:0;background:none;color:var(--fg);text-align:left;line-height:1.45;font-size:12px;cursor:pointer;overflow-wrap:anywhere}
+#sidebar.diagnostic-section-sidebar #orderBar .onm:hover{color:var(--cyan)}
+#sidebar.diagnostic-section-sidebar #orderBar .section-state{display:block;padding-right:2px;color:var(--mut);font-size:10px;line-height:1.4}
+#sidebar.diagnostic-section-sidebar #orderBar .oeye{min-height:26px;width:38px;padding:2px 3px;border:1px solid var(--line-soft);border-radius:5px;line-height:1.25;font-size:11px;white-space:nowrap;background:var(--surface)}
+#sidebar.diagnostic-section-sidebar #orderBar .oeye:disabled{opacity:.45;cursor:default}
+#sidebar.diagnostic-section-sidebar #orderBar .omove-up,#sidebar.diagnostic-section-sidebar #orderBar .omove-down{position:absolute;bottom:4px;min-height:20px;width:18px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--mut);cursor:pointer;font-size:12px}
+#sidebar.diagnostic-section-sidebar #orderBar .omove-up{right:25px}#sidebar.diagnostic-section-sidebar #orderBar .omove-down{right:5px}
+#sidebar.diagnostic-section-sidebar #orderBar .omove-up:hover,#sidebar.diagnostic-section-sidebar #orderBar .omove-down:hover{color:var(--cyan);background:var(--surface)}
+#sidebar.diagnostic-section-sidebar #orderBar button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.diagnostic-section-note{margin:11px 0 0;font-size:10px;line-height:1.7;color:var(--mut)}
+#blocks>section[data-pid]{scroll-margin-top:14px}
+.diagnostic-section-notice{margin:0 0 14px;padding:17px 18px;border:1px dashed var(--line);border-radius:10px;background:var(--surface)}
+.diagnostic-section-notice h3{margin:0 0 7px;font-size:14px}.diagnostic-section-notice p{margin:0 0 10px;color:var(--mut);font-size:12px;line-height:1.7}
+.diagnostic-section-notice button{padding:7px 12px;border:1px solid var(--line);border-radius:7px;color:var(--cyan);background:var(--surface-2);cursor:pointer}
+@media(max-width:900px){
+ body[data-diagnostic-view=results] #diagnosticStage,body[data-diagnostic-view=tools] #diagnosticStage{grid-template-columns:minmax(0,1fr);gap:12px}
+ #sidebar.diagnostic-section-sidebar{position:sticky;top:0;z-index:15;max-height:none;padding:8px 10px;border-radius:8px}
+ .diagnostic-sidebar-heading{margin:0;min-height:32px}.diagnostic-sidebar-heading h2{font-size:12px}
+ #toggleDiagnosticSections{display:inline-flex;justify-content:space-between}
+ #sidebar.diagnostic-section-sidebar .diagnostic-section-menu{display:none;position:absolute;left:0;right:0;top:calc(100% + 5px);max-height:min(62dvh,540px);padding:12px;border:1px solid var(--line);border-radius:9px;background:var(--surface);box-shadow:0 12px 32px #0008;z-index:20}
+ body.diagnostic-sections-open #sidebar.diagnostic-section-sidebar .diagnostic-section-menu{display:block}
+ #blocks>section[data-pid]{scroll-margin-top:62px}
+}

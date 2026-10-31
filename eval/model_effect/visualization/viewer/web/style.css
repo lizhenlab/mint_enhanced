@@ -1129,3 +1129,45 @@ pre.ld-patch span { display: block; }
 }
 
 .shared-workspace-nav{display:flex;gap:8px;flex-wrap:wrap}.shared-workspace-nav a{color:var(--cyan,#58d5d2);padding:6px 10px;border:1px solid #29413a;border-radius:7px;font-size:12px}#shareComparisonResult{flex-shrink:0}@media(max-width:760px){.shared-workspace-nav{order:3;flex-basis:100%}.shared-workspace-nav a{font-size:11px;padding:5px}.masthead{flex-wrap:wrap}}
+
+/* Single-algorithm diagnostics is a subordinate tool, with one local workflow. */
+.diagnostic-breadcrumb {display:flex;align-items:center;gap:9px;flex-wrap:wrap;color:var(--mut);font-size:12px;margin-left:auto;}
+.diagnostic-breadcrumb a {color:var(--cyan);text-decoration:none;}
+.diagnostic-breadcrumb a:first-child {padding:7px 10px;border:1px solid var(--line);border-radius:8px;}
+.diagnostic-context {border-left:3px solid var(--cyan);padding:7px 12px;margin:4px 0 12px;background:rgba(88,213,210,.035);}
+.diagnostic-context strong {font-size:13px;color:var(--fg);font-weight:650;}
+.diagnostic-context p {margin:5px 0 0;color:var(--mut);font-size:12px;line-height:1.6;max-width:1000px;}
+.diagnostic-steps {display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px;}
+.diagnostic-steps a {padding:6px 11px;border:1px solid var(--line);border-radius:7px;color:#c5d8ce;text-decoration:none;font-size:12px;}
+.diagnostic-section-title {display:flex;align-items:baseline;gap:13px;flex-wrap:wrap;margin:14px 0 10px;scroll-margin-top:14px;}
+.diagnostic-section-title h2 {margin:0;font-size:15px;letter-spacing:.02em;color:var(--fg);}
+.diagnostic-section-title > span {font-size:11px;color:var(--mut);line-height:1.6;}
+.control-grid {grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);align-items:start;}
+.control-grid .source-card {grid-column:auto;}
+.source-card > .checkpoint-field {align-items:stretch;flex-direction:column;gap:6px;}
+.diagnostic-input-browser {grid-column:1/-1;display:flex;min-width:0;flex-direction:column;gap:7px;padding-top:10px;border-top:1px solid var(--line-soft);}
+.diagnostic-input-browser > label {font-size:11px;color:var(--mut);font-weight:650;}
+.diagnostic-input-browser #inList {max-height:160px;min-height:60px;overflow:auto;}
+.diagnostic-input-browser #inCrumb {max-height:60px;}
+.diagnostic-advanced {grid-column:1/-1;display:block;padding:10px;border:1px solid var(--line-soft);border-radius:8px;background:rgba(4,9,8,.25);}
+.diagnostic-advanced > summary {font-size:12px;color:var(--cyan);cursor:pointer;line-height:1.6;}
+.diagnostic-advanced[open] > summary {margin-bottom:10px;}
+.diagnostic-advanced-fields {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}
+.diagnostic-advanced-fields > .field {flex-direction:column;align-items:stretch;gap:5px;}
+.diagnostic-advanced .ukf-controls {margin:0;border:0;padding:0;background:transparent;}
+.diagnostic-run-actions .inference-actions {justify-content:flex-start;flex-wrap:wrap;margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:10px;background:rgba(185,244,90,.035);}
+.diagnostic-run-actions #loadRawBtn {margin-left:auto;}
+.diagnostic-result-header {padding-bottom:12px;border-bottom:1px solid var(--line-soft);margin-bottom:12px;scroll-margin-top:14px;}
+.diagnostic-result-actions {display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+.diagnostic-result-actions > .field {gap:9px;}
+.diagnostic-result-actions > button {min-height:33px;padding:5px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--cyan);font-size:12px;cursor:pointer;}
+#sidebar.diagnostic-layout {position:static;display:block;width:auto;height:auto;min-height:0;padding:0;margin:12px 0 0;border:0;background:none;box-shadow:none;}
+#sidebar.diagnostic-layout > summary {color:var(--mut);font-size:12px;cursor:pointer;}
+#sidebar.diagnostic-layout > .side-hint {margin:10px 0;}
+#sidebar.diagnostic-layout #orderBar {display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));max-height:220px;margin:0;}
+.diagnostic-tools {display:block;margin:0 0 18px;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:rgba(9,19,16,.65);scroll-margin-top:14px;}
+.diagnostic-tools > summary {font-size:13px;color:var(--cyan);cursor:pointer;}
+.diagnostic-tools > p {font-size:11px;color:var(--mut);line-height:1.6;margin:10px 0;}
+.diagnostic-tools > p a {color:var(--cyan);}
+.diagnostic-tools .utility-rail {border:0;background:none;padding:0;}
+@media(max-width:900px){.control-grid{grid-template-columns:1fr}.diagnostic-breadcrumb{margin-left:0}.masthead{flex-wrap:wrap}.diagnostic-advanced-fields{grid-template-columns:1fr}.diagnostic-run-actions .inference-actions-label{flex-basis:100%}.diagnostic-run-actions #loadRawBtn{margin-left:0}.diagnostic-result-actions{align-items:flex-start}.diagnostic-result-actions .field{flex-basis:100%;max-width:320px}}

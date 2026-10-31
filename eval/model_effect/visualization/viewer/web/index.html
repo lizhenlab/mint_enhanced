@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MINT 高级调试 · WUJI EGO</title>
-<link rel="stylesheet" href="style.css?v=20261031-platform2">
+<title>MINT 单算法诊断 · 算法工作台</title>
+<link rel="stylesheet" href="style.css?v=20261031-diagnostic-layout">
 </head>
 <body>
 <div id="app">
@@ -12,20 +12,22 @@
 <header class="control-deck">
   <div class="masthead">
     <div class="brand-block">
-      <span class="brand-mark">WJ</span>
-      <span><b>MINT 高级调试</b><small>WUJI EGO · ADVANCED TOOLS</small></span>
+      <span class="brand-mark">M</span>
+      <span><b>MINT 单算法诊断</b><small>算法工作台 / 工具</small></span>
     </div>
-    <nav class="shared-workspace-nav" aria-label="统一工作台"><a href="/compare?hub=data">数据</a><a href="/compare">比较</a><a href="/compare?hub=evaluation">评测与质检</a><a href="/compare?hub=research">训练与模型</a><a href="/compare?hub=tasks">任务</a><a href="/compare?hub=tools" aria-current="page">工具</a></nav>
+    <nav class="diagnostic-breadcrumb" aria-label="当前位置"><a href="/compare">← 返回比较工作区</a><span>/</span><a href="/compare?hub=tools">工具</a><span>/ 单算法诊断</span></nav>
     <label class="language-picker" data-i18n-ignore>
-      <span id="languageLabel">Language</span>
+      <span id="languageLabel">语言</span>
       <select id="languageSelect" aria-labelledby="languageLabel">
         <option value="en">English</option>
-        <option value="zh">Chinese</option>
+        <option value="zh">中文</option>
       </select>
     </label>
   </div>
 
-  <div class="status-rail"><button id="shareComparisonResult" type="button">加入多算法比较</button>
+  <div class="diagnostic-context"><strong>只调试 MINT 的推理与显示细节</strong><p>常规推理和算法横向对照请使用比较工作区。这里用于分窗、平滑、手形、内参与逐帧 loss 诊断；已有预测可加入同输入比较，设置不会自动同步。</p></div>
+  <nav class="diagnostic-steps" aria-label="本页操作步骤"><a href="#diagnostic-input">1 · 输入与运行</a><a href="#diagnostic-results">2 · 结果查看</a><a href="#diagnostic-tools">3 · 专项工具</a></nav>
+  <div class="status-rail">
     <span id="stepInfo" class="step" title="当前进行到哪一步">待操作</span>
     <span id="progWrap" class="progwrap" title="加载进度（推理为确定进度，其余为不确定动画）" style="display:none"><span id="progBar" class="progbar"></span></span>
     <span id="info">选择输入与参数后，点击“开始推理”运行模型。</span>
@@ -36,9 +38,16 @@
     <button type="button" id="refreshTasks">刷新</button>
     <div id="taskList">加载中</div>
   </details>
+  <div class="diagnostic-section-title" id="diagnostic-input"><h2>1 · 输入与运行</h2><span>先选模型和视频，再显式开始推理。</span></div>
+  <div class="diagnostic-run-actions">    <span id="inferenceActions" class="inference-actions">
+      <span class="inference-actions-label">运行当前 MINT 输入</span>
+      <button id="loadModelBtn" class="primary secondary-action" title="在每张可见 GPU 上常驻一个当前 ckpt 模型副本；须加载完成后才能推理">加载模型</button>
+      <button id="loadBtn" class="primary infer-action" title="只有点击此按钮才会运行模型；选择输入和参数不会自动推理">▶ 开始推理</button>
+    <button id="loadRawBtn" class="ghost" aria-pressed="false" title="只看原始标注，不跑模型推理；再次点击返回已有 GT 对照">仅看原始 GT</button>
+    </span></div>
   <div class="control-grid">
     <section class="control-card source-card">
-      <div class="control-title"><span>01</span> 模型与样本</div>
+      <div class="control-title"><span>01</span> 模型与输入</div>
       <div class="field wide-field checkpoint-field"><label>模型检查点</label>
         <span class="brow">
           <span class="checkpoint-path-row"><input id="ckptPath" type="text" spellcheck="false"
@@ -48,6 +57,11 @@
           <span id="ckptCrumb" class="crumb" title="当前浏览目录，点某层可回退"></span>
           <span id="ckptList" class="browlist" title="可浏览任意服务器目录；点权重文件直接选择，或进入含权重的目录后选择当前目录"></span>
         </span></div>
+      <div class="diagnostic-input-browser">  <label>输入目录</label>
+  <div class="side-hint">默认起点 output/…/lerobot；可沿面包屑上溯。到 lerobot 目录后选择 Episode；普通目录点击视频只会选中，不会自动推理。</div>
+  <span class="brow" id="inBrow"><span id="inNav"><span id="inCrumb" class="crumb" title="已选路径,点某层可回退"></span><button id="inUp" title="返回上一级目录" hidden>⬆ 上一级</button></span>
+    <span id="inList" class="browlist" title="点目录进入 / 点视频文件选中输入（不会自动推理）"></span></span>
+</div>
       <div id="epWrap" class="field episode-field" style="display:none"><label>Episode</label>
         <span class="episode-stepper"><button id="epPrev" title="上一个">←</button>
           <input id="ep" type="number" min="0" value="0" step="1">
@@ -60,12 +74,8 @@
     <section class="control-card inference-card">
       <div class="control-title"><span>02</span> 推理策略</div>
       <div id="gpuSchedulerStatus" class="batch-devices" style="display:none" aria-live="polite" data-i18n-ignore></div>
-      <div class="field" data-i18n-ignore><label>Video view / 视频视角</label><select id="videoView" title="Full keeps the image; left/right select one eye of a side-by-side stereo video. 视频不截断时间。"><option value="full">Full / 完整画面</option><option value="left">Left eye / 左眼</option><option value="right">Right eye / 右眼</option></select></div>
-      <div class="field"><label>叠加模式</label><select id="mode">
-        <option value="mesh">网格 Mesh</option>
-        <option value="skeleton">骨架 Skeleton</option>
-        <option value="mesh_skel">网格 + 骨架</option>
-      </select></div>
+      <div class="field" data-i18n-ignore><label>视频视角</label><select id="videoView" title="Full keeps the image; left/right select one eye of a side-by-side stereo video. 视频不截断时间。"><option value="full">完整画面</option><option value="left">双目左眼</option><option value="right">双目右眼</option></select></div>
+
       <div class="field"><label>相机推理</label><select id="camMode"
         title="分窗=训练窗长；最大窗分窗=当前显卡 exact full 安全上限；流式=相机整段因果+KV cache；整段=上限内一次普通前向，超限时会先询问是否改用最大窗分窗">
         <option value="chunked">分窗 · Chunked</option>
@@ -77,8 +87,9 @@
         title="切换只更新设置，不会自动推理；点击开始推理后生效">
         <button data-hand-mode="hard">原始硬切</button><button data-hand-mode="blend">线性融合</button><button data-hand-mode="smooth" class="on" title="线性融合后，使用 ego_pipeline 数据清理链的相机系 UKF+RTS 双向平滑">融合 + UKF平滑</button>
       </span></div>
+      <details class="diagnostic-advanced"><summary>高级：平滑预设与参数</summary>
       <div id="ukfControls" class="ukf-controls">
-        <div class="field" data-i18n-ignore><label for="smoothingPreset">平滑预设 / Smoothing preset</label><select id="smoothingPreset">
+        <div class="field" data-i18n-ignore><label for="smoothingPreset">平滑预设</label><select id="smoothingPreset">
           <option value="viewer">Viewer · 较轻平滑（0.7 / 0.5 / 0.3）</option>
           <option value="production" selected>Production · 生产参数（0.6 / 0.6 / 2）</option>
           <option value="custom">Custom · 自定义</option>
@@ -90,42 +101,28 @@
         </div>
         <small><b>默认：Production，与多算法比较一致</b> · 建议 q 0.4–1.0、r 0.3–1.0、beta 0.2–3.0；q ↑ 更跟手，r/beta ↑ 更平滑。安全范围 q/r 0.1–2.0、beta 0–5。</small>
       </div>
-    </section>
-
-    <section class="control-card geometry-card">
-      <div class="control-title"><span>03</span> 几何参数</div>
+      </details>
+    <details class="diagnostic-advanced geometry-card"><summary>高级：手形与内参诊断</summary><div class="diagnostic-advanced-fields">
       <div class="field"><label>GT 手形</label><select id="gtBetas" title="只更新设置，点击开始推理后生效">
         <option value="per_frame">每帧</option><option value="mean">整段平均</option></select></div>
       <div class="field"><label>预测手形</label><select id="predBetas" title="只更新设置，点击开始推理后生效">
         <option value="per_frame">每帧</option><option value="mean">整段平均</option></select></div>
       <div class="field"><label>预测内参</label><select id="predFov" title="只更新设置，点击开始推理后生效；2D、MuJoCo 与 Retargeting 共用">
         <option value="per_frame">每帧</option><option value="mean">整段平均</option></select></div>
+</div></details>
     </section>
+
+
   </div>
 
-  <div class="utility-rail">
-    <span class="utility-label">VIEW / TOOLS</span>
-    <span class="utility-spacer"></span>
-    <button id="loadRawBtn" class="ghost" aria-pressed="false" title="只看原始标注，不跑模型推理；再次点击返回已有 GT 对照">仅看原始 GT</button>
-    <button id="mujocoBtn" class="ghost" aria-pressed="false" title="默认关闭；点击后才按当前样本启动 MuJoCo 渲染">MuJoCo 仿真</button>
-    <button id="retargetBtn" class="ghost" aria-pressed="false" title="默认关闭；点击后才将当前 21 点驱动 Wuji Hand 并启动渲染">Wuji Hand Retargeting</button>
-    <span id="datasetAnalysisLauncher" class="analysis-launcher">
-      <button id="datasetAnalysisBtn" class="ghost" aria-haspopup="menu" aria-expanded="false">数据集分析 <span aria-hidden="true">▾</span></button>
-      <span id="datasetAnalysisMenu" class="analysis-launcher-menu" role="menu">
-        <button type="button" role="menuitem" data-analysis-type="video"><b>视频分析</b><small>ffprobe 媒体属性与质量</small></button>
-        <button type="button" role="menuitem" data-analysis-type="intrinsics"><b>内参分析</b><small>LeRobot episode 首帧 FOV</small></button>
-        <button type="button" role="menuitem" data-analysis-type="diversity"><b>多样性分析</b><small>场景、动作、活动范围与手监督</small></button>
-      </span>
-    </span>
-    <button id="batchBtn" class="ghost" title="递归推理指定目录的全部视频，并按镜像目录保存结果">批量推理</button>
-    <button id="benchBtn" class="ghost" title="对当前 ckpt 跑量化评测">Benchmark</button>
-    <button id="logDiffBtn" class="ghost" title="选择两个 run 和代码模块，只展示真实变更">代码对比</button>
-    <span class="utility-break" aria-hidden="true"></span>
-    <span id="inferenceActions" class="inference-actions">
-      <span class="inference-actions-label">MODEL / INFERENCE</span>
-      <button id="loadModelBtn" class="primary secondary-action" title="在每张可见 GPU 上常驻一个当前 ckpt 模型副本；须加载完成后才能推理">加载模型</button>
-      <button id="loadBtn" class="primary infer-action" title="只有点击此按钮才会运行模型；选择输入和参数不会自动推理">▶ 开始推理</button>
-      <span id="frameCapturePicker" class="frame-capture-picker">
+
+</header>
+<main>
+  <div class="diagnostic-result-header" id="diagnostic-results"><div class="diagnostic-section-title"><h2>2 · 结果查看</h2><span>视频、三维与数值共用当前输入；结果可复用到比较工作区。</span></div><div class="diagnostic-result-actions">      <div class="field"><label>叠加模式</label><select id="mode">
+        <option value="mesh">网格 Mesh</option>
+        <option value="skeleton">骨架 Skeleton</option>
+        <option value="mesh_skel">网格 + 骨架</option>
+      </select></div><button id="shareComparisonResult" type="button" title="导入当前已有数值预测，不重复网络推理">将已有结果加入比较</button>      <span id="frameCapturePicker" class="frame-capture-picker">
         <button id="frameCaptureBtn" class="frame-capture-action" type="button" aria-expanded="false"
                 aria-haspopup="menu" aria-controls="frameCaptureMenu" disabled>保存当前帧 ▾</button>
         <span id="frameCaptureMenu" class="frame-capture-menu" role="menu" aria-label="当前帧保存来源" hidden>
@@ -155,13 +152,26 @@
         <span class="export-progress-track"><span id="exportProgressBar"></span></span>
         <span id="exportProgressText">0% · 等待导出</span>
       </span>
-    </span>
-  </div>
-</header>
-<main>
+</div><details id="sidebar" class="diagnostic-layout"><summary>调整结果栏目与显示顺序</summary><p class="side-hint">拖动栏目调整顺序，点击眼睛切换显示。仿真、重定向和专项工具保持按需开启。</p><ul id="orderBar"></ul></details></div>
+
   <div id="blocks"></div>
   <div class="metrics" id="metricsWrap"><div class="cap">逐帧 loss（与训练同公式，随当前帧联动）。权重=组权重×项权重；值/加权/占比同口径（旋转项按弧度，值列括号补度数便于观看）；加权=权重×值；占比=加权值÷加权总 loss，看谁主导。</div>
     <div id="metrics"></div></div>
+  <details class="diagnostic-tools" id="diagnostic-tools"><summary>3 · 专项工具（按需展开）</summary><p>在已有结果上检查仿真和重定向，或打开数据分析、MINT 专项评测及代码对比。批量多算法任务请到 <a href="/compare?hub=batch">批量比较</a>。</p><div class="utility-rail">
+    <button id="mujocoBtn" class="ghost" aria-pressed="false" title="默认关闭；点击后才按当前样本启动 MuJoCo 渲染">MuJoCo 仿真</button>
+    <button id="retargetBtn" class="ghost" aria-pressed="false" title="默认关闭；点击后才将当前 21 点驱动 Wuji Hand 并启动渲染">Wuji Hand 运动学重定向</button>
+    <span id="datasetAnalysisLauncher" class="analysis-launcher">
+      <button id="datasetAnalysisBtn" class="ghost" aria-haspopup="menu" aria-expanded="false">数据集分析 <span aria-hidden="true">▾</span></button>
+      <span id="datasetAnalysisMenu" class="analysis-launcher-menu" role="menu">
+        <button type="button" role="menuitem" data-analysis-type="video"><b>视频分析</b><small>ffprobe 媒体属性与质量</small></button>
+        <button type="button" role="menuitem" data-analysis-type="intrinsics"><b>内参分析</b><small>LeRobot episode 首帧 FOV</small></button>
+        <button type="button" role="menuitem" data-analysis-type="diversity"><b>多样性分析</b><small>场景、动作、活动范围与手监督</small></button>
+      </span>
+    </span>
+    <button id="batchBtn" class="ghost" title="递归推理指定目录的全部视频，并按镜像目录保存结果">批量推理</button>
+    <button id="benchBtn" class="ghost" title="对当前 ckpt 跑量化评测">MINT 专项评测</button>
+    <button id="logDiffBtn" class="ghost" title="选择两个 run 和代码模块，只展示真实变更">代码对比</button>
+</div></details>
   <div class="benchwrap analysis-wrap" id="analysisWrap" style="display:none">
     <div class="bench-head analysis-head">
       <span class="analysis-title"><b id="analysisTitle" class="k">视频分析</b><small id="analysisSubtitle">只读 ffprobe 媒体属性，不解码视频帧</small></span>
@@ -248,7 +258,7 @@
       <label class="batch-path"><span>输出根目录</span><input id="batchOutput" type="text" placeholder="服务器绝对路径；按输入相对层级镜像保存"></label>
       <label><span>文件名模板</span><input id="batchName" type="text" value="{stem}_pred" title="支持 {stem} {name} {ext} {parent} {index}，例如 {index:04d}_{stem}"></label>
       <label><span>渲染模式</span><select id="batchMode"><option value="mesh">网格 Mesh</option><option value="skeleton">骨架 Skeleton</option><option value="mesh_skel" selected>网格 + 骨架</option></select></label>
-      <label data-i18n-ignore>Video view / 视频视角 <select id="batchVideoView"><option value="full">Full / 完整画面</option><option value="left">Left eye / 左眼</option><option value="right">Right eye / 右眼</option></select></label>
+      <label data-i18n-ignore>视频视角 <select id="batchVideoView"><option value="full">完整画面</option><option value="left">双目左眼</option><option value="right">双目右眼</option></select></label>
 <label><span>相机推理</span><select id="batchCam" title="Full 超过安全上限会失败；批量长视频请选择最大窗分窗"><option value="chunked">分窗 · Chunked</option><option value="max_chunked" selected>最大窗分窗 · Max Chunked</option><option value="streaming">流式 · Streaming</option><option value="full">整段 · Full</option></select></label>
       <label><span>手部拼窗 / 后处理</span><select id="batchHand"><option value="hard">原始硬切</option><option value="blend">线性融合</option><option value="smooth" selected>融合 + UKF平滑</option></select></label>
       <label><span>预测手形</span><select id="batchBetas"><option value="per_frame">每帧</option><option value="mean">整段平均</option></select></label>
@@ -446,16 +456,7 @@
   </div>
 </main>
 </div>
-<aside id="sidebar">
-  <div class="aside-head"><span class="aside-kicker">WORKSPACE</span><b>浏览与编排</b></div>
-  <label>栏目顺序</label>
-  <div class="side-hint">拖动 ☰ 调整顺序；点 👁 隐藏/显示对应模块（视频 / 固定世界 / 当前相机 / MuJoCo / Wuji Hand Retargeting / 数值 / loss / 工具面板）。仿真、retargeting 与工具面板默认关闭；MuJoCo / Wuji Hand 仅在手动开启后开始渲染</div>
-  <ul id="orderBar"></ul>
-  <label>输入目录</label>
-  <div class="side-hint">默认起点 output/…/lerobot；可沿面包屑上溯。到 lerobot 目录后选择 Episode；普通目录点击视频只会选中，不会自动推理。</div>
-  <span class="brow" id="inBrow"><span id="inNav"><span id="inCrumb" class="crumb" title="已选路径,点某层可回退"></span><button id="inUp" title="返回上一级目录" hidden>⬆ 上一级</button></span>
-    <span id="inList" class="browlist" title="点目录进入 / 点视频文件选中输入（不会自动推理）"></span></span>
-</aside>
+
 </div>
 <script src="i18n.js?v=20260816-3"></script>
 <script src="camera_baselines.js?v=20260814-1"></script>

@@ -15,8 +15,8 @@ function syncPlatformNavigation(tab){
   for(const button of document.querySelectorAll('[data-platform-tab]')){const active=button.dataset.platformTab===group;button.classList.toggle('active',active);if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');}
   $('backToResults').classList.toggle('active',!tab);if(!tab)$('backToResults').setAttribute('aria-current','page');else $('backToResults').removeAttribute('aria-current');
   for(const button of document.querySelectorAll('[data-hub-pane]')){button.hidden=HUB_GROUPS[button.dataset.hubPane]!==group;const active=button.dataset.hubPane===tab;button.classList.toggle('active',active);button.setAttribute('aria-current',active?'page':'false');}
-  document.querySelector('.platform-tabs').hidden=['research','tasks','tools'].includes(group);
-  $('evaluationRoutes').hidden=group!=='evaluation';$('moduleContext').textContent=HUB_CONTEXT[tab]||'';
+  document.querySelector('.platform-tabs').hidden=['research','tasks','tools','evaluation'].includes(group);
+  $('evaluationRoutes').hidden=group!=='evaluation';for(const button of document.querySelectorAll('[data-evaluation-route]')){const active=button.dataset.evaluationRoute===(tab==='quality'?'quality':'dataset');button.classList.toggle('active',active);button.setAttribute('aria-current',active?'page':'false');}$('moduleContext').textContent=HUB_CONTEXT[tab]||'';
 }
 function closePlatformWorkspace({history=true}={}){
   platformNavigation.scroll.set(platform.pane,document.querySelector('.platform-body').scrollTop);
@@ -195,8 +195,8 @@ async function refreshToolOptions(){
   const cap=platform.capability,host=$('toolReadiness');host.replaceChildren();host.classList.add('tool-readiness-grid');
   const add=(label,ready,reason)=>{const card=el('div',undefined,'tool-readiness-card'),badge=el('span',ready?'可用':'需配置 / 待实现','readiness-badge');badge.dataset.ready=String(!!ready);card.append(el('strong',label),badge,el('p',reason||'按需显式提交，不会自动运行。','hint'));host.append(card);};
   for(const [kind,label]of [['mujoco','MuJoCo 几何展示'],['retarget','Wuji Hand 运动学重定向']])add(label,cap.render?.[kind]?.ready,cap.render?.[kind]?.ready?'使用当前已有几何；重定向不代表接触或动力学验证。':cap.render?.[kind]?.reason);
-  add('数据专项分析',cap.data_analysis,cap.data_analysis?'视频质量、FOV 和多样性分析已连接。':'数据分析后端未连接。');add('MINT 高级调试',cap.legacy,cap.legacy?'原工作台已连接；使用同一输入和显式运行协议进行比较。':'原工作台后端未连接。');
-  add('Aliyun 云端评测',cap.cloud?.ready,cap.cloud?.ready?'配置已填写；仍需在高级调试中预检并显式提交。':cap.cloud?.reason||'请配置工作区、资源、镜像与存储。');
+  add('数据专项分析',cap.data_analysis,cap.data_analysis?'视频质量、FOV 和多样性分析已连接。':'数据分析后端未连接。');add('MINT 单算法诊断',cap.legacy,cap.legacy?'MINT 诊断后端已连接；诊断结果可显式加入统一比较。':'MINT 诊断后端未连接。');
+  add('Aliyun 云端评测',cap.cloud?.ready,cap.cloud?.ready?'配置已填写；仍需在公开基准工具中预检并显式提交。':cap.cloud?.reason||'请配置工作区、资源、镜像与存储。');
   const bench=cap.benchmark;if(bench){const supported=(bench.datasets||[]).filter(row=>row.implemented).map(row=>row.name),missing=(bench.datasets||[]).filter(row=>!row.implemented).map(row=>row.name),missingHeads=(bench.heads||[]).filter(row=>!row.implemented).map(row=>row.name);const card=el('div',undefined,'tool-readiness-card benchmark-readiness');card.append(el('strong','公开基准 · 适配器与当前模型能力分别检查'),el('p','已有数据集适配器：'+(supported.join('、')||'无')+'。','hint'),el('p','待实现适配器：'+(missing.join('、')||'无')+'；待实现指标：'+(missingHeads.join('、')||'无')+'。','hint'),el('p','当前 MINT 配置输出：'+(bench.model_capability||[]).join('、')+'。适配器已实现仍需匹配数据标注和模型输出；当前模型未启用的深度等指标不可直接评测。','hint'));host.append(card);}
   for(const link of document.querySelectorAll('#hub-tools .tool-links a')){const tool=new URL(link.href,location.href).searchParams.get('tool'),ready=tool?.startsWith('analysis-')?cap.data_analysis:cap.legacy;link.dataset.ready=String(!!ready);link.setAttribute('aria-disabled',String(!ready));link.title=ready?'打开工具；不会自动提交计算':'后端未连接，请先检查环境';link.onclick=ready?null:event=>{event.preventDefault();hubError(new Error('该工具后端未连接，请先检查环境。'));};}
 

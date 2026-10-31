@@ -211,3 +211,12 @@ dialog{color:var(--text);background:var(--surface);border:1px solid #426050;bord
 .history-group>summary{cursor:pointer;list-style:none;color:var(--cyan);padding:4px 0 7px;font-weight:600}
 .history-group>summary::before{content:'▸ ';color:var(--muted)}.history-group[open]>summary::before{content:'▾ '}
 .history-group .history-row{font-weight:400}
+.tool-groups{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:18px}
+.tool-group{display:flex;flex-direction:column;gap:9px;padding:18px}
+.tool-group h3{margin:0}.tool-group .hint{margin:0;line-height:1.8}.tool-group .tool-links{display:flex;flex-direction:column;align-items:stretch;gap:7px;margin:4px 0}
+.tool-group .tool-links a{padding:10px 12px;border:1px solid var(--line);border-radius:7px;background:var(--surface-2);font-size:12px}
+.tool-environment{margin:0 0 22px;border:1px solid var(--line);padding:12px 16px;border-radius:9px}
+.tool-environment>summary{cursor:pointer;color:var(--muted);font-size:12px}.tool-environment[open]>summary{margin-bottom:14px;color:var(--text)}
+.evaluation-routes button.active{color:var(--lime);border-color:#91bd5480;background:#b9f45a0b}
+.task-purpose{margin:0 0 16px;padding:10px 12px;border-left:2px solid var(--cyan);background:var(--surface)}
+@media(max-width:900px){.tool-groups{grid-template-columns:1fr}.tool-group{padding:14px}.tool-group .tool-links{flex-direction:row;flex-wrap:wrap}.tool-group .tool-links a{flex:1;min-width:140px}}

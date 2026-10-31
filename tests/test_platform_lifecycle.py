@@ -250,7 +250,7 @@ def test_gpu_priority_intents_expire_and_cannot_kill_or_steal_a_live_lease(tmp_p
     batch.clear(); high.clear()
 
 
-def test_camera_data_conversion_preserves_authoritative_label_video_offsets(annotated_episode, tmp_path):
+def test_camera_data_conversion_preserves_authoritative_label_video_offsets(annotated_episode, tmp_path, monkeypatch):
     import pyarrow.parquet as pq
     from mint.comparison.training_data import prepare_existing_camera_dataset
     from eval.model_effect.visualization.reproj_core.lerobot_io import discover_episodes
@@ -262,6 +262,24 @@ def test_camera_data_conversion_preserves_authoritative_label_video_offsets(anno
     assert records[0]['video_start'] == 3 and records[0]['length'] == 4
     labels = pq.read_table(records[0]['parquet'])
     assert len(labels) == 4 and labels['cam_quat'].to_pylist()[0] == [0., 0., 0., 1.]
+    # Run the production reader: inferred list<double> silently passed the old
+    # smoke recipe with normalization disabled, but fails the Stage 2 recipe.
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / 'model_train'))
+    from model_train.data.camera_normalization import resolve_global_camera_normalization
+    normalization = resolve_global_camera_normalization({
+        'root': output['root'], 'clip_len': 4, 'clip_stride': 4,
+        'camera_translation_normalization': {'enabled': True, 'workers': 1,
+                                             'cache_dir': str(tmp_path / 'normalization')}}, log=lambda _: None)
+    assert normalization['selected_clip_count'] == 1
+    from mint.comparison.training_data import camera_normalization_schema_errors
+    assert camera_normalization_schema_errors(output['root']) == []
+    # Earlier exported versions remain immutable, but are rejected before GPU
+    # admission if a user selects them with production normalization enabled.
+    legacy = tmp_path / 'legacy/data'
+    legacy.mkdir(parents=True)
+    import pyarrow as pa
+    pq.write_table(pa.Table.from_pydict(labels.to_pydict()), legacy / 'old.parquet')
+    assert len(camera_normalization_schema_errors(legacy.parent)) == 2
     assert file_identity(episode['video']) == before
     assert output['provenance']['label_origin']['type'] == 'existing_declared_camera_annotations'
 

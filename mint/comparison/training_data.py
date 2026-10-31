@@ -10,6 +10,21 @@ import numpy as np
 from mint.runtime import atomic_json, file_identity
 
 
+def camera_normalization_schema_errors(root):
+    """Check one data file before admitting a normalized training job to GPUs."""
+    import pyarrow.parquet as pq
+    root = Path(root)
+    path = next((root / 'data').rglob('*.parquet'), None)
+    if path is None:
+        return ['相机归一化训练缺少 data Parquet：' + str(root)]
+    schema = pq.read_schema(path)
+    errors = []
+    for name, width in (('cam_trans', 3), ('cam_quat', 4)):
+        if name not in schema.names or getattr(schema.field(name).type, 'list_size', None) != width:
+            errors.append(f'相机归一化要求 {name} 为 fixed_size_list[{width}]；请重新转换数据版本：{path}')
+    return errors
+
+
 def _write_dataset(destination, episodes, *, origin):
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -60,7 +75,20 @@ def _write_dataset(destination, episodes, *, origin):
     combined = {key: list(chain.from_iterable(row[key] for row in data)) for key in keys}
     parquet = destination / 'data/chunk-000/file-000.parquet'
     parquet.parent.mkdir(parents=True, exist_ok=True)
-    pq.write_table(pa.Table.from_pydict(combined), parquet)
+    # The production camera-normalization reader requires fixed-size vectors.
+    # Arrow's inferred variable lists also widen Python floats to float64.
+    vector_types = {'cam_trans': (3, pa.float32()), 'cam_quat': (4, pa.float32()),
+                    'cam_fov': (2, pa.float32()), 'state_mask': (2, pa.bool_()),
+                    'hand_kept': (2, pa.bool_())}
+    columns = {}
+    for key, values in combined.items():
+        if key in vector_types:
+            width, dtype = vector_types[key]
+            columns[key] = pa.FixedSizeListArray.from_arrays(
+                pa.array(np.asarray(values).reshape(-1), type=dtype), width)
+        else:
+            columns[key] = pa.array(values)
+    pq.write_table(pa.table(columns), parquet)
     ep = destination / 'meta/episodes/chunk-000/file-000.parquet'
     ep.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_pylist(meta), ep)

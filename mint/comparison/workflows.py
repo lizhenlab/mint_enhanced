@@ -138,6 +138,9 @@ class WorkflowManager:
                 snapshots['data'].append(record)
                 if record.get('missing'):
                     errors.append('训练数据缺失：' + str(root))
+                elif (cfg.get('data', {}).get('camera_translation_normalization') or {}).get('enabled', False):
+                    from .training_data import camera_normalization_schema_errors
+                    errors.extend(camera_normalization_schema_errors(root))
                 provenance_path = root / 'source_manifest.json'
                 if provenance_path.is_file():
                     provenance = json.loads(provenance_path.read_text())

@@ -166,13 +166,13 @@ class WorkspaceServices:
             rows.append({'id': task['id'], 'kind': 'mint_workspace', 'label': 'MINT 工作台窗口任务',
                 'source': params.get('source'), 'status': 'completed' if task['status'] == 'inference_complete' else task['status'], 'updated': task.get('updated_at', 0),
                 'progress': {'stage': task['status'], 'done': task.get('completed_windows', 0), 'total': task.get('total_windows', 0)},
-                'url': '/?task=' + task['id']})
+                'url': '/diagnostics?task=' + task['id']})
         if self.legacy is not None:
-            snapshots = [('mint_batch', 'MINT 目录批量', self.legacy.batch_inference_status(), '/?tool=batch'),
-                         ('mint_benchmark', '公开基准 / MINT 检查点评测', self.legacy.benchmark_status(), '/?tool=benchmark'),
-                         ('code_diff', '配置与代码对比', self.legacy.logdiff_status(), '/?tool=code')]
+            snapshots = [('mint_batch', 'MINT 目录批量', self.legacy.batch_inference_status(), '/diagnostics?tool=batch'),
+                         ('mint_benchmark', '公开基准 / MINT 检查点评测', self.legacy.benchmark_status(), '/diagnostics?tool=benchmark'),
+                         ('code_diff', '配置与代码对比', self.legacy.logdiff_status(), '/diagnostics?tool=code')]
             if self.analysis is not None:
-                snapshots.append(('dataset_analysis', '数据集分析', self.analysis.status(), '/?tool=analysis-video'))
+                snapshots.append(('dataset_analysis', '数据集分析', self.analysis.status(), '/diagnostics?tool=analysis-video'))
             for kind, label, snapshot, url in snapshots:
                 if snapshot.get('running') or snapshot.get('done') or snapshot.get('error') or snapshot.get('results'):
                     identity = snapshot.get('started_at') or snapshot.get('out') or snapshot.get('output_dir') or 'latest'

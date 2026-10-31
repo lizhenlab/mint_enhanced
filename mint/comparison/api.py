@@ -5,7 +5,7 @@ import json
 import threading
 from pathlib import Path
 
-from flask import Blueprint, abort, jsonify, redirect, request, send_file
+from flask import Blueprint, abort, jsonify, redirect, request, send_file, url_for
 
 from .contracts import json_values, load_result
 from .jobs import ComparisonManager
@@ -133,7 +133,7 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
 
     @blueprint.get('/compare/')
     def canonical_page():
-        return redirect('/compare' + ('?' + request.query_string.decode('ascii') if request.query_string else ''))
+        return redirect(url_for('comparison.page') + ('?' + request.query_string.decode('latin-1') if request.query_string else ''))
 
     @blueprint.get('/api/algorithms')
     def algorithms():

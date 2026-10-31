@@ -22,3 +22,7 @@
 #taskResourceDetails summary{cursor:pointer}
 #taskResourceBody{line-height:1.8;margin-top:8px}
 @media(max-width:760px){.platform-current-context{padding:6px 12px;font-size:11px}.research-view-tabs{gap:5px;padding-bottom:10px}.research-view-tabs button{font-size:11px;padding:6px 9px}.data-source-tabs button{padding:7px 10px;flex:1}#hub-data .hub-footer{bottom:-24px}.platform-current-context span{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}}
+
+.platform-navigation .diagnostic-entry{margin-left:auto;padding:5px 11px 5px 16px;border-left:1px solid var(--line);color:var(--cyan);font-size:12px;line-height:20px;white-space:nowrap;flex-shrink:0}
+.platform-navigation .diagnostic-entry:hover{color:var(--lime);background:var(--surface-2)}
+@media(max-width:600px){.platform-navigation .diagnostic-entry{margin-left:5px;padding-left:12px}}

@@ -13,7 +13,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, request, send_file
+from flask import Flask, abort, jsonify, redirect, request, send_file, url_for
 
 from . import ckpts, diversity_analysis
 from .const import (CAM_MODES, CONTENTS, DEFAULT_CAM_MODE, DEFAULT_HAND_MODE,
@@ -202,9 +202,27 @@ def create_app(store) -> Flask:
         return jsonify(eid=eid, parameters=params, ready=store.predictor_ready(), ckpt_tag=store.ckpt_tag,
                        model_identity=expected)
 
-    # ---- 静态资源（前端单页）----
+    # ---- 工作台入口与静态资源 ----
+    def redirect_entry(endpoint):
+        # Preserve saved task/tool parameters verbatim, including duplicate values.
+        target = url_for(endpoint)
+        if request.query_string:
+            target += '?' + request.query_string.decode('latin-1')
+        return redirect(target)
+
     @app.get("/")
     def index():
+        # The old root hosted the MINT diagnostic page. Keep its explicit deep
+        # links working while an unqualified root now opens the main workspace.
+        legacy_diagnostic = any(key in request.args for key in ('tool', 'task', 'view'))
+        return redirect_entry('diagnostics' if legacy_diagnostic else 'comparison.page')
+
+    @app.get("/diagnostics/")
+    def canonical_diagnostics():
+        return redirect_entry('diagnostics')
+
+    @app.get("/diagnostics")
+    def diagnostics():
         return send_file(WEB_DIR / "index.html")
 
     @app.get("/style.css")

@@ -5,13 +5,15 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../eval/model_effect/visualization/viewer/web/app.js'),'utf8');
+const urls=source.slice(source.indexOf('// URL roots'),source.indexOf('async function getJSON'));
 const modes=source.slice(source.indexOf('// Presentation-only modes'),source.indexOf('const clampEp'));
 function fixture(){
   const nodes={},buttons=['config','results','tools'].map(mode=>({dataset:{diagnosticView:mode},classList:{toggle(){}},setAttribute(name,value){this[name]=value;},focus(){this.focused=true;},addEventListener(name,fn){this[name]=fn;}}));
   for(const id of ['diagnosticConfiguration','diagnosticStage','diagnosticResultEmpty','diagnostic-results','diagnostic-tools'])nodes['#'+id]={hidden:false,setAttribute(name,value){this[name]=value;},focus(){this.focused=true;}};
   let paused=0,draws=0;
   const events={};
-  const context=vm.createContext({URL,URLSearchParams,state:{loaded:false,hidden:new Set(['bench'])},location:{href:'http://localhost/?tool=benchmark',search:'',hash:''},document:{body:{dataset:{}},querySelector(){return null;},querySelectorAll(selector){return selector==='#blocks video'?[{pause(){paused++;}}]:buttons;}},window:{history:{replaceState(_a,_b,url){context.location.href='http://localhost'+url;}},scrollTo(){},addEventListener(name,fn){events[name]=fn;}},$:id=>nodes[id],requestDraw(){draws++;},buildPanels(){}});
+  const context=vm.createContext({URL,URLSearchParams,state:{loaded:false,hidden:new Set(['bench'])},location:{href:'http://localhost/diagnostics?tool=benchmark',search:'',hash:''},document:{baseURI:'http://localhost/diagnostics',body:{dataset:{}},querySelector(){return null;},querySelectorAll(selector){return selector==='#blocks video'?[{pause(){paused++;}}]:selector==='[data-workspace-link]'?[]:buttons;}},window:{history:{replaceState(_a,_b,url){context.location.href='http://localhost'+url;}},scrollTo(){},addEventListener(name,fn){events[name]=fn;}},$:id=>nodes[id],requestDraw(){draws++;},buildPanels(){}});
+  vm.runInContext(urls,context);
   vm.runInContext(modes,context);
   return {context,nodes,buttons,events,run:code=>vm.runInContext(code,context),paused:()=>paused,draws:()=>draws};
 }
@@ -77,4 +79,27 @@ test('successful GT or cached prediction loading focuses results only after the 
     assert.equal(nodes['#diagnosticResultEmpty'].hidden,true);
     if(rawOnly)assert.match(requested,/raw=1/);else assert.match(requested,/cam_mode=max_chunked/);
   }
+});
+
+
+test('diagnostics asset and API roots ignore query slashes and preserve reverse proxy prefixes',()=>{
+  const {run}=fixture();
+  for(const path of ['/diagnostics','/diagnostics/','/']){
+    const url='https://example.test'+path+'?return_to=/compare&source=/dataset/a/b.mp4#diagnostic-results';
+    assert.equal(run(`diagnosticBaseURL(${JSON.stringify(url)}).href`),'https://example.test/');
+  }
+  for(const path of ['/proxy/8011/diagnostics','/proxy/8011/diagnostics/','/proxy/8011/'])
+    assert.equal(run(`diagnosticBaseURL('https://example.test${path}?return_to=/compare').href`),'https://example.test/proxy/8011/');
+  assert.equal(run(`diagnosticPageURL('https://example.test/proxy/8011/?tool=benchmark').href`),'https://example.test/proxy/8011/diagnostics?tool=benchmark');
+  assert.equal(run(`diagnosticPageURL('https://example.test/proxy/8011/diagnostics?tool=benchmark',{task:'abc',view:'config'}).href`),'https://example.test/proxy/8011/diagnostics?task=abc&view=config');
+});
+
+test('task history generates diagnostic record links without automatically resuming a task',async()=>{
+  const {run,context,nodes}=fixture();
+  const list={dataset:{},innerHTML:'',querySelectorAll:()=>[]};nodes['#taskList']=list;nodes['#cacheUsage']={};
+  Object.assign(context,{UI_READY:true,getJSON:async()=>({frame_cache:{used_bytes:0,limit_bytes:1024},tasks:[{id:'task-1',parameters:{kind:'video',source:'/video.mp4'},status:'completed'}]}),_esc:value=>String(value)});
+  const start=source.indexOf('async function refreshTaskHistory(){'),end=source.indexOf('async function resumeSavedTask(',start);
+  vm.runInContext(source.slice(start,end),context);await run('refreshTaskHistory()');
+  assert.match(list.innerHTML,/href="http:\/\/localhost\/diagnostics\?task=task-1&view=config"/);
+  assert.match(list.innerHTML,/data-resume-task="task-1"/,'resume remains a separate explicit action');
 });

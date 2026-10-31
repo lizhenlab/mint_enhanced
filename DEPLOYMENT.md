@@ -36,6 +36,7 @@ ssh -N -L 18011:127.0.0.1:8011 USER@SERVER
 ```
 
 将 `USER@SERVER` 替换为实际登录地址，浏览器打开 <http://127.0.0.1:18011/>。
+根地址自动进入算法主工作台 `/compare`；MINT 单算法诊断使用 `/diagnostics`，可从主工作台顶部直接进入。旧的 `/?tool=…`、`/?task=…` 诊断链接继续兼容。页面入口和模块关系见[工作台导航说明](docs/workspace-navigation.md)。
 服务默认处理全部源帧，不设每个视频总帧数上限；`--full-max-frames 32` 只控制单次模型窗口。
 
 ## 新机器准备

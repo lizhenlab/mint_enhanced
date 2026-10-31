@@ -106,10 +106,23 @@ let state = { eid:0, fps:30, mode:'mesh_skel', nframes:1,
               logdiff:{running:false, phase:'', result:null, error:null, log:[], runs:[], scopes:[], scope:'', loaded:false} };
 state.hidden.add('analysis');                         // 数据集分析同其他工具面板一样默认收起
 
-// 相对当前页目录拼 URL：兼容被反向代理到子路径的场景（如 code-server 的 /proxy/8011/），
-// 也兼容普通 http://localhost:8011/。绝对 '/api/..' 在子路径反代下会打到代理根而 404，故一律相对化。
-const API_BASE = document.baseURI.replace(/[^/]*$/, '');   // 当前页所在目录（带尾斜杠）
-const U = p => API_BASE + String(p).replace(/^\//, '');
+// URL roots keep APIs at the workspace root even on /diagnostics/ or a proxy prefix.
+function diagnosticBaseURL(baseURI){
+  const base=new URL(baseURI);
+  base.search='';base.hash='';
+  base.pathname=base.pathname.replace(/\/diagnostics\/?$/, '/');
+  if(!base.pathname.endsWith('/'))base.pathname=base.pathname.replace(/[^/]*$/, '');
+  return base;
+}
+function diagnosticPageURL(baseURI,parameters){
+  const current=new URL(baseURI),url=new URL('diagnostics',diagnosticBaseURL(baseURI));
+  if(parameters){
+    for(const [key,value] of Object.entries(parameters))if(value!==undefined&&value!==null&&value!=='')url.searchParams.set(key,String(value));
+  }else{url.search=current.search;url.hash=current.hash;}
+  return url;
+}
+const API_BASE = diagnosticBaseURL(document.baseURI).href;
+const U = p => new URL(String(p).replace(/^\/+/, ''),API_BASE).href;
 async function getJSON(u){ const r = await fetch(U(u)); if(!r.ok) throw new Error(`${r.status} ${await r.text()}`); return r.json(); }
 
 let EP_TOTAL = 0, CKPT_TAG = '';
@@ -147,7 +160,7 @@ function showDiagnosticView(mode,{focus=false,updateURL=true}={}){
   }
   diagnosticView=mode;syncDiagnosticView();
   if(updateURL){
-    const url=new URL(location.href);url.searchParams.set('view',mode);
+    const url=diagnosticPageURL(location.href);url.searchParams.set('view',mode);
     if(mode!=='tools') url.searchParams.delete('tool');
     if(url.hash.startsWith('#diagnostic-')) url.hash='';
     if(url.href!==location.href) window.history.replaceState(null,'',url.pathname+url.search+url.hash);
@@ -160,6 +173,7 @@ function showDiagnosticView(mode,{focus=false,updateURL=true}={}){
   if(mode==='results'&&state.loaded) requestDraw();
 }
 function wireDiagnosticViews(){
+  document.querySelectorAll('[data-workspace-link]').forEach(link=>{link.href=U(link.dataset.workspaceLink);});
   document.querySelectorAll('button[data-diagnostic-view]').forEach(button=>{
     button.onclick=()=>showDiagnosticView(button.dataset.diagnosticView,{focus:true});
   });
@@ -5133,11 +5147,16 @@ async function refreshTaskHistory(){
       const params=task.parameters||{};
       const statuses={completed:'已完成',inference_complete:'推理完成',cancelled:'已取消',failed:'失败',interrupted:'已中断',running:'运行中'};
       const resumable=params.kind==='video'&&params.source;
-      return `<div class="task-row"><b>${_esc(params.source?params.source.split('/').pop():'Dataset / 数据集窗口缓存')}</b><small>${_esc(statuses[task.status]||task.status)} · ${task.completed_windows||0}/${task.total_windows||0} 窗口 · ${_esc(params.video_view||'full')}</small>`
-        +`<button type="button" ${UI_READY&&resumable?'':'disabled'} title="${resumable?'恢复相同输入与参数':'数据集缓存请通过 Episode 选择器使用'}" data-resume-task="${_esc(task.id)}">Resume / 复用或恢复</button></div>`;
+      return `<div class="task-row" data-task-record="${_esc(task.id)}"><b>${_esc(params.source?params.source.split('/').pop():'Dataset / 数据集窗口缓存')}</b><small>${_esc(statuses[task.status]||task.status)} · ${task.completed_windows||0}/${task.total_windows||0} 窗口 · ${_esc(params.video_view||'full')}</small>`
+        +`<a href="${_esc(diagnosticPageURL(document.baseURI,{task:task.id,view:'config'}).href)}" title="打开此任务记录，不会自动恢复或推理">打开记录</a><button type="button" ${UI_READY&&resumable?'':'disabled'} title="${resumable?'恢复相同输入与参数':'数据集缓存请通过 Episode 选择器使用'}" data-resume-task="${_esc(task.id)}">Resume / 复用或恢复</button></div>`;
     }).join('') : 'No saved tasks / 暂无记录';
     for(const button of list.querySelectorAll('[data-resume-task]')){
       button.addEventListener('click',()=>resumeSavedTask(button.dataset.resumeTask));
+    }
+    const requested=new URLSearchParams(location.search).get('task');
+    if(requested&&diagnosticView==='config'&&list.dataset.focusedTask!==requested){
+      const row=[...list.querySelectorAll('[data-task-record]')].find(node=>node.dataset.taskRecord===requested);
+      if(row){row.setAttribute('aria-current','true');row.tabIndex=-1;row.scrollIntoView({block:'nearest'});row.focus({preventScroll:true});list.dataset.focusedTask=requested;}
     }
   }catch(error){list.textContent=error.message;}
 }
@@ -5190,10 +5209,10 @@ function wireSharedWorkspace(){
   button.onclick=async()=>{
     button.disabled=true;
     try{
-      const response=await fetch('/api/comparison/legacy-results');const value=await response.json();if(!response.ok)throw new Error(value.error||'读取已有预测失败');
+      const response=await fetch(U('/api/comparison/legacy-results'));const value=await response.json();if(!response.ok)throw new Error(value.error||'读取已有预测失败');
       const match=value.results.find(row=>String(row.eid)===String(state.eid)&&row.camera_mode===state.camMode&&row.hand_mode===effectiveHandMode());
-      if(!match)throw new Error('当前选项没有已缓存的数值预测。请先在原工作台加载已有结果或完成一次推理。');
-      const imported=await fetch('/api/comparison/legacy-results/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:match.id})});const comparison=await imported.json();if(!imported.ok)throw new Error(comparison.error||'导入失败');location.href='/compare?id='+encodeURIComponent(comparison.id);
+      if(!match)throw new Error('当前输入与参数尚无可导入的预测，请先在本诊断页完成 MINT 推理。');
+      const imported=await fetch(U('/api/comparison/legacy-results/import'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:match.id})});const comparison=await imported.json();if(!imported.ok)throw new Error(comparison.error||'导入失败');location.href=U('/compare?id='+encodeURIComponent(comparison.id));
     }catch(error){alert(error.message);}finally{button.disabled=false;}
   };
   const query=new URLSearchParams(location.search),tool=initialDiagnosticView(location.search,location.hash)==='tools'?query.get('tool'):null;

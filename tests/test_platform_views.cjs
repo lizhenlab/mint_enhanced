@@ -61,3 +61,22 @@ test('contextual primary action cannot fall through to the comparison submit UI'
   x.ids.platformDialog.open=true;assert.equal(x.sandbox.interceptPlatformPrimaryAction(event),true);
   assert.equal(called,1);assert.equal(prevented,1);assert.equal(stopped,1);
 });
+
+test('diagnostic entries and specialist tools use the canonical diagnostic route',()=>{
+  const html=fs.readFileSync(path.join(__dirname,'../mint/comparison/web/index.html'),'utf8');
+  assert.match(html,/id="diagnosticEntry"[^>]+href="\/diagnostics"[^>]*>单算法诊断<\/a>/);
+  const tools=[...html.matchAll(/href="([^"]*\?tool=[^"]+)"/g)].map(match=>match[1]);
+  assert.ok(tools.length>=6);assert.ok(tools.every(href=>href.startsWith('/diagnostics?tool=')));
+  assert.doesNotMatch(html,/href="\/">MINT 单算法诊断/);
+});
+test('old diagnostic hash bookmarks migrate without hijacking explicit comparisons',()=>{
+  const {sandbox}=setup();
+  assert.equal(sandbox.legacyDiagnosticHashURL('/compare','','#diagnostic-results'),'/diagnostics#diagnostic-results');
+  assert.equal(sandbox.legacyDiagnosticHashURL('/proxy/8011/compare','?view=results','#diagnostic-results'),'/proxy/8011/diagnostics?view=results#diagnostic-results');
+  assert.equal(sandbox.legacyDiagnosticHashURL('//foreign/compare','','#diagnostic-tools'),null);
+  assert.equal(sandbox.legacyDiagnosticHashURL('/compare/','?view=results','#diagnostic-tools'),'/diagnostics?view=results#diagnostic-tools');
+  assert.equal(sandbox.legacyDiagnosticHashURL('/compare','?id=one','#diagnostic-results'),null);
+  assert.equal(sandbox.legacyDiagnosticHashURL('/compare','?hub=research','#diagnostic-tools'),null);
+  assert.equal(sandbox.legacyDiagnosticHashURL('/compare','','#ordinary-anchor'),null);
+  assert.equal(sandbox.legacyDiagnosticHashURL('/diagnostics','','#diagnostic-input'),null);
+});

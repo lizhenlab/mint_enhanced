@@ -2,7 +2,7 @@
 >
 > 本仓库补充现有 `run_mint.sh`、服务器依赖快照及部署记录，并支持[最多 8 张 GPU 动态共享调度](docs/gpu-scheduling.md)；使用入口、Mac 访问方式和[完整长视频处理](docs/long-video.md)见 [DEPLOYMENT.md](DEPLOYMENT.md)，可靠性、断点恢复与缓存预算见[运行说明](docs/runtime-reliability.md)。模型权重、MANO、用户原始视频和运行缓存需在本地准备。
 >
-> 新增 [MINT / HaWoR / ACE 统一比较平台](docs/comparison-platform.md)：独立原生环境、同输入时间轴、2D/3D 与轨迹对照、显式结果导入、相机来源组合、持久任务恢复和同步导出；页面入口 `/compare`。
+> 新增 [MINT / HaWoR / ACE 统一比较平台](docs/comparison-platform.md)：独立原生环境、同输入时间轴、2D/3D 与轨迹对照、显式结果导入、相机来源组合、持久任务恢复和同步导出。主页 `/` 自动进入 `/compare`；MINT 单算法诊断位于 `/diagnostics`，详见[工作台导航](docs/workspace-navigation.md)。
 
 > [数据、回归、训练与生产工作流](docs/native-data-research.md)：EgoDex / DexYCB / ARCTIC 原生接入、标定校验、固定集回归、误差分解、二维修正、训练曲线、Ray 伪标签生产和所属多机启动器。
 > [任务与研究闭环](docs/platform-lifecycle.md)：持久导出恢复、提交预检、资源与阶段观测、结果目录、问题帧复核、数据版本、独立训练、检查点续跑及模型评测/别名回滚。

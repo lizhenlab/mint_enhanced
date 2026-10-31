@@ -194,6 +194,7 @@ document.addEventListener('keydown',event=>{
 window.addEventListener('popstate',()=>{const query=new URLSearchParams(location.search);if(query.get('hub'))return;const id=query.get('id');if(id)openComparison(id,{history:false}).catch(e=>notify(e.message));});
 initializeWorkspace();
 (async()=>{try{
+  const legacyDiagnostic=legacyDiagnosticHashURL(location.pathname,location.search,location.hash);if(legacyDiagnostic){location.replace(legacyDiagnostic);return;}
   // History is useful context, but explicit links must not wait for the full catalog.
   const historyReady=loadHistory().catch(error=>notify(error.message));
   const explicitRoute=query=>['id','run','hub','collection','tool_job','workflow','study'].some(key=>query.get(key));

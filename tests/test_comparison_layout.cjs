@@ -59,10 +59,10 @@ test('numeric video filenames include their action or sequence context',()=>{
 });
 
 function deferred(){let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};}
-function bootFixture(search,{activePane=null,taskOpen=false,source='',comparisonWait=null}={}){
+function bootFixture(search,{activePane=null,taskOpen=false,source='',comparisonWait=null,pathname='/compare',hash=''}={}){
   const vm=require('node:vm'),fs=require('node:fs'),history=deferred(),parent=deferred(),calls=[];
   const nodes={source:{value:source},examples:{value:'',append(){}},dependencyStatus:{},platformDialog:{open:!!activePane},taskDialog:{open:taskOpen}};
-  const sandbox={URLSearchParams,location:{search},localStorage:{getItem:()=>null},state:{specs:[],comparison:null},workspaceUI:{history:[]},platform:{pane:activePane||'data'},HUB_LABELS:{data:'Data',research:'Research',tools:'Tools'},
+  const sandbox={URLSearchParams,location:{search,pathname,hash,replace:url=>calls.push(['replace',url])},localStorage:{getItem:()=>null},state:{specs:[],comparison:null},workspaceUI:{history:[]},platform:{pane:activePane||'data'},HUB_LABELS:{data:'Data',research:'Research',tools:'Tools'},
     $:id=>nodes[id],el:()=>({}),buildAlgorithms(){},refreshComposerAlgorithms(){},updateImportFormats(){},notify:message=>calls.push(['notice',message]),
     api:path=>path==='api/algorithms'?Promise.resolve({algorithms:[]}):path==='api/comparison/examples'?Promise.resolve({examples:[{label:'Example',path:'/example.mp4'}]}):parent.promise,
     loadHistory:()=>history.promise.then(()=>{sandbox.workspaceUI.history=[{id:'remembered'}];}),
@@ -70,9 +70,24 @@ function bootFixture(search,{activePane=null,taskOpen=false,source='',comparison
     openCollection:async id=>calls.push(['collection',id]),openPlatform:async pane=>{calls.push(['platform',pane]);nodes.platformDialog.open=true;sandbox.platform.pane=pane;}};
   const sourceText=fs.readFileSync(require.resolve('../mint/comparison/web/app.js'),'utf8');
   const expression=sourceText.slice(sourceText.lastIndexOf('(async()=>{try{')).replace(/tick\(\);\s*$/,'');
-  return {sandbox,nodes,history,parent,calls,promise:vm.runInNewContext(expression,sandbox)};
+  const platformSource=fs.readFileSync(require.resolve('../mint/comparison/web/platform.js'),'utf8');
+  const helperStart=platformSource.indexOf('function legacyDiagnosticHashURL(');assert.ok(helperStart>=0);
+  const context=vm.createContext(sandbox);vm.runInContext(platformSource.slice(helperStart),context);
+  return {sandbox,nodes,history,parent,calls,promise:vm.runInContext(expression,context)};
 }
 async function microtasks(){for(let i=0;i<8;i++)await Promise.resolve();}
+
+test('a legacy diagnostic fragment is replaced before comparison startup or API reads',async()=>{
+  const boot=bootFixture('',{pathname:'/proxy/8011/compare',hash:'#diagnostic-results'});await boot.promise;
+  assert.deepEqual(boot.calls,[['replace','/proxy/8011/diagnostics#diagnostic-results']]);
+  assert.equal(boot.sandbox.state.specs.length,0);boot.history.resolve();
+});
+
+test('an explicit comparison route takes precedence over an inherited diagnostic fragment',async()=>{
+  const boot=bootFixture('?id=direct',{hash:'#diagnostic-tools'});await microtasks();
+  assert.equal(boot.calls[0][0],'comparison');assert.equal(boot.calls.some(row=>row[0]==='replace'),false);
+  boot.history.resolve();await boot.promise;
+});
 
 test('an explicit comparison opens before slow history completes and preserves an active hub',async()=>{
   const boot=bootFixture('?id=direct&hub=research',{activePane:'research'});

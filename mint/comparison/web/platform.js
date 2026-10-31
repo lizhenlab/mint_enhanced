@@ -165,7 +165,7 @@ async function refreshWorkspaceTasks(){
   }
   $('workspaceTasks').replaceChildren(table);$('taskPageInfo').textContent=`${value.total} 条 · 当前 ${value.total?value.offset+1:0}–${Math.min(value.offset+value.tasks.length,value.total)}`;$('taskPreviousPage').disabled=value.offset===0;$('taskNextPage').disabled=value.offset+value.tasks.length>=value.total;
   $('legacyResults').replaceChildren();for(const entry of value.cached_predictions){const row=el('div',undefined,'legacy-result');row.append(el('span',`${entry.source.split('/').pop()} · ${entry.frames} 帧 · ${entry.camera_mode} · ${entry.hand_mode}`));const button=el('button','导入到比较');button.onclick=async()=>{button.disabled=true;try{const comparison=await api('api/comparison/legacy-results/import',{id:entry.id});$('platformDialog').close();await openComparison(comparison.id);}catch(error){hubError(error);}finally{button.disabled=false;}};row.append(button);$('legacyResults').append(row);}
-  if(!value.cached_predictions.length)$('legacyResults').textContent='当前没有原工作台内存预测；可在原工作台加载已有结果，或导入保存的 NPZ。';
+  if(!value.cached_predictions.length)$('legacyResults').textContent='当前没有诊断页的内存预测；可在 MINT 单算法诊断中加载已有结果，或导入保存的 NPZ。';
 }
 async function openCollection(id){
   const value=await api('api/comparison/collections/'+id);platform.collection=id;platform.collectionKind=value.kind;platform.report=null;$('evaluationResults').replaceChildren();
@@ -338,4 +338,12 @@ function renderTaskResourceSummary(value){
   if(!summary){summary=el('p',undefined,'task-resource-primary');summary.id='taskResourcePrimary';details=el('details');details.id='taskResourceDetails';details.append(el('summary','主机与 GPU 资源详情'));body=el('p',undefined,'hint');body.id='taskResourceBody';details.append(body);host.replaceChildren(summary,details);}
   summary.textContent=`MINT 当前使用 ${scheduler.running_devices?.length||0} 张 GPU · ${scheduler.queued||0} 个推理窗口排队 · 当前筛选 ${value.total} 条任务`;
   body.textContent=`物理 GPU ${gpus.length} 张 · 显存空余 ${(gpus.reduce((sum,gpu)=>sum+(gpu.free_mib||0),0)/1024).toFixed(1)} GiB · CPU ${resources.cpu_count||'—'} 核 / 1 分钟负载 ${Number(resources.load_average?.[0]||0).toFixed(1)} · 主机可用内存 ${((resources.memory?.MemAvailable||0)/2**30).toFixed(1)} GiB · 磁盘余量 ${((resources.disk?.free_bytes||0)/2**30).toFixed(1)} GiB。资源数值包含其他用户任务。`;
+}
+
+
+// HTTP redirects cannot see fragments from old diagnostic bookmarks.
+function legacyDiagnosticHashURL(pathname,search,hash){
+  const match=String(pathname||'').match(/^((?:\/[^/]+)*)\/compare\/?$/);if(!match||!['#diagnostic-input','#diagnostic-results','#diagnostic-tools'].includes(hash))return null;
+  const query=new URLSearchParams(search||'');if(['id','run','hub','collection','tool_job','workflow','study'].some(key=>query.has(key)))return null;
+  return match[1]+'/diagnostics'+(search||'')+hash;
 }

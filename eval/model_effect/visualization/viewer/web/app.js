@@ -55,7 +55,7 @@ let state = { eid:0, fps:30, mode:'mesh_skel', nframes:1,
               camMode:'max_chunked',                 // chunked / max_chunked / streaming / exact full
               fullMaxFrames:null,                    // 模型加载后由后端返回当前主卡的 exact full 安全上限
               handMode:'smooth',                     // hard / blend / smooth(blend + UKF/RTS 后处理)
-              ukf:{q:0.7,r:0.5,beta:0.3},            // 轻于生产默认 0.6/0.6/2.0；仅 smooth 生效
+              ukf:{q:0.6,r:0.6,beta:2.0},            // 与多算法比较统一 Production 默认；显式恢复的参数保持原值
               gtBetas:'per_frame', predBetas:'per_frame', predFov:'per_frame',  // 手形/内参 每帧 vs 整段平均
               gt:null, pred:null, metrics:null, metricsError:null, nums:null, mediaContext:null,
                                                         // nums=逐帧数值(每块下方面板)
@@ -501,8 +501,9 @@ async function init(){
     queueInference('相机推理模式已改为「'+camModeSel.options[camModeSel.selectedIndex].text+'」，点击 [▶ 开始推理] 应用'); };
   // 手部拼窗/后处理模式：hard、blend、blend 后生产 UKF+RTS 平滑分别独立缓存。
   state.handMode = meta.default_hand_mode || 'smooth';
-  state.ukf = {...state.ukf,...(meta.default_ukf_params||{})};
-  SMOOTHING_PRESETS = meta.smoothing_presets || {};
+  SMOOTHING_PRESETS = {viewer:{q:0.7,r:0.5,beta:0.3},production:{q:0.6,r:0.6,beta:2.0},...(meta.smoothing_presets||{})};
+  // Fresh sessions share the comparison workspace default; restoring a task later applies its explicit parameters.
+  state.ukf = {...SMOOTHING_PRESETS.production};
   const handModeBtns = document.querySelectorAll('#handModeSeg [data-hand-mode]');
   const syncHandMode = syncHandModeUI;
   syncHandMode();

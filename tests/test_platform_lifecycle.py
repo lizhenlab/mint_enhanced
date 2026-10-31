@@ -14,6 +14,7 @@ from mint.comparison.exports import ComparisonExports
 from mint.comparison.quality import QualityService, frame_diagnostics
 from mint.comparison.research import ResearchRegistry
 from mint.comparison.task_index import TaskIndex
+from mint.comparison.task_index import timed_observation
 from tests.test_comparison import fake_backend, published, arrays
 from tests.test_comparison_platform import annotated_episode
 
@@ -84,6 +85,33 @@ def test_index_retains_events_and_sql_pages_without_rewriting_executor_state(man
     assert len(restored.detail('workflow', 'one')['events']) == 3
     assert restored.page(status='attention')['total'] == 1
     assert restored.page(query='%')['total'] == 0
+
+
+def test_card_telemetry_never_reuses_an_eta_from_a_stale_phase_or_counter(manager):
+    index = TaskIndex(manager)
+    row = {'id': 'one', 'kind': 'inference', 'status': 'running', 'label': 'HaWoR',
+           'progress': {'stage': 'hawor_slam', 'done': 1, 'total': 4, 'phase_started_at': time.time() - 20}}
+    index.sync([row])
+    live = {k: row[k] for k in ('id', 'status', 'progress')}
+    summary = index.inference_summaries([live])['one']
+    assert summary['eta']['scope'] == 'current_phase'
+    assert summary['eta']['seconds'] >= 60
+    assert 'SLAM' in summary['waiting_reason']
+    stale = {**live, 'progress': {**live['progress'], 'done': 2}}
+    assert index.inference_summaries([stale])['one']['eta'] is None
+    changed = {**live, 'progress': {'stage': 'loading_model', 'done': 0, 'total': 1}}
+    summary = index.inference_summaries([changed])['one']
+    assert summary['eta'] is None and summary['phase_elapsed_seconds'] is None
+    assert '冷加载' in summary['waiting_reason']
+    assert index.inference_summaries([]) == {}
+
+
+def test_completed_phase_clocks_stop_at_the_observation_time():
+    row = {'status': 'completed', 'phase_started_at': 10, 'observed_at': 20,
+           'progress': {'done': 4, 'total': 4}}
+    assert timed_observation(row, 100)['phase_elapsed_seconds'] == 10
+    assert timed_observation(row, 200)['phase_elapsed_seconds'] == 10
+    assert timed_observation(row, 200)['eta'] is None
 
 
 def test_compatible_cache_references_original_run_and_fresh_recomputes(manager, tmp_path):

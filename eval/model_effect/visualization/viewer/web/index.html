@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Wuji Ego · Model Effect Console</title>
+<title>MINT 高级调试 · WUJI EGO</title>
 <link rel="stylesheet" href="style.css?v=20261031-platform2">
 </head>
 <body>
@@ -13,9 +13,9 @@
   <div class="masthead">
     <div class="brand-block">
       <span class="brand-mark">WJ</span>
-      <span><b>WUJI EGO</b><small>MODEL EFFECT CONSOLE</small></span>
+      <span><b>MINT 高级调试</b><small>WUJI EGO · ADVANCED TOOLS</small></span>
     </div>
-    <nav class="shared-workspace-nav"><a href="/compare?hub=data">数据与输入</a><a href="/compare?hub=tasks">任务中心</a><a href="/compare">多算法结果</a><a href="/compare?hub=evaluation">量化评测</a><a href="/compare?hub=tools">高级工具</a><a href="/compare?hub=research">数据与训练</a></nav>
+    <nav class="shared-workspace-nav" aria-label="统一工作台"><a href="/compare?hub=data">数据</a><a href="/compare">比较</a><a href="/compare?hub=evaluation">评测与质检</a><a href="/compare?hub=research">训练与模型</a><a href="/compare?hub=tasks">任务</a><a href="/compare?hub=tools" aria-current="page">工具</a></nav>
     <label class="language-picker" data-i18n-ignore>
       <span id="languageLabel">Language</span>
       <select id="languageSelect" aria-labelledby="languageLabel">
@@ -32,14 +32,14 @@
   </div>
 
   <details class="control-card" id="taskHistory" data-i18n-ignore>
-    <summary>Tasks &amp; recovery / 任务记录与恢复 <span id="cacheUsage"></span></summary>
-    <button type="button" id="refreshTasks">Refresh / 刷新</button>
-    <div id="taskList">Loading / 加载中</div>
+    <summary>任务记录与恢复 <span id="cacheUsage"></span></summary>
+    <button type="button" id="refreshTasks">刷新</button>
+    <div id="taskList">加载中</div>
   </details>
   <div class="control-grid">
     <section class="control-card source-card">
       <div class="control-title"><span>01</span> 模型与样本</div>
-      <div class="field wide-field checkpoint-field"><label>Checkpoint</label>
+      <div class="field wide-field checkpoint-field"><label>模型检查点</label>
         <span class="brow">
           <span class="checkpoint-path-row"><input id="ckptPath" type="text" spellcheck="false"
               placeholder="输入 checkpoint 文件或目录路径">
@@ -80,15 +80,15 @@
       <div id="ukfControls" class="ukf-controls">
         <div class="field" data-i18n-ignore><label for="smoothingPreset">平滑预设 / Smoothing preset</label><select id="smoothingPreset">
           <option value="viewer">Viewer · 较轻平滑（0.7 / 0.5 / 0.3）</option>
-          <option value="production">Production · 生产参数（0.6 / 0.6 / 2）</option>
+          <option value="production" selected>Production · 生产参数（0.6 / 0.6 / 2）</option>
           <option value="custom">Custom · 自定义</option>
         </select></div>
         <div class="ukf-inputs">
-          <label title="过程噪声；越大越允许快速运动，平滑越弱"><span>q</span><input id="ukfQ" type="number" min="0.1" max="2" step="0.05" value="0.7"></label>
-          <label title="观测噪声；越大越不跟随逐帧预测，平滑越强"><span>r</span><input id="ukfR" type="number" min="0.1" max="2" step="0.05" value="0.5"></label>
-          <label title="快速运动的自适应平滑；越大越抑制快速运动抖动"><span>beta</span><input id="ukfBeta" type="number" min="0" max="5" step="0.1" value="0.3"></label>
+          <label title="过程噪声；越大越允许快速运动，平滑越弱"><span>q</span><input id="ukfQ" type="number" min="0.1" max="2" step="0.05" value="0.6"></label>
+          <label title="观测噪声；越大越不跟随逐帧预测，平滑越强"><span>r</span><input id="ukfR" type="number" min="0.1" max="2" step="0.05" value="0.6"></label>
+          <label title="快速运动的自适应平滑；越大越抑制快速运动抖动"><span>beta</span><input id="ukfBeta" type="number" min="0" max="5" step="0.1" value="2"></label>
         </div>
-        <small><b>默认：较轻平滑</b> · 建议 q 0.4–1.0、r 0.3–1.0、beta 0.2–3.0；q ↑ 更跟手，r/beta ↑ 更平滑。安全范围 q/r 0.1–2.0、beta 0–5。</small>
+        <small><b>默认：Production，与多算法比较一致</b> · 建议 q 0.4–1.0、r 0.3–1.0、beta 0.2–3.0；q ↑ 更跟手，r/beta ↑ 更平滑。安全范围 q/r 0.1–2.0、beta 0–5。</small>
       </div>
     </section>
 
@@ -460,6 +460,6 @@
 <script src="i18n.js?v=20260816-3"></script>
 <script src="camera_baselines.js?v=20260814-1"></script>
 <script src="benchmark_suites.js?v=20260906-coverage"></script>
-<script src="app.js?v=20260816-8"></script>
+<script src="app.js?v=20261031-workspace-ux"></script>
 </body>
 </html>

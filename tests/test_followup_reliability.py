@@ -182,7 +182,7 @@ def test_legacy_windows_migrate_and_different_bounds_are_not_reused(tmp_path):
 
 def test_smoothing_tuning_reuses_network_and_matches_full_recompute(tmp_path, monkeypatch):
     import torch
-    from test_idle_engine import make_engine
+    from tests.test_idle_engine import make_engine
     from mint.inference.engine import StudentEngine
     monkeypatch.setenv('MINT_WINDOW_CACHE_DIR', str(tmp_path))
     frames = torch.arange(8*3*2*2, dtype=torch.float32).reshape(8, 3, 2, 2) / 100
@@ -278,7 +278,7 @@ def test_decode_pipeline_cancel_removes_partial_and_reservations(tmp_path, monke
 
 
 def test_pipeline_and_eager_engine_outputs_are_identical(tmp_path, monkeypatch):
-    from test_idle_engine import make_engine
+    from tests.test_idle_engine import make_engine
     from mint.inference.engine import StudentEngine
     monkeypatch.setenv('MINT_CACHE_MIN_FREE_GIB', '0')
     monkeypatch.setenv('MINT_DECODE_PREFETCH_MIB', '1')

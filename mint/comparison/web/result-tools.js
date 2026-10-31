@@ -41,7 +41,7 @@ function handPostprocessLabel(value){
 }
 function runProtocol(run,sample){
   const options=run.options||{},result=run.result||{},mode=options.mode||result.native_mode;
-  const strategy=result.component_sources?'相机外参组合':run.imported?'数值结果导入':({max_chunked:'最大窗分窗',chunked:'训练窗分窗',independent81:'独立 81 帧',native_tiled:'整段 VAE · 4k+1',native:'原生流程',normalized:'标准几何导入'})[mode]||mode||'已有数值结果';
+  const strategy=result.component_sources?'相机外参组合':run.imported?'数值结果导入':({max_chunked:'最大窗分窗',chunked:'训练窗分窗',independent81:'独立 81 帧',native_tiled:'整段 VAE · 4k+1',native:'原生流程',normalized:'标准几何导入'})[mode]||mode||(run.algorithm==='reference'?'参考数据导入':run.result?'已有数值结果':'原生流程');
   const size=result.native_analysis_size||result.encoded_size||result.import_source?.image_size;
   const width=options.analysis_width??options.encode_width;
   const grid=Array.isArray(size)?size.join(' × '):width===0?'原视频尺寸':width?`宽 ${width} px`:'原生工作尺寸';

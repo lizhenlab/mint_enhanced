@@ -27,6 +27,24 @@ WAIT_REASONS = {
 }
 
 
+def timed_observation(row, now=None):
+    """Add an explicitly phase-scoped estimate without advancing finished clocks."""
+    row = dict(row)
+    now = time.time() if now is None else now
+    end = min(now, row.get('observed_at', now)) if row['status'] in TERMINAL else now
+    elapsed = max(0, end - row.get('phase_started_at', end))
+    row['phase_elapsed_seconds'] = elapsed
+    p = row.get('progress') or {}
+    done, count = p.get('done'), p.get('total')
+    row['eta'] = None
+    if row['status'] not in TERMINAL and isinstance(done, (int, float)) and isinstance(count, (int, float)) and 0 < done < count and elapsed > 2:
+        row['eta'] = {'seconds': elapsed * (count - done) / done, 'scope': 'current_phase', 'basis': 'observed_linear',
+                      'note': '阶段估算；模型冷加载、GPU 让步和下一阶段可能改变剩余时间'}
+    heartbeat = p.get('updated_at') or row.get('updated')
+    row['heartbeat_age_seconds'] = max(0, now - heartbeat) if heartbeat else None
+    return row
+
+
 class TaskIndex:
     def __init__(self, manager):
         self.manager = manager
@@ -112,18 +130,39 @@ class TaskIndex:
                                  [*args, limit, offset]).fetchall()
         rows = [json.loads(item['payload']) for item in records]
         now = time.time()
-        for row in rows:
-            elapsed = max(0, now - row.get('phase_started_at', now))
-            row['phase_elapsed_seconds'] = elapsed
-            p = row.get('progress') or {}
-            done, count = p.get('done'), p.get('total')
-            row['eta'] = None
-            if row['status'] not in TERMINAL and isinstance(done, (int, float)) and isinstance(count, (int, float)) and 0 < done < count and elapsed > 2:
-                row['eta'] = {'seconds': elapsed * (count - done) / done, 'scope': 'current_phase', 'basis': 'observed_linear',
-                              'note': '阶段估算；模型冷加载、GPU 让步和下一阶段可能改变剩余时间'}
-            heartbeat = p.get('updated_at') or row.get('updated')
-            row['heartbeat_age_seconds'] = max(0, now - heartbeat) if heartbeat else None
-        return {'tasks': rows, 'total': total, 'offset': offset}
+        return {'tasks': [timed_observation(row, now) for row in rows], 'total': total, 'offset': offset}
+
+    def inference_summaries(self, runs):
+        """Read a single batch of observations; never rescan executors or resources.
+
+        The live run remains authoritative. A stale index may explain a wait but
+        must not supply an ETA for a different phase or completion counter.
+        """
+        if not runs:
+            return {}
+        keys = ['inference:' + run['id'] for run in runs]
+        with self.manager.db() as db:
+            records = db.execute('SELECT id,payload FROM platform_tasks WHERE key IN (' +
+                                 ','.join('?' for _ in keys) + ')', keys).fetchall()
+        indexed = {r['id']: json.loads(r['payload']) for r in records}
+        summaries = {}
+        for run in runs:
+            p = run.get('progress') or {}
+            phase = p.get('stage') or p.get('phase') or run['status']
+            row = indexed.get(run['id'])
+            current = row and row['status'] == run['status'] and row.get('phase') == phase
+            exact = current and all((row.get('progress') or {}).get(k) == p.get(k) for k in ('done', 'total'))
+            summary = {'phase': phase, 'waiting_reason': p.get('detail') or p.get('waiting_reason') or
+                       WAIT_REASONS.get(phase) or WAIT_REASONS.get(run['status']),
+                       'phase_elapsed_seconds': None, 'eta': None}
+            if current:
+                observed = timed_observation(row)
+                summary['phase_elapsed_seconds'] = observed['phase_elapsed_seconds']
+                summary['observed_at'] = observed.get('observed_at')
+                if exact:
+                    summary['eta'] = observed['eta']
+            summaries[run['id']] = summary
+        return summaries
 
     def detail(self, kind, task_id):
         key = str(kind) + ':' + str(task_id)

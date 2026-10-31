@@ -2,7 +2,31 @@
 
 const datasetForm={active:false,catalog:null,offset:0};
 const platform={pane:'data',selection:new Map(),catalog:null,datasetOffset:0,taskOffset:0,taskSerial:0,serial:0,timer:null,collection:null,collectionKind:null,report:null,renderJob:null,capability:null};
-const HUB_LABELS={data:'数据与输入',tasks:'任务中心',batch:'多视频多算法批量',evaluation:'多算法数据集评测',tools:'高级工具',catalog:'持久结果与实验目录',quality:'逐帧质检与人工复核',research:'数据、训练与模型版本'};
+const HUB_LABELS={data:'数据接入',tasks:'任务与恢复',batch:'批量比较',evaluation:'数据集评测',tools:'专项工具',catalog:'数据与结果目录',quality:'逐帧质检与人工复核',research:'训练与模型'};
+const HUB_GROUPS={data:'data',catalog:'data',batch:'data',evaluation:'evaluation',quality:'evaluation',research:'research',tasks:'tasks',tools:'tools'};
+const HUB_CONTEXT={data:'选数据 → 配置比较 → 后台运行。开源标注先准备数据版本；选择输入不会自动推理。',catalog:'检索不可变结果、数据版本、模型和协议。比较记录保存一组对照，任务中心管理实际执行过程。',batch:'同一批输入、统一协议，逐个保存比较结果；可取消或恢复未完成的子任务。',evaluation:'当前比较看算法差异；数据集评测统计误差和覆盖；检查点回归验证模型变化；公开基准使用独立协议。',quality:'逐帧检查、区间复核和二维点修正。二维修正不会自动变成三维或 MANO 真值。',research:'准备数据 → 训练 → 检查点回归 → 模型发布。数据、模型和协议均保留独立版本。',tasks:'查看执行阶段、等待原因、资源与日志。一个比较可能包含多个算法任务。',tools:'专项分析与高级调试；各工具的可用状态和配置要求单独显示。'};
+const platformNavigation={scroll:new Map(),restoring:false};
+function platformRoute(tab,replace=false){
+  const url=new URL(location.href);if(tab){if(url.searchParams.get('hub')!==tab)url.searchParams.delete('section');if(tab!==platform.collectionKind)url.searchParams.delete('collection');if(tab!=='tools')url.searchParams.delete('tool_job');if(tab!=='research')url.searchParams.delete('study');url.searchParams.set('hub',tab);}else{for(const key of ['hub','section','collection','tool_job','study'])url.searchParams.delete(key);}
+  if(url.href!==location.href)window.history[replace?'replaceState':'pushState']({mintHub:tab||'compare'},'',url.pathname+url.search+url.hash);
+}
+function syncPlatformNavigation(tab){
+  const group=HUB_GROUPS[tab];document.querySelector('#appMasthead h1').textContent=({data:'数据',evaluation:'评测与质检',research:'训练与模型',tasks:'任务',tools:'工具'})[group]||'多算法比较';document.body.classList.toggle('platform-page-open',!!tab);$('appShell').hidden=!!tab;$('appShell').inert=!!tab;
+  for(const button of document.querySelectorAll('[data-platform-tab]')){const active=button.dataset.platformTab===group;button.classList.toggle('active',active);if(active)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');}
+  $('backToResults').classList.toggle('active',!tab);if(!tab)$('backToResults').setAttribute('aria-current','page');else $('backToResults').removeAttribute('aria-current');
+  for(const button of document.querySelectorAll('[data-hub-pane]')){button.hidden=HUB_GROUPS[button.dataset.hubPane]!==group;const active=button.dataset.hubPane===tab;button.classList.toggle('active',active);button.setAttribute('aria-current',active?'page':'false');}
+  document.querySelector('.platform-tabs').hidden=['research','tasks','tools'].includes(group);
+  $('evaluationRoutes').hidden=group!=='evaluation';$('moduleContext').textContent=HUB_CONTEXT[tab]||'';
+}
+function closePlatformWorkspace({history=true}={}){
+  platformNavigation.scroll.set(platform.pane,document.querySelector('.platform-body').scrollTop);
+  if($('platformDialog').open)$('platformDialog').close();syncPlatformNavigation(null);if(history&&!platformNavigation.restoring)platformRoute(null);
+}
+function focusHubSection(tab,title){
+  openPlatform(tab);const url=new URL(location.href);url.searchParams.set('section',title);window.history.replaceState(null,'',url.pathname+url.search);
+  requestAnimationFrame(()=>{const section=[...$('hub-'+tab).querySelectorAll('section')].find(node=>node.querySelector('h3')?.textContent.includes(title));if(section){section.scrollIntoView({block:'start'});section.setAttribute('tabindex','-1');section.focus({preventScroll:true});}});
+}
+
 function datasetSelection(){
   if(!datasetForm.active)return null;
   if(!datasetForm.catalog||!$('datasetEpisode').value)throw new Error('请先读取数据集并选择 Episode');
@@ -98,15 +122,17 @@ async function submitCollection(kind){
   try{button.textContent=`正在预检 ${items.length} 个输入…`;const check=await api('api/comparison/collections/preflight',{kind,items,selections,options});if(!check.ready)throw new Error(check.errors.slice(0,20).join('；'));const value=await api('api/comparison/collections',{kind,items,selections,options});await openCollection(value.id);}finally{button.disabled=false;button.textContent=kind==='evaluation'?'开始多算法数据集评测':'开始多视频多算法批量';}
 }
 async function openPlatform(tab='data'){
-  pause();$('platformError').textContent='';if(!$('platformDialog').open)$('platformDialog').showModal();
+  pause();$('platformError').textContent='';if(!$('platformDialog').open)$('platformDialog').show();
   if(!$('collectionDirectory').value)$('collectionDirectory').value=sourceBrowser.path||'/data1/lizhen_dataset';
   if(!$('hubDatasetRoot').value)$('hubDatasetRoot').value=$('datasetRoot').value||'/data1/lizhen_algo/mint/data/samples/lerobot_v3';
   switchHub(tab);
 }
 function switchHub(tab){
+  if(!HUB_LABELS[tab])return;
+  const body=document.querySelector('.platform-body');platformNavigation.scroll.set(platform.pane,body.scrollTop);
   platform.pane=tab;platform.serial++;clearTimeout(platform.timer);$('platformTitle').textContent=HUB_LABELS[tab];$('platformError').textContent='';
   for(const key of Object.keys(HUB_LABELS))$('hub-'+key).hidden=key!==tab;
-  for(const button of document.querySelectorAll('[data-hub-pane]'))button.classList.toggle('active',button.dataset.hubPane===tab);
+  syncPlatformNavigation(tab);if(!platformNavigation.restoring)platformRoute(tab);requestAnimationFrame(()=>{if(platform.pane===tab)body.scrollTop=platformNavigation.scroll.get(tab)||0;});
   $('collectionDetails').hidden=!platform.collection||platform.collectionKind!==tab;
   if(['batch','evaluation'].includes(tab))createComposer(tab);
   if(tab==='tools')refreshToolOptions().catch(hubError);
@@ -143,7 +169,7 @@ async function refreshWorkspaceTasks(){
 }
 async function openCollection(id){
   const value=await api('api/comparison/collections/'+id);platform.collection=id;platform.collectionKind=value.kind;platform.report=null;$('evaluationResults').replaceChildren();
-  if(!$('platformDialog').open)$('platformDialog').showModal();switchHub(value.kind);$(value.kind+'Setup').open=false;await renderCollection(value);$('collectionDetails').scrollIntoView({block:'start'});
+  if(!$('platformDialog').open)$('platformDialog').show();switchHub(value.kind);$(value.kind+'Setup').open=false;const url=new URL(location.href);url.searchParams.set('collection',id);window.history.replaceState(null,'',url.pathname+url.search);await renderCollection(value);$('collectionDetails').scrollIntoView({block:'start'});
 }
 async function refreshCollection(){const id=platform.collection;if(!id)return;const value=await api('api/comparison/collections/'+id);if(id===platform.collection)await renderCollection(value);}
 async function renderCollection(value){
@@ -164,9 +190,16 @@ function renderEvaluationReport(report){
   const table=el('table'),head=el('tr');for(const [name]of columns)head.append(el('th',name));table.append(head);for(const row of report.rows){const tr=el('tr');for(const [,format]of columns)tr.append(el('td',format(row)));table.append(tr);}host.append(table);
 }
 async function refreshToolOptions(){
-  if(!platform.capability)platform.capability=await api('api/comparison/capabilities');
+  platform.capability=await api('api/comparison/capabilities');
   const old=$('renderRun').value;$('renderRun').replaceChildren();for(const run of state.comparison?.runs||[])if(run.result){const option=el('option',run.label+' · '+run.id.slice(0,6));option.value=run.id;$('renderRun').append(option);}if([...$('renderRun').options].some(option=>option.value===old))$('renderRun').value=old;
-  const cap=platform.capability,notes=[];for(const kind of ['mujoco','retarget'])if(!cap.render[kind].ready)notes.push(kind+'：'+cap.render[kind].reason);notes.push(cap.cloud.ready?'云端评测配置已填写，需显式提交。':'云端评测尚需填写工作区、资源、镜像与存储配置。');$('toolReadiness').textContent=notes.join(' ');
+  const cap=platform.capability,host=$('toolReadiness');host.replaceChildren();host.classList.add('tool-readiness-grid');
+  const add=(label,ready,reason)=>{const card=el('div',undefined,'tool-readiness-card'),badge=el('span',ready?'可用':'需配置 / 待实现','readiness-badge');badge.dataset.ready=String(!!ready);card.append(el('strong',label),badge,el('p',reason||'按需显式提交，不会自动运行。','hint'));host.append(card);};
+  for(const [kind,label]of [['mujoco','MuJoCo 几何展示'],['retarget','Wuji Hand 运动学重定向']])add(label,cap.render?.[kind]?.ready,cap.render?.[kind]?.ready?'使用当前已有几何；重定向不代表接触或动力学验证。':cap.render?.[kind]?.reason);
+  add('数据专项分析',cap.data_analysis,cap.data_analysis?'视频质量、FOV 和多样性分析已连接。':'数据分析后端未连接。');add('MINT 高级调试',cap.legacy,cap.legacy?'原工作台已连接；使用同一输入和显式运行协议进行比较。':'原工作台后端未连接。');
+  add('Aliyun 云端评测',cap.cloud?.ready,cap.cloud?.ready?'配置已填写；仍需在高级调试中预检并显式提交。':cap.cloud?.reason||'请配置工作区、资源、镜像与存储。');
+  const bench=cap.benchmark;if(bench){const supported=(bench.datasets||[]).filter(row=>row.implemented).map(row=>row.name),missing=(bench.datasets||[]).filter(row=>!row.implemented).map(row=>row.name),missingHeads=(bench.heads||[]).filter(row=>!row.implemented).map(row=>row.name);const card=el('div',undefined,'tool-readiness-card benchmark-readiness');card.append(el('strong','公开基准 · 适配器与当前模型能力分别检查'),el('p','已有数据集适配器：'+(supported.join('、')||'无')+'。','hint'),el('p','待实现适配器：'+(missing.join('、')||'无')+'；待实现指标：'+(missingHeads.join('、')||'无')+'。','hint'),el('p','当前 MINT 配置输出：'+(bench.model_capability||[]).join('、')+'。适配器已实现仍需匹配数据标注和模型输出；当前模型未启用的深度等指标不可直接评测。','hint'));host.append(card);}
+  for(const link of document.querySelectorAll('#hub-tools .tool-links a')){const tool=new URL(link.href,location.href).searchParams.get('tool'),ready=tool?.startsWith('analysis-')?cap.data_analysis:cap.legacy;link.dataset.ready=String(!!ready);link.setAttribute('aria-disabled',String(!ready));link.title=ready?'打开工具；不会自动提交计算':'后端未连接，请先检查环境';link.onclick=ready?null:event=>{event.preventDefault();hubError(new Error('该工具后端未连接，请先检查环境。'));};}
+
   $('startRenderTool').disabled=!$('renderRun').value||!cap.render[$('renderKind').value].ready;
   $('renderStart').max=state.comparison?.sample?.frames||1;$('renderEnd').max=state.comparison?.sample?.frames||1;
 }
@@ -188,7 +221,13 @@ function inspectResult(id){if(!state.cards.has(id))return;resultView.expanded=id
 function initializePlatform(){
   for(const button of document.querySelectorAll('[data-platform-tab]'))button.onclick=()=>openPlatform(button.dataset.platformTab);
   for(const button of document.querySelectorAll('[data-hub-pane]'))button.onclick=()=>switchHub(button.dataset.hubPane);
-  $('backToResults').onclick=()=>{$('platformDialog').close();if(!state.comparison&&workspaceUI.history.length)openComparison(workspaceUI.history[0].id).catch(error=>notify(error.message));else setWorkspaceTab('view');};$('closePlatform').onclick=()=>$('platformDialog').close();$('platformDialog').addEventListener('close',()=>{platform.serial++;clearTimeout(platform.timer);$('renderToolVideo').pause();});
+  $('backToResults').onclick=()=>{closePlatformWorkspace();if(!state.comparison&&workspaceUI.history.length)openComparison(workspaceUI.history[0].id).catch(error=>notify(error.message));else setWorkspaceTab('view');};$('closePlatform').onclick=()=>closePlatformWorkspace();$('platformDialog').addEventListener('close',()=>{if($('platformDialog').open)return;platform.serial++;clearTimeout(platform.timer);$('renderToolVideo').pause();syncPlatformNavigation(null);if(!platformNavigation.restoring)platformRoute(null,true);});
+  $('newComparison').addEventListener('click',()=>closePlatformWorkspace(),{capture:true});
+  $('chooseNativeInput').onclick=()=>{$('taskDialog').close();focusHubSection('data','开源数据集原生接入');};
+  $('chooseExistingInput').onclick=()=>{$('importSection').open=true;$('importSection').scrollIntoView({block:'nearest',behavior:'smooth'});$('importPath').focus({preventScroll:true});};
+  for(const button of document.querySelectorAll('[data-evaluation-route]'))button.onclick=()=>{const route=button.dataset.evaluationRoute;if(route==='current'){if(!state.comparison){hubError(new Error('请先打开一组比较，再查看当前比较指标。'));return;}closePlatformWorkspace();setWorkspaceTab('metrics');}else if(route==='dataset')switchHub('evaluation');else if(route==='quality')switchHub('quality');else focusHubSection('research','固定集回归与性能对照');};
+  window.addEventListener('popstate',()=>{platformNavigation.restoring=true;try{const query=new URLSearchParams(location.search),tab=query.get('hub');if(tab&&HUB_LABELS[tab]){openPlatform(tab);}else closePlatformWorkspace({history:false});}finally{platformNavigation.restoring=false;}});
+  window.addEventListener('mint-platform-open',()=>{const section=new URLSearchParams(location.search).get('section');if(section)requestAnimationFrame(()=>{const target=[...$('hub-'+platform.pane).querySelectorAll('section')].find(node=>node.querySelector('h3')?.textContent.includes(section));target?.scrollIntoView({block:'start'});});});
   $('chooseVideoInput').onclick=()=>setDatasetMode(false);$('chooseDatasetInput').onclick=()=>setDatasetMode(true);
   $('loadDataset').onclick=()=>loadDatasetForm(0).catch(error=>{$('datasetSummary').textContent=error.message;});$('datasetUseDirectory').onclick=()=>{$('datasetRoot').value=sourceBrowser.path;loadDatasetForm(0).catch(error=>{$('datasetSummary').textContent=error.message;});};
   $('datasetCamera').onchange=()=>loadDatasetForm(0).catch(error=>notify(error.message));$('datasetEpisode').onchange=chooseDatasetEpisode;

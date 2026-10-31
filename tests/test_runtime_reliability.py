@@ -179,7 +179,7 @@ def test_rolling_queue_keeps_fast_worker_busy_and_output_order():
 
 
 def test_interrupted_inference_resumes_only_missing_windows(tmp_path, monkeypatch):
-    from test_idle_engine import make_engine
+    from tests.test_idle_engine import make_engine
     from mint.inference.engine import StudentEngine
     import torch
     monkeypatch.setenv('MINT_WINDOW_CACHE_DIR', str(tmp_path / 'windows'))
@@ -219,7 +219,7 @@ def test_checkpoint_identity_and_corruption_are_not_reused(tmp_path):
 
 
 def test_equivalent_smoothing_parameters_reuse_cli_windows_in_viewer(tmp_path, monkeypatch):
-    from test_idle_engine import make_engine
+    from tests.test_idle_engine import make_engine
     from mint.inference.engine import StudentEngine
     from mint.inference.options import InferenceOptions
     from visualization.viewer.routes import _normalize_hand_mode
@@ -273,7 +273,7 @@ def test_recovery_uses_current_equivalent_config_after_release_path_moves(store,
 
 
 def test_reloading_static_engine_cannot_reuse_previous_model_windows(tmp_path, monkeypatch):
-    from test_idle_engine import make_engine
+    from tests.test_idle_engine import make_engine
     from mint.inference.engine import StudentEngine
     import torch
     monkeypatch.setenv('MINT_WINDOW_CACHE_DIR', str(tmp_path / 'windows'))

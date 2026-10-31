@@ -546,6 +546,9 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
     def get_comparison(comparison_id):
         from .results import common_world_origin
         value = manager().comparison(comparison_id)
+        summaries = workspace().index.inference_summaries(value['runs'])
+        for row in value['runs']:
+            row['task_summary'] = summaries.get(row['id'])
         completed = [manager().root / 'runs' / row['id'] / 'result' for row in value['runs'] if row['result']]
         value['common_world_origin_source_frame'] = common_world_origin(completed)
         return jsonify(json_values(value))

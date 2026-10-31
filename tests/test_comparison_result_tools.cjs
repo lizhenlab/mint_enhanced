@@ -38,6 +38,11 @@ test('choosing a baseline never promotes an algorithm discrepancy to GT accuracy
   assert.equal(metricPairScope({scope:'algorithm_discrepancy_not_accuracy',reference:'m'}),'算法差异');
   assert.equal(metricPairScope({scope:'error_against_declared_GT'}),'参考误差');
 });
+
+test('a new HaWoR inference is never labelled as an existing numerical result',()=>{
+  assert.match(runProtocol({algorithm:'hawor_full',options:{analysis_width:832}}).short,/原生流程/);
+  assert.doesNotMatch(runProtocol({algorithm:'hawor_camera',options:{}}).short,/已有数值/);
+});
 test('MINT production and Viewer smoothing are explicit and preserve actual input protocol',()=>{
   assert.match(handPostprocessLabel('smooth'),/0\.6 \/ 0\.6 \/ 2/);
   const sample={frames:10428,fps:36.0025,request:{view:'left'}};

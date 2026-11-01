@@ -1,0 +1,18 @@
+.workflow-guide-dialog{width:min(980px,calc(100vw - 32px));max-height:calc(100dvh - 40px);padding:0;border:1px solid var(--line);border-radius:13px;background:var(--bg);color:var(--text);overflow:hidden;box-shadow:0 20px 80px #0009}
+.workflow-guide-dialog::backdrop{background:#0009;backdrop-filter:blur(3px)}
+.workflow-guide-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 24px;border-bottom:1px solid var(--line)}
+.workflow-guide-heading h2{margin:0 0 5px;font-size:19px}.workflow-guide-heading p{margin:0;color:var(--muted);font-size:12px;line-height:1.6}.workflow-guide-heading button{flex:none}
+.workflow-guide-body{padding:18px 24px;max-height:calc(100dvh - 165px);overflow:auto;overscroll-behavior:contain}
+.workflow-guide-body h3{font-size:14px;margin:0 0 10px}.workflow-guide-body>section+section{margin-top:22px}
+.workflow-guide-flow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:0;list-style:none;counter-reset:flow}
+.workflow-guide-flow>li{counter-increment:flow;min-width:0;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.workflow-guide-flow h4{font-size:12px;margin:0 0 7px}.workflow-guide-flow h4::before{content:counter(flow,decimal-leading-zero) ' · ';color:var(--accent,#b9f45a)}
+.workflow-guide-flow p,.workflow-guide-support p,.workflow-guide-terms p{font-size:11px;line-height:1.7;color:var(--muted);margin:0 0 9px;overflow-wrap:anywhere}
+.workflow-guide-flow button,.workflow-guide-support button,.workflow-guide-support a{font-size:11px;min-height:31px;margin:0 5px 4px 0}
+.workflow-guide-support{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.workflow-guide-support>div{min-width:0;border-left:2px solid var(--cyan);padding-left:12px}
+.workflow-guide-terms{border:1px solid var(--line);padding:12px;border-radius:8px}.workflow-guide-terms p:last-child{margin-bottom:0}.workflow-guide-terms strong{color:var(--text)}
+@media(max-width:760px){#openWorkflowGuide{min-height:30px;font-size:11px;padding:5px 7px}.workflow-guide-dialog{width:calc(100vw - 16px);max-height:calc(100dvh - 16px)}.workflow-guide-heading{padding:15px}.workflow-guide-heading h2{font-size:16px}.workflow-guide-body{padding:15px;max-height:calc(100dvh - 145px)}.workflow-guide-flow{grid-template-columns:repeat(2,minmax(0,1fr))}.workflow-guide-support{grid-template-columns:1fr}}
+@media(max-width:420px){.workflow-guide-flow{grid-template-columns:1fr}.workflow-guide-heading p{font-size:11px}}
+
+#openWorkflowGuide,#newComparison{white-space:nowrap}
+@media(max-width:760px){#appMasthead .masthead-actions{gap:5px}#appMasthead #languageSelect{width:60px;min-width:0;padding-inline:6px}#newComparison .icon{display:none}#appMasthead .masthead-actions .primary{padding:5px 8px}}

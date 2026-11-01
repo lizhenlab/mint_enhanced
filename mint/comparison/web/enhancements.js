@@ -165,6 +165,13 @@ async function refreshNativeVersions(){
   const value=await loadRegistryChoices('dataset','nativeVersion',{filter:row=>!!row.native,empty:'请选择已准备样本'});if(!value)return;
   nextUI.nativeVersions=value.records.filter(row=>!!row.native);updateNativeSample();return value;
 }
+async function useNativeDataset(dataset){
+  if(!dataset.native||dataset.availability==='missing_or_changed')throw new Error('此版本不是可用的已准备原生样本');
+  const serial=nextUI.nativeHandoffSerial=(nextUI.nativeHandoffSerial||0)+1;await openPlatform('data');showDataSource('native');const navigation=platform.serial,selected=$('nativeVersion').value,choice=nextUI.nativeVersionChoice||0;
+  await refreshNativeVersions();if(serial!==nextUI.nativeHandoffSerial||navigation!==platform.serial||platform.pane!=='data'||!$('platformDialog').open||nextUI.dataSource!=='native'||selected!==$('nativeVersion').value||choice!==(nextUI.nativeVersionChoice||0))return null;
+  chooseRegistryRecord('nativeVersion',dataset);if(!(nextUI.nativeVersions||[]).some(row=>row.id===dataset.id))nextUI.nativeVersions=[...(nextUI.nativeVersions||[]),dataset];
+  nextUI.nativeVersionChoice=choice+1;nextUI.nativeVersionWarning='';updateNativeSample();showNativeStep('compare',{focus:true});return dataset;
+}
 async function pollNativePreparation(){
   const job=nextUI.nativeJob;if(!job)return;const value=await api('api/comparison/workflows/'+job);if(job!==nextUI.nativeJob)return;
   $('nativeProgress').textContent=`${statusLabel(value.status)} · ${value.progress.stage||''}${value.progress.done?' · '+value.progress.done:''}${value.error?' · '+value.error:''}`;
@@ -307,7 +314,8 @@ async function startProduction(){
 async function chooseCurrentProductionRuns(){const comparison=state.comparison;if(!comparison)throw new Error('请先打开一个比较');if(!Array.from($('productionComparisonPicker').options).some(option=>option.value===comparison.id)){const option=el('option',comparison.title||comparison.id);option.value=comparison.id;$('productionComparisonPicker').append(option);}$('productionComparisonPicker').value=comparison.id;await refreshProductionRunChoices();if($('productionComparisonPicker').value!==comparison.id||nextUI.productionComparison?.id!==comparison.id)return;const ids=(comparison.runs||[]).filter(run=>run.algorithm==='mint'&&run.status==='completed'&&run.result&&!run.imported).map(run=>run.id);$('productionRuns').value=ids.join('\n');for(const option of $('productionRunPicker').options)option.selected=ids.includes(option.value);invalidateProductionReadiness();}
 function productionPanel(){
   const section=researchSection($('hub-research'),'原生后端伪标签生产','选择已完成的原生 MINT 结果，预检后生成独立训练数据版本。全时间轴和原始时间戳保留，异常运动只作掩码。');section.classList.add('next-wide');section.id='nativeProductionSection';section.append(el('p','已有 MINT 结果 → 输入预检 → Ray 发布伪标签版本 → 明确选择训练用途。','hint'));
-  section.append(nextField('productionRuns','已完成原生 MINT Run ID（每行一个）','','textarea'),researchButton('选择当前比较的 MINT 结果',chooseCurrentProductionRuns),researchSelect('productionSplit','产物划分',[['train','Train（原生测试集禁止转入）'],['validation','Validation'],['test','Test']]),nextField('productionAcceleration','腕部加速度掩码阈值 m/s²',30,'number'));
+  section.append(el('p','质检中的独立选择不改变比较工作区。此处生产使用明确选中的完整原生结果，不自动应用复核区间或二维修正；经复核的片段筛选请在数据与结果目录发布清单，再配置复核数据导出。','hint'));
+  section.append(nextField('productionRuns','已完成原生 MINT Run ID（每行一个）','','textarea'),researchButton('选择比较工作区的 MINT 结果',chooseCurrentProductionRuns),researchSelect('productionSplit','产物划分',[['train','Train（原生测试集禁止转入）'],['validation','Validation'],['test','Test']]),nextField('productionAcceleration','腕部加速度掩码阈值 m/s²',30,'number'));
   const check=researchButton('仅预检生产输入',checkProductionReadiness);check.id='productionCheck';const submit=researchButton('预检并启动 Ray 生产',startProduction);submit.id='productionSubmit';section.append(check,submit);const readiness=nextText('productionReadiness');readiness.dataset.ready='pending';readiness.textContent='选择来源结果后可先检查，不启动生产任务。';section.append(readiness);section.addEventListener('input',invalidateProductionReadiness);section.addEventListener('change',invalidateProductionReadiness);updateProductionActions();
 }
 
@@ -419,13 +427,13 @@ function preserveResearchChoices(id,choices,empty){const select=$(id),old=select
 async function refreshResearchRecordPickers(){
   const serial=nextUI.researchPickersSerial=(nextUI.researchPickersSerial||0)+1;
   let records;try{records=await Promise.all([api('api/comparisons?limit=200'),api('api/comparison/workspace?limit=200&query=train'),api('api/comparison/registry/model?limit=200')]);}catch(error){if(serial===nextUI.researchPickersSerial){const select=$('workflowInitPicker');if(!select.value)nextOptions('workflowInitPicker',[],'模型列表读取失败；可使用配置权重或高级路径');}throw error;}finally{if(serial===nextUI.researchPickersSerial)$('workflowInitPicker').disabled=false;}const [history,workspace,models]=records;if(serial!==nextUI.researchPickersSerial)return null;nextUI.researchComparisons=history.comparisons;nextUI.researchTasks=workspace.tasks;nextUI.researchModels=models.records;
-  for(const id of ['suiteComparisonPicker','productionComparisonPicker'])preserveResearchChoices(id,history.comparisons.map(row=>[row.id,(row.title||row.id.slice(0,8))+' · '+statusLabel(row.status||'completed')]),id==='suiteComparisonPicker'?'留空使用当前比较':'留空使用当前比较，或选择其他已有比较');
+  for(const id of ['suiteComparisonPicker','productionComparisonPicker'])preserveResearchChoices(id,history.comparisons.map(row=>[row.id,(row.title||row.id.slice(0,8))+' · '+statusLabel(row.status||'completed')]),id==='suiteComparisonPicker'?'留空使用当前比较':'留空使用比较工作区，或选择其他已有比较');
   syncTrainingWorkflowPicker();preserveResearchChoices('workflowInitPicker',models.records.filter(row=>row.availability!=='missing_or_changed').map(row=>[row.id,(row.name||row.id.slice(0,8))+' · '+row.path.split('/').pop()]),'使用训练配置中的初始化权重');
   if(nextUI.curve&&Array.from($('curveWorkflowPicker').options).some(option=>option.value===nextUI.curve))$('curveWorkflowPicker').value=nextUI.curve;await refreshProductionRunChoices();return {history,workspace,models};
 }
 async function refreshProductionRunChoices(){
   const serial=nextUI.productionSerial=(nextUI.productionSerial||0)+1,id=$('productionComparisonPicker').value,select=$('productionRunPicker'),old=selectedListValues('productionRunPicker');select.disabled=true;nextOptions('productionRunPicker',[],'正在读取所选比较…');$('productionPickerHint').textContent='正在核对所选来源的完整原生 MINT 结果…';
-  try{const comparison=id?await api('api/comparisons/'+id):state.comparison;if(serial!==nextUI.productionSerial||id!==$('productionComparisonPicker').value)return null;nextUI.productionComparison=comparison;nextOptions('productionRunPicker',(comparison?.runs||[]).filter(run=>run.algorithm==='mint'&&run.status==='completed'&&run.result&&!run.imported).map(run=>[run.id,run.label+' · '+(run.result.frames||'?')+' 帧 · '+run.id.slice(0,8)]),'请选择完整原生 MINT 结果');for(const option of select.options)option.selected=old.includes(option.value);$('productionPickerHint').textContent=comparison?'仅列出此比较中已完成、非导入的 MINT 结果；原始 MANO 文件、视频和官方划分仍需预检。':'先选择一个已有比较，或打开比较后使用其结果。';return comparison;}
+  try{const comparison=id?await api('api/comparisons/'+id):state.comparison;if(serial!==nextUI.productionSerial||id!==$('productionComparisonPicker').value)return null;nextUI.productionComparison=comparison;nextOptions('productionRunPicker',(comparison?.runs||[]).filter(run=>run.algorithm==='mint'&&run.status==='completed'&&run.result&&!run.imported).map(run=>[run.id,run.label+' · '+(run.result.frames||'?')+' 帧 · '+run.id.slice(0,8)]),'请选择完整原生 MINT 结果');for(const option of select.options)option.selected=old.includes(option.value);$('productionPickerHint').textContent=comparison?`${id?'已选生产来源':'比较工作区来源'}：${comparison.title||comparison.id} · 仅列出已完成、非导入的 MINT 结果；原始 MANO 文件、视频和官方划分仍需预检。`:'先选择一个已有比较，或打开比较工作区后使用其结果。';return comparison;}
   finally{if(serial===nextUI.productionSerial)select.disabled=false;}
 }
 function initializeResearchUsability(){

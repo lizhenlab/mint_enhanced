@@ -13,7 +13,8 @@ import numpy as np
 from mint.runtime import digest, file_identity
 from mint.inference.cache_budget import _token, file_lock
 from .contracts import json_values, load_result, result_metadata
-from .registry import backend_spec
+from .registry import backend_spec, normalize_options
+from .research import validate_protocol_samples
 
 TERMINAL = {'completed', 'partial', 'failed', 'cancelled', 'interrupted'}
 
@@ -39,10 +40,14 @@ class StudyManager:
                                 tag = f'{index}:{count}:{repeat}'
                                 cid = uuid.uuid5(uuid.NAMESPACE_URL, 'study:' + row['id'] + ':' + tag).hex
                                 prior = db.execute('SELECT payload,created FROM comparisons WHERE id=?', (cid,)).fetchone()
-                                if prior and tag not in state['children']:
+                                if prior:
                                     comp = json.loads(prior['payload'])
-                                    state['children'][tag] = {'comparison_id': cid, 'runs': comp['run_ids'],
-                                        'owned': comp.get('created_run_ids', []), 'started': prior['created']}
+                                    child = state['children'].get(tag, {'comparison_id': cid,
+                                        'owned': comp.get('created_run_ids', []), 'started': prior['created']})
+                                    child['runs'] = self._prediction_runs(request, request['cases'][index], count,
+                                        comp, study_id=row['id'], tag=tag)
+                                    child['owned'] = [rid for rid in child.get('owned', []) if rid in child['runs']]
+                                    state['children'][tag] = child
                     state.update(status='interrupted', error='Coordinator stopped; explicit resume reuses recorded child IDs')
                     db.execute('UPDATE studies SET state=?,updated=? WHERE id=?', (json.dumps(state), time.time(), row['id']))
                     interrupted_children.extend(state['children'].values())
@@ -73,6 +78,34 @@ class StudyManager:
             db.execute('UPDATE studies SET state=?,updated=? WHERE id=?', (json.dumps(state), time.time(), key))
         return True
 
+    def _prediction_runs(self, request, case, count, comparison, *, study_id, tag):
+        """Restore frozen variants, not every result later attached to their comparison."""
+        expected = []
+        for selection, version in zip(request['selections'], request['versions']):
+            options = dict(selection.get('options') or {})
+            if count:
+                options['max_gpus'] = count
+            expected.append((selection['algorithm'], version, normalize_options(selection['algorithm'], options)))
+        found = {}
+        algorithms = {selection['algorithm'] for selection in request['selections']}
+        nonce = digest({'fresh_comparison': 'study:' + study_id + ':' + tag}) if count else None
+        for run_id in dict.fromkeys(comparison['run_ids']):
+            payload = json.loads(self.manager.row(run_id)['payload'])
+            if (payload['algorithm'] not in algorithms or payload.get('import') or payload['sample_id'] != case['sample_id'] or
+                    payload.get('fresh_nonce') not in {None, nonce}):
+                continue
+            variant = (payload['algorithm'], payload.get('backend_version', payload.get('backend', {}).get('version')),
+                       normalize_options(payload['algorithm'], payload.get('options')))
+            if variant not in expected:
+                continue
+            run = self.manager.run(run_id, summary=True)
+            if (run.get('result') or {}).get('reference_role') == 'user_declared_ground_truth':
+                continue
+            found.setdefault(digest(variant), run_id)
+        if any(digest(variant) not in found for variant in expected):
+            raise ValueError('Stored study child is missing a frozen prediction variant')
+        return list(dict.fromkeys(found[digest(variant)] for variant in expected))
+
     def create(self, *, kind, selections, protocol_id=None, comparison_id=None, split='test', gpu_counts=None, repeats=1,
                name='Fixed study', atol_m=1e-4):
         if kind not in {'regression', 'performance'} or not isinstance(selections, list) or not 1 <= len(selections) <= 8:
@@ -93,6 +126,7 @@ class StudyManager:
             raise ValueError('Set a joint numerical tolerance in (0, .01] metres')
         if kind == 'regression':
             protocol = self.registry.get(protocol_id, 'protocol')
+            validate_protocol_samples(protocol)
             cases = [e for e in protocol['entries'] if e['split'] == split]
             if not cases:
                 raise ValueError('The frozen split has no cases')
@@ -145,6 +179,8 @@ class StudyManager:
         return self.get(key)
 
     def _verify(self, request):
+        if request['kind'] == 'regression':
+            validate_protocol_samples({'entries': request['cases']})
         for selection, version in zip(request['selections'], request['versions']):
             if backend_spec(selection['algorithm'], **{k: selection[k] for k in ('checkpoint', 'config') if selection.get(k)})['version'] != version:
                 raise ValueError('Frozen algorithm/model changed; submit a new study')
@@ -202,6 +238,13 @@ class StudyManager:
                                 self.manager.attach(comp['id'], case['reference_run'])
                             child = {'comparison_id': comp['id'], 'runs': list(comp['run_ids']),
                                      'owned': comp['created_run_ids'], 'started': started}
+                            children = state['children']; children[tag] = child; self._set(key, children=children)
+                        else:
+                            with self.manager.db() as db:
+                                stored = db.execute('SELECT payload FROM comparisons WHERE id=?', (child['comparison_id'],)).fetchone()
+                            child['runs'] = self._prediction_runs(request, case, count, json.loads(stored['payload']),
+                                study_id=key, tag=tag)
+                            child['owned'] = [rid for rid in child.get('owned', []) if rid in child['runs']]
                             children = state['children']; children[tag] = child; self._set(key, children=children)
                         runs = self._wait(key, child)
                         child.setdefault('finished', max(child['started'], *(r['updated'] for r in runs)))

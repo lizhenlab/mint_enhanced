@@ -133,3 +133,8 @@ docs/dataset-card/
 !tests/test_global_comparison_ux.cjs
 !tests/test_global_navigation_ux.cjs
 !tests/test_global_frontend_contracts.py
+
+!tests/test_module_handoffs.cjs
+!tests/test_module_guide.cjs
+!tests/test_study_recovery_roles.py
+!tests/test_protocol_unique_samples.py

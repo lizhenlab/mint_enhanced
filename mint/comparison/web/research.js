@@ -17,27 +17,87 @@ async function loadRegistryChoices(kind,id,{filter=()=>true,empty='请选择'}={
   for(const row of value.records.filter(filter)){const option=el('option',(row.name||row.id.slice(0,12))+' · '+row.id.slice(0,8));option.value=row.id;if(row.availability==='missing_or_changed'){option.disabled=true;option.textContent+=' · 文件缺失或变化';}select.append(option);}if(old&&!Array.from(select.options).some(option=>option.value===old)){const missing=el('option','此前选择已不可用 · '+old.slice(0,12));missing.value=old;missing.disabled=true;select.append(missing);}if(old)select.value=old;return value;
 }
 async function refreshArtifactCatalog(){
-  const serial=researchUI.catalogSerial=(researchUI.catalogSerial||0)+1;
+  researchUI.catalogSerial=(researchUI.catalogSerial||0)+1;
   const kind=$('registryKind').value,query=new URLSearchParams({query:$('registryQuery').value,offset:researchUI.offset,limit:30});
-  const value=await api(`api/comparison/registry/${kind}?${query}`);if(serial!==researchUI.catalogSerial||kind!==$('registryKind').value||query.get('query')!==$('registryQuery').value)return;const host=$('artifactRows');host.replaceChildren();
+  const context=catalogNavigation(),current=()=>catalogNavigationCurrent(context),host=$('artifactRows');host.replaceChildren(el('p','正在读取目录…','hint'));host.setAttribute('aria-busy','true');$('registryPage').textContent='正在读取…';$('registryPrevious').disabled=true;$('registryNext').disabled=true;
+  let value;try{value=await api(`api/comparison/registry/${kind}?${query}`);}catch(error){if(!current())return null;host.replaceChildren(el('p','目录读取失败，请重试：'+(error.message||String(error)),'hint'),researchButton('重试读取',refreshArtifactCatalog));host.setAttribute('aria-busy','false');$('registryPage').textContent='读取失败，请重试';return null;}
+  if(!current())return null;host.replaceChildren();
   const table=el('table'),head=el('tr');for(const text of ['产物 / 来源','类型与状态','操作'])head.append(el('th',text));table.append(head);
   for(const row of value.records){const tr=el('tr'),name=el('td'),actions=el('td');name.append(el('strong',row.name||row.id.slice(0,12)),el('small',row.source?.path||row.path||row.root||row.run_id||row.id));
     tr.append(name,el('td',[row.type||row.kind,row.frames?`${row.frames} 帧`:'',row.availability==='missing_or_changed'?'文件缺失或变化':row.status||row.origin||''].filter(Boolean).join(' · ')));
     actions.append(researchButton('来源详情',()=>researchDetails(row)));
-    if(row.run_id)actions.append(researchButton('打开结果',async()=>{const parents=await api(`api/comparison/runs/${row.run_id}/parent`);if(!parents.comparisons.length)throw new Error('此结果尚未附加到比较');$('platformDialog').close();await openComparison(parents.comparisons[0]);inspectResult(row.run_id);}));
-    if(row.importable&&row.availability!=='missing_or_changed')actions.append(researchButton('导入已有数值',async()=>{const comp=await api(`api/comparison/registry/artifacts/${row.id}/import`,{});$('platformDialog').close();await openComparison(comp.id);}));
-    if(row.kind==='model')actions.append(researchButton('用于 MINT 比较',()=>useRegisteredModel(row)));
+    if(row.run_id)actions.append(researchButton('打开结果',()=>openCatalogResult(row)));
+    if(row.importable&&row.availability!=='missing_or_changed')actions.append(researchButton('导入已有数值',()=>importCatalogArtifact(row)));
+    if(row.availability!=='missing_or_changed'){
+      if(row.kind==='model')actions.append(researchButton('用于 MINT 比较',()=>useRegisteredModel(row)));
+      if(row.kind==='dataset'){
+        if(row.native)actions.append(researchButton('用此样本配置比较',()=>useNativeDataset(row)));
+        if(row.training_ready)actions.append(researchButton('用此版本配置训练',()=>useTrainingDataset(row)));
+        if(row.status==='reviewed_manifest')actions.append(researchButton('配置复核数据导出',()=>useReviewedDataset(row)));
+      }
+      if(row.kind==='protocol')actions.append(researchButton('配置离线评测',()=>useSavedProtocol(row)),researchButton('配置固定集回归',()=>useSavedProtocol(row,'regression')));
+      if(row.kind==='evaluation'){
+        if(row.protocol_id)actions.append(researchButton('使用所属协议',()=>useEvaluationProtocol(row)));
+        if(row.rows?.some(result=>result.origin==='native'&&result.model))actions.append(researchButton('配置模型发布',()=>useEvaluationReport(row)));
+      }
+    }
     if(row.kind==='review'&&row.decision==='accepted'){const check=el('input');check.type='checkbox';check.checked=researchUI.accepted.has(row.id);check.onchange=()=>{if(check.checked)researchUI.accepted.add(row.id);else researchUI.accepted.delete(row.id);};actions.append(inputLabel('纳入数据版本',check));}
     tr.append(actions);table.append(tr);
   }
-  host.append(table);$('registryPage').textContent=`${value.total} 项 · ${value.total?value.offset+1:0}–${Math.min(value.total,value.offset+value.records.length)}`;$('registryPrevious').disabled=value.offset===0;$('registryNext').disabled=value.offset+value.records.length>=value.total;
+  host.append(table);host.setAttribute('aria-busy','false');$('registryPage').textContent=`${value.total} 项 · ${value.total?value.offset+1:0}–${Math.min(value.total,value.offset+value.records.length)}`;$('registryPrevious').disabled=value.offset===0;$('registryNext').disabled=value.offset+value.records.length>=value.total;
 }
-function useRegisteredModel(model){$('platformDialog').close();openTaskDialog();const box=$('algorithmOptions').querySelector('[data-algorithm=mint]');box.querySelector('input[type=checkbox]').checked=true;box.querySelector('[data-selection=checkpoint]').value=model.path;box.querySelector('[data-selection=config]').value=model.config?.path||'';}
+function catalogNavigation(){return JSON.stringify([platform.serial,researchUI.catalogSerial,$('registryKind').value,$('registryQuery').value]);}
+function catalogNavigationCurrent(context){return $('platformDialog').open&&platform.pane==='catalog'&&context===catalogNavigation();}
+async function openCatalogResult(row){
+  const context=catalogNavigation(),parents=await api(`api/comparison/runs/${row.run_id}/parent`);if(!catalogNavigationCurrent(context))return null;
+  if(!parents.comparisons.length)throw new Error('此结果尚未附加到比较');const target=parents.comparisons[0];closePlatformWorkspace();const navigation=platform.serial;await openComparison(target);
+  if(navigation===platform.serial&&!$('platformDialog').open&&state.comparison?.id===target)inspectResult(row.run_id);return target;
+}
+async function importCatalogArtifact(row){
+  const context=catalogNavigation(),comparison=await api(`api/comparison/registry/artifacts/${row.id}/import`,{});
+  if(!catalogNavigationCurrent(context)){researchSubmissionNotice('已有数值已导入，当前页面已保留；可从比较记录查看。');return comparison;}
+  closePlatformWorkspace();await openComparison(comparison.id);return comparison;
+}
+function useRegisteredModel(model,configuration=model.config){
+  if(model.availability==='missing_or_changed')throw new Error('此模型文件缺失或已变化，请重新登记');
+  closePlatformWorkspace();openTaskDialog();const box=$('algorithmOptions').querySelector('[data-algorithm=mint]');
+  box.querySelector('input[type=checkbox]').checked=true;const checkpoint=box.querySelector('[data-selection=checkpoint]');checkpoint.value=model.path;box.querySelector('[data-selection=config]').value=configuration?.path||'';
+  const details=checkpoint.closest('details');if(details)details.open=true;invalidateComparisonPreflight();if(typeof updateTaskProtocolSummary==='function')updateTaskProtocolSummary();
+}
+function chooseRegistryRecord(id,row){
+  const select=$(id);let option=Array.from(select.options).find(value=>value.value===row.id);
+  if(option?.disabled&&option.textContent.startsWith('此前选择已不可用 · ')&&row.availability!=='missing_or_changed'){option.remove();option=null;}
+  if(!option){option=el('option',(row.name||row.id.slice(0,12))+' · '+row.id.slice(0,8));option.value=row.id;select.append(option);}
+  if(row.availability==='missing_or_changed'||option.disabled)throw new Error('所选产物已不可用，请刷新目录');select.value=row.id;
+}
+async function useSavedProtocol(protocol,view='protocol'){
+  await openPlatform('research');showResearchView(view);const navigation=platform.serial,id=view==='regression'?'suiteProtocol':'offlineProtocol',selected=$(id).value;
+  await loadRegistryChoices('protocol',id);if(navigation!==platform.serial||platform.pane!=='research'||!$('platformDialog').open||nextUI.researchView!==view||selected!==$(id).value)return null;
+  chooseRegistryRecord(id,protocol);const splits=[...new Set((protocol.entries||[]).map(entry=>entry.split))];if(splits.length===1&&['validation','test'].includes(splits[0]))$(view==='regression'?'suiteSplit':'offlineSplit').value=splits[0];
+  if(view!=='regression'){
+    const included=!!state.comparison?.sample_id&&(protocol.entries||[]).some(entry=>entry.split===$('offlineSplit').value&&entry.sample_id===state.comparison.sample_id);
+    researchOutput('fixedEvaluationStatus','已选择固定协议：'+(protocol.name||protocol.id)+'。'+(included?'离线评测仅处理当前比较已有的预测；评测协议全部输入请使用固定集回归。':'当前比较不属于此协议划分；请先打开协议对应输入，或使用固定集回归处理全部输入。'));
+  }
+  revealPlatformTarget($(id));return protocol;
+}
+async function useEvaluationProtocol(report){
+  const context=catalogNavigation(),protocol=await api('api/comparison/registry/record/'+report.protocol_id);if(!catalogNavigationCurrent(context))return null;return useSavedProtocol(protocol);
+}
+async function useEvaluationReport(report){
+  await openPlatform('research');showResearchView('models');const navigation=platform.serial,selected=$('modelEvaluation').value;
+  await loadRegistryChoices('evaluation','modelEvaluation');if(navigation!==platform.serial||platform.pane!=='research'||!$('platformDialog').open||nextUI.researchView!=='models'||selected!==$('modelEvaluation').value)return null;
+  chooseRegistryRecord('modelEvaluation',report);updateModelActions();$('modelActionSummary').textContent='已选择评测报告 '+(report.name||report.id)+'；请选择匹配的模型版本并核对发布门槛。';revealPlatformTarget($('modelEvaluation'));return report;
+}
+async function publishReviewedDataset(){
+  const context=catalogNavigation(),value=await api('api/comparison/registry/dataset',{name:$('datasetVersionName').value,review_ids:[...researchUI.accepted]});
+  if(!catalogNavigationCurrent(context)){researchSubmissionNotice('复核清单已保存，当前页面已保留；可从数据版本目录配置导出。');return value;}
+  const host=$('datasetVersionStatus');host.replaceChildren(el('span',`已保存 ${value.entries.length} 个片段 · ${value.id}。此清单尚未转换为训练格式。`),researchButton('用此清单配置复核数据导出',()=>useReviewedDataset(value)));return value;
+}
 function initializeCatalog(host){
   const bar=el('div',undefined,'hub-filters');bar.append(researchSelect('registryKind','产物类别',[['artifact','结果与已保存预测'],['protocol','固定评测协议'],['evaluation','离线评测报告'],['review','人工复核记录'],['dataset','数据版本'],['model','模型版本'],['experiment','加速 / 融合实验'],['deployment','多机配置']]),researchField('registryQuery','搜索名称、来源或标识'),researchButton('刷新目录',()=>{researchUI.offset=0;return refreshArtifactCatalog();}));host.append(bar);
   const rows=el('div',undefined,'hub-table');rows.id='artifactRows';host.append(rows);const page=el('div',undefined,'button-row'),info=el('span');info.id='registryPage';const prev=researchButton('上一页',()=>{researchUI.offset=Math.max(0,researchUI.offset-30);return refreshArtifactCatalog();});prev.id='registryPrevious';const next=researchButton('下一页',()=>{researchUI.offset+=30;return refreshArtifactCatalog();});next.id='registryNext';page.append(prev,info,next);host.append(page);
   $('registryKind').onchange=()=>{researchUI.offset=0;refreshArtifactCatalog().catch(hubError);};
-  const version=researchSection(host,'发布复核数据版本','在“人工复核记录”中勾选已接受的记录，再发布不可变筛选清单。预测标签不会自动变为 GT。');version.append(researchField('datasetVersionName','数据版本名称','reviewed-camera-v1'),researchButton('发布已选复核清单',async()=>{const value=await api('api/comparison/registry/dataset',{name:$('datasetVersionName').value,review_ids:[...researchUI.accepted]});researchOutput('datasetVersionStatus',`已保存 ${value.entries.length} 个片段 · ${value.id}。可在数据与训练中导出明确标记的相机伪标签。`);}));const status=el('p',undefined,'hint');status.id='datasetVersionStatus';version.append(status);
+  const version=researchSection(host,'发布复核数据版本','在“人工复核记录”中勾选已接受的记录，再发布不可变筛选清单。预测标签不会自动变为 GT。');version.append(researchField('datasetVersionName','数据版本名称','reviewed-camera-v1'),researchButton('发布已选复核清单',publishReviewedDataset));const status=el('p',undefined,'hint');status.id='datasetVersionStatus';version.append(status);
   const offline=el('details',undefined,'hub-secondary');offline.append(el('summary','登记离线预测文件'));const form=el('div',undefined,'composer-fields');form.append(researchField('offlineName','名称'),researchField('offlineSource','原始服务器视频路径'),researchSelect('offlineAlgorithm','原生格式所属算法',[['mint','MINT'],['hawor_full','HaWoR Full'],['ace_kfree','ACE K-free'],['reference','Reference GT']]),researchField('offlinePath','已有数值文件绝对路径'),researchSelect('offlineFormat','数值格式',[['mint_npz','MINT NPZ'],['hawor_world_npz','HaWoR world NPZ'],['ace_pickle','ACE native pickle'],['normalized_npz','标准 NPZ']]),researchField('offlineMap','样本位置帧映射 JSON','[0,1,2]'),researchField('offlineProvenance','来源 / 坐标 / 单位声明'),researchButton('登记文件与映射',async()=>{await api('api/comparison/registry/artifact',{name:$('offlineName').value||undefined,source:$('offlineSource').value,algorithm:$('offlineAlgorithm').value,import_entry:{path:$('offlinePath').value,format:$('offlineFormat').value,frame_map:JSON.parse($('offlineMap').value),declared_source:$('offlineProvenance').value}});await refreshArtifactCatalog();}));offline.append(form);host.append(offline);
 }
 function qualityComparisonData(){
@@ -215,11 +275,13 @@ async function refreshResearchChoices(){
   await Promise.all([refreshWorkflowDatasetChoices(),loadRegistryChoices('model','registeredModel'),loadRegistryChoices('evaluation','modelEvaluation'),loadRegistryChoices('protocol','offlineProtocol')]);if(typeof updateModelActions==='function')updateModelActions();
 }
 function initializeResearch(host){
-  const protocol=researchSection(host,'冻结协议与离线评测','固定输入、帧范围、GT 身份和数据切分。离线评测读取已有几何；不重复推理，不声明冷启动性能。');protocol.append(researchField('fixedProtocolName','协议名称','fixed-evaluation-v1'),researchButton('用当前比较冻结测试协议',async()=>{if(!state.comparison)throw new Error('请先打开含 GT 的比较');const value=await api('api/comparison/registry/protocol',{name:$('fixedProtocolName').value,comparisons:[state.comparison.id]});await loadRegistryChoices('protocol','offlineProtocol');$('offlineProtocol').value=value.id;researchOutput('fixedEvaluationStatus',`协议已冻结 · ${value.entries.length} 个输入 · ${value.id}`);}),researchSelect('offlineProtocol','已保存协议',[['','请选择']]),researchButton('评测当前比较的预测结果',async()=>{if(!state.comparison)throw new Error('请先打开比较');const run_ids=state.comparison.runs.filter(r=>r.result&&r.result.reference_role!=='user_declared_ground_truth').map(r=>r.id);const value=await api('api/comparison/registry/evaluation',{protocol_id:$('offlineProtocol').value,run_ids});researchOutput('fixedEvaluationStatus',value);await loadRegistryChoices('evaluation','modelEvaluation');}));const evaluation=el('pre',undefined,'research-output');evaluation.id='fixedEvaluationStatus';protocol.append(evaluation);
+  const protocol=researchSection(host,'冻结协议与离线评测','固定输入、帧范围、GT 身份和数据切分。离线评测读取已有几何；不重复推理，不声明冷启动性能。');protocol.append(researchField('fixedProtocolName','协议名称','fixed-evaluation-v1'),researchButton('用当前比较冻结测试协议',async()=>{if(!state.comparison)throw new Error('请先打开含 GT 的比较');const value=await api('api/comparison/registry/protocol',{name:$('fixedProtocolName').value,comparisons:[state.comparison.id]});await loadRegistryChoices('protocol','offlineProtocol');$('offlineProtocol').value=value.id;researchOutput('fixedEvaluationStatus',`协议已冻结 · ${value.entries.length} 个输入 · ${value.id}`);}),researchSelect('offlineProtocol','已保存协议',[['','请选择']]),researchSelect('offlineSplit','评测划分',[['test','Test'],['validation','Validation']]),researchButton('评测当前比较的预测结果',async()=>{if(!state.comparison)throw new Error('请先打开比较');const run_ids=state.comparison.runs.filter(r=>r.result&&r.result.reference_role!=='user_declared_ground_truth').map(r=>r.id);const value=await api('api/comparison/registry/evaluation',{protocol_id:$('offlineProtocol').value,split:$('offlineSplit').value,run_ids});researchOutput('fixedEvaluationStatus',value);await loadRegistryChoices('evaluation','modelEvaluation');}));const evaluation=el('pre',undefined,'research-output');evaluation.id='fixedEvaluationStatus';protocol.append(evaluation);
   const workflow=researchSection(host,'数据生产与训练任务','先选择数据版本和任务类型，再预检并提交。训练等待安全空闲 GPU，一个训练尝试内的 GPU 数固定；参考研究链有额外依赖。');const primary=researchButton('前往推荐的 MINT 原生伪标签生产',()=>revealPlatformTarget(document.getElementById('nativeProductionSection')));workflow.append(primary);const form=el('div',undefined,'composer-fields');form.append(researchSelect('workflowKind','工作类型',[['train','MINT 训练'],['prepare_training','转换已有相机标注数据'],['curate_dataset','导出经复核的相机伪标签'],['pipeline','参考研究链 · 独立依赖（高级）'],['diagnostic','环境诊断']]),researchField('workflowName','任务名称','camera-training-validation'));
   const field=(id,label,value,type,kinds)=>{const row=researchField(id,label,value,type);row.dataset.workflowKinds=kinds;form.append(row);};
   field('workflowSource','LeRobot 根目录 / Pipeline 输入路径（每行一个）','/data1/lizhen_algo/mint/data/samples/lerobot_v3','textarea','prepare_training pipeline');field('workflowEpisodes','Episode 索引（逗号分隔）','0','text','prepare_training');field('workflowFrames','转换帧数（留空为整个 Episode）','','number','prepare_training');
   const dataset=researchSelect('workflowDataset','数据版本',[['','使用配置中的数据根目录']]);dataset.dataset.workflowKinds='train curate_dataset';form.append(dataset);
+  const datasetSummary=el('p',undefined,'hint');datasetSummary.id='workflowDatasetSummary';datasetSummary.dataset.workflowKinds='train curate_dataset';datasetSummary.setAttribute('aria-live','polite');form.append(datasetSummary);
+  dataset.querySelector('select').onchange=()=>{$('workflowPseudoOptIn').checked=false;updateWorkflowDatasetSummary();invalidateWorkflowReadiness();};
   field('workflowConfig','训练配置','/data1/lizhen_algo/mint/configs/training/mint_step2.yaml','text','train');field('workflowInit','初始化权重（留空用配置）','','text','train');field('workflowResumePath','续训检查点目录（恢复优化器 / 随机状态）','','text','train');field('workflowSteps','优化器步数（留空按配置完整训练）','','number','train');field('workflowGpus','固定 GPU 数（1–8）',1,'number','train pipeline');
   const profile=researchSelect('workflowProfile','诊断范围',[['train','训练'],['data','数据生产'],['inference','推理'],['full','全部']]);profile.dataset.workflowKinds='diagnostic';form.append(profile);const pseudoInput=el('input');pseudoInput.id='workflowPseudoOptIn';pseudoInput.type='checkbox';const pseudo=inputLabel('明确允许使用模型伪标签训练（保留来源，不作为实际 GT）',pseudoInput);pseudo.dataset.workflowKinds='train';form.append(pseudo);workflow.append(form);
   const workflowPreflight=researchButton('预检工作流',checkWorkflowReadiness);workflowPreflight.id='workflowPreflight';const workflowSubmit=researchButton('提交持久任务',submitWorkflow);workflowSubmit.id='workflowSubmit';workflowSubmit.dataset.locked='true';workflowSubmit.disabled=true;workflow.append(workflowPreflight,workflowSubmit);const summary=el('p','配置草稿与已提交任务分别管理；当前尚未选择已提交任务。','workflow-summary hint');summary.id='workflowSummary';summary.setAttribute('role','status');workflow.append(summary);form.addEventListener('input',invalidateWorkflowReadiness);form.addEventListener('change',invalidateWorkflowReadiness);const check=el('pre',undefined,'research-output');check.id='workflowCheck';const output=el('pre',undefined,'research-output');output.id='workflowState';workflow.append(check,output);const nextSteps=el('div',undefined,'button-row');nextSteps.id='workflowNextSteps';workflow.append(nextSteps);const actions=el('div',undefined,'button-row');for(const [id,label,fn]of [['workflowLog','查看日志',()=>{}],['workflowCancel','取消',async()=>{await api(`api/comparison/workflows/${researchUI.workflow}/cancel`,{});await inspectWorkflow(researchUI.workflow);}],['workflowResume','从完整检查点恢复',async()=>{await api(`api/comparison/workflows/${researchUI.workflow}/resume`,{});await inspectWorkflow(researchUI.workflow);}]]){const button=researchButton(label,fn);button.id=id;button.disabled=true;actions.append(button);}workflow.append(actions);$('workflowKind').onchange=updateWorkflowFields;updateWorkflowFields();
@@ -231,15 +293,27 @@ function modelPromotionParameters(){return {model_id:$('registeredModel').value,
 function updateModelActions(){
   const value=modelPromotionParameters(),alias=/^[\p{L}\p{N}_-]{1,64}$/u.test(value.alias),thresholds=$('modelMaxError').value.trim()!==''&&$('modelCoverage').value.trim()!==''&&Number.isFinite(value.max_joint_mm)&&value.max_joint_mm>0&&Number.isFinite(value.min_coverage)&&value.min_coverage>=0&&value.min_coverage<=1;
   const unavailable=id=>Array.from($(id).options).some(option=>option.value===$(id).value&&option.disabled);lockResearchAction('modelRegister',!$('modelPath').value.trim());lockResearchAction('modelPromote',!value.model_id||!value.evaluation_id||unavailable('registeredModel')||unavailable('modelEvaluation')||!alias||!thresholds);lockResearchAction('modelRollback',!alias);
+  const compare=$('modelConfigureComparison');if(compare)compare.hidden=!compare.dataset.alias||compare.dataset.alias!==value.alias;
   $('modelGateSummary').textContent=thresholds?`发布门槛：关节误差 ≤ ${value.max_joint_mm} mm，覆盖率 ≥ ${(value.min_coverage*100).toFixed(1)}%`:'发布门槛：请填写有效误差与覆盖率';
 }
 async function registerModel(){const body={path:$('modelPath').value.trim(),name:$('modelName').value.trim()||undefined,config:$('modelConfig').value.trim()||undefined},selected=$('registeredModel').value;if(!body.path)throw new Error('请填写检查点路径');const value=await api('api/comparison/registry/model',body);await refreshResearchChoices();if($('registeredModel').value===selected&&Array.from($('registeredModel').options).some(option=>option.value===value.id))$('registeredModel').value=value.id;$('modelActionSummary').textContent='已登记检查点：'+(value.name||body.path)+'；需选择匹配的离线评测报告后发布别名。';researchOutput('modelStatus',value);updateModelActions();return value;}
-async function promoteModel(){const parameters=modelPromotionParameters();if(!parameters.model_id||!parameters.evaluation_id)throw new Error('请选择模型版本与离线评测报告');const signature=JSON.stringify(parameters),value=await api('api/comparison/models/promote',parameters);if(signature===JSON.stringify(modelPromotionParameters())){$('modelActionSummary').textContent='别名 '+value.alias+' 已更新；原权重和正在运行的模型保持不变。';researchOutput('modelStatus',value);}else researchSubmissionNotice('模型别名更新已完成，当前表单选择已保留。');return value;}
-async function rollbackModel(){const alias=$('modelAlias').value.trim();if(!alias)throw new Error('请填写要回滚的模型别名');const value=await api('api/comparison/models/rollback',{alias});if(alias===$('modelAlias').value.trim()){$('modelActionSummary').textContent='别名 '+alias+' 已回滚到上一次通过评测的模型。';researchOutput('modelStatus',value);}else researchSubmissionNotice('模型别名 '+alias+' 已回滚，当前别名输入已保留。');return value;}
+function modelAliasReady(alias,message){
+  $('modelActionSummary').textContent=message+'；默认权重不变，不会热加载到正在运行的模型。新比较需明确选择此别名。';
+  const button=$('modelConfigureComparison');button.dataset.alias=alias;button.textContent='用别名 '+alias+' 配置新比较';button.hidden=false;
+}
+async function usePublishedModelAlias(alias){
+  const navigation=platform.serial,signature=JSON.stringify(modelPromotionParameters()),value=await api('api/comparison/models/aliases');
+  if(navigation!==platform.serial||platform.pane!=='research'||!$('platformDialog').open||nextUI.researchView!=='models'||signature!==JSON.stringify(modelPromotionParameters()))return null;
+  const selected=value.aliases.find(row=>row.name===alias);if(!selected?.ready)throw new Error('此别名当前不可用；请核对已评测权重和配置文件');
+  useRegisteredModel(selected.model,selected.effective_config);researchSubmissionNotice('已为新比较选择别名 '+alias+' 的已评测权重和配置；请核对输入后预检。');return selected;
+}
+async function promoteModel(){const parameters=modelPromotionParameters();if(!parameters.model_id||!parameters.evaluation_id)throw new Error('请选择模型版本与离线评测报告');const signature=JSON.stringify(parameters),value=await api('api/comparison/models/promote',parameters);if(signature===JSON.stringify(modelPromotionParameters())){modelAliasReady(value.alias,'别名 '+value.alias+' 已更新');researchOutput('modelStatus',value);}else researchSubmissionNotice('模型别名更新已完成，当前表单选择已保留。');return value;}
+async function rollbackModel(){const alias=$('modelAlias').value.trim();if(!alias)throw new Error('请填写要回滚的模型别名');const value=await api('api/comparison/models/rollback',{alias});if(alias===$('modelAlias').value.trim()){modelAliasReady(alias,'别名 '+alias+' 已回滚到上一次通过评测的模型');researchOutput('modelStatus',value);}else researchSubmissionNotice('模型别名 '+alias+' 已回滚，当前别名输入已保留。');return value;}
 function initializeModelPanel(host){
-  const model=researchSection(host,'模型版本与发布门槛','选择已登记模型和匹配的原生离线报告，核对门槛后更新别名。更新别名不会替换正在运行的模型。');
+  const model=researchSection(host,'模型版本与发布门槛','选择已登记模型和匹配的原生离线报告，核对门槛后更新别名。默认权重不变，不会热加载；新比较需明确选择已评测别名。');
   const registration=el('details',undefined,'hub-secondary');registration.id='modelRegistrationDetails';registration.append(el('summary','登记新的检查点'),researchField('modelName','模型名称'),researchField('modelPath','检查点路径'),researchField('modelConfig','配置路径（可选）'));const register=researchButton('登记检查点',registerModel);register.id='modelRegister';registration.append(register);model.append(registration,researchSelect('registeredModel','模型版本',[['','请选择已登记模型']]),researchSelect('modelEvaluation','原生离线评测报告',[['','请选择匹配的评测报告']]),researchField('modelAlias','模型别名','candidate'));
   const gate=el('details',undefined,'hub-secondary'),summary=el('summary');summary.id='modelGateSummary';gate.append(summary,researchField('modelMaxError','关节误差上限 mm',100,'number'),researchField('modelCoverage','GT 几何覆盖率下限（0–1）',.95,'number'));model.append(gate);const actions=el('div',undefined,'button-row'),promote=researchButton('校验并更新别名',promoteModel),rollback=researchButton('回滚上一次已评测模型',rollbackModel);promote.id='modelPromote';rollback.id='modelRollback';actions.append(promote,rollback);model.append(actions);
+  const compare=researchButton('用已评测别名配置新比较',()=>usePublishedModelAlias($('modelConfigureComparison').dataset.alias));compare.id='modelConfigureComparison';compare.hidden=true;actions.append(compare);
   const status=el('p','请选择模型、评测报告和别名；服务端会核对它们的身份、来源与发布门槛。','hint');status.id='modelActionSummary';status.setAttribute('role','status');const details=el('details',undefined,'hub-secondary'),raw=el('pre',undefined,'research-output');raw.id='modelStatus';details.append(el('summary','操作详情与来源'),raw);model.append(status,details);for(const id of ['modelName','modelPath','modelConfig','registeredModel','modelEvaluation','modelAlias','modelMaxError','modelCoverage']){$(id).oninput=updateModelActions;$(id).onchange=updateModelActions;}updateModelActions();
 }
 function preflightSummary(value){return `${value.frames} 帧 · ${value.width}×${value.height} · ${Number(value.fps).toFixed(3)} FPS · ${value.gt?'附加 GT':'无 GT'} · ${value.calibration?'显式标定':'算法自身内参'}\nRGB ${(value.storage.rgb_bytes/2**30).toFixed(2)} GiB${value.storage.input_cached?'（缓存可复用）':''} · 可用 ${(value.storage.disk_free_bytes/2**30).toFixed(1)} GiB\n${[...value.errors,...value.warnings].join('\n')||'预检通过'}`;}
@@ -283,19 +357,32 @@ async function checkWorkflowReadiness(){
 }
 async function refreshWorkflowDatasetChoices(){
   const kind=$('workflowKind').value;
-  return loadRegistryChoices('dataset','workflowDataset',{filter:row=>kind==='curate_dataset'?row.status==='reviewed_manifest':!!row.training_ready,empty:kind==='curate_dataset'?'选择已接受复核的筛选版本':'选择已验证训练版本，或使用配置中的数据'});
+  const value=await loadRegistryChoices('dataset','workflowDataset',{filter:row=>kind==='curate_dataset'?row.status==='reviewed_manifest':!!row.training_ready,empty:kind==='curate_dataset'?'选择已接受复核的筛选版本':'选择已验证训练版本，或使用配置中的数据'});
+  if(!value||kind!==$('workflowKind').value)return null;researchUI.workflowDatasets=value.records;updateWorkflowDatasetSummary();return value;
+}
+function updateWorkflowDatasetSummary(){
+  const host=$('workflowDatasetSummary');if(!host)return;const id=$('workflowDataset').value,dataset=(researchUI.workflowDatasets||[]).find(row=>row.id===id);
+  if(!id){host.textContent=$('workflowKind').value==='curate_dataset'?'请选择已接受复核的筛选清单；导出前仍需预检来源与官方划分。':'未选择数据版本：使用训练配置中的数据；预检会核对实际来源和监督格式。';return;}
+  if(!dataset){host.textContent='所选版本的来源尚未读取，请刷新后核对。';return;}
+  const pseudo=dataset.label_role==='model_generated_pseudo_labels'||!!dataset.requires_training_opt_in,native=dataset.native?.plan,split=dataset.split||native?.split;
+  const role=pseudo?'模型生成伪标签，需明确允许后训练':dataset.status==='reviewed_manifest'?'人工接受的预测筛选清单，尚非训练格式':native?'官方参考标注':dataset.label_role||'标注来源见版本详情';
+  const plan=dataset.provenance?.label_origin?.plan,source=native?`来源：${native.dataset} / ${native.sequence}`:dataset.parent_curation_id?'来源复核清单：'+dataset.parent_curation_id.slice(0,12):Array.isArray(plan)?`来源：${plan.length} 个原生推理结果`:dataset.entries?.length?`来源：${dataset.entries.length} 个复核片段`:null;
+  host.textContent=[dataset.name||dataset.id,role,split?'划分：'+({train:'Train',val:'Validation',validation:'Validation',test:'Test'}[split]||split):'',source].filter(Boolean).join(' · ');
 }
 async function renderWorkflowNextSteps(value){
   const host=$('workflowNextSteps');if(!host)return;host.dataset.workflow=value.id;host.replaceChildren();
-  host.append(el('span',`${value.request.name||value.request.kind} · ${statusLabel(value.status)}${value.error?' · '+value.error:''}`,'hint'));
   if(value.request.kind==='train'){host.append(researchButton('查看训练曲线与检查点',()=>selectTrainingCurve(value.id)));}
   if(value.status!=='completed'||!value.output?.dataset_id)return;
   const dataset=await api('api/comparison/registry/record/'+value.output.dataset_id);if(host.dataset.workflow!==value.id)return;
-  if(dataset.native)host.append(researchButton('用此数据版本创建比较',async()=>{await openPlatform('data');await refreshNativeVersions();$('nativeVersion').value=dataset.id;revealPlatformTarget($('nativeVersion'));}));
+  if(dataset.native)host.append(researchButton('用此数据版本创建比较',()=>useNativeDataset(dataset)));
   if(dataset.training_ready)host.append(researchButton('用此数据版本配置训练',async()=>{await useTrainingDataset(dataset);}));
   else host.append(el('span','此版本用于评测或尚未具备训练格式，未开放训练捷径。','hint'));
 }
-async function useTrainingDataset(dataset){
-  const serial=researchUI.datasetHandoffSerial=(researchUI.datasetHandoffSerial||0)+1;await openPlatform('research');const navigation=platform.serial;$('workflowKind').value='train';updateWorkflowFields();const expected=$('workflowDataset').value;await refreshWorkflowDatasetChoices();if($('workflowDataset').value!==expected)return null;if(serial!==researchUI.datasetHandoffSerial||navigation!==platform.serial||platform.pane!=='research'||$('workflowKind').value!=='train')return null;
-  if(!Array.from($('workflowDataset').options).some(option=>option.value===dataset.id))throw new Error('此数据版本不在可用训练列表中，请刷新后重新选择');$('workflowDataset').value=dataset.id;$('workflowPseudoOptIn').checked=false;invalidateWorkflowReadiness();revealPlatformTarget($('workflowDataset'));if(dataset.label_role==='model_generated_pseudo_labels'||dataset.requires_training_opt_in)$('workflowCheck').textContent='已选择模型伪标签数据；请明确勾选允许伪标签训练，再预检配置。';return dataset;
+async function configureWorkflowDataset(dataset,kind){
+  const serial=researchUI.datasetHandoffSerial=(researchUI.datasetHandoffSerial||0)+1;await openPlatform('research');const navigation=platform.serial;showResearchView('train');$('workflowKind').value=kind;updateWorkflowFields();const expected=$('workflowDataset').value;await refreshWorkflowDatasetChoices();if($('workflowDataset').value!==expected)return null;if(serial!==researchUI.datasetHandoffSerial||navigation!==platform.serial||platform.pane!=='research'||!$('platformDialog').open||nextUI.researchView!=='train'||$('workflowKind').value!==kind)return null;
+  chooseRegistryRecord('workflowDataset',dataset);if(!(researchUI.workflowDatasets||[]).some(row=>row.id===dataset.id))researchUI.workflowDatasets=[...(researchUI.workflowDatasets||[]),dataset];updateWorkflowDatasetSummary();$('workflowPseudoOptIn').checked=false;invalidateWorkflowReadiness();revealPlatformTarget($('workflowDataset'));
+  if(kind==='curate_dataset')$('workflowCheck').textContent='已选择复核清单；请先预检再提交相机伪标签导出。复核记录与二维修正不会自动成为三维或 MANO 真值。';
+  else if(dataset.label_role==='model_generated_pseudo_labels'||dataset.requires_training_opt_in)$('workflowCheck').textContent='已选择模型伪标签数据；请明确勾选允许伪标签训练，再预检配置。';return dataset;
 }
+async function useTrainingDataset(dataset){if(!dataset.training_ready)throw new Error('此数据版本尚未具备训练格式');return configureWorkflowDataset(dataset,'train');}
+async function useReviewedDataset(dataset){if(dataset.status!=='reviewed_manifest')throw new Error('请选择已接受复核的筛选清单');return configureWorkflowDataset(dataset,'curate_dataset');}

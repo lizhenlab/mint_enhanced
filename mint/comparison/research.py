@@ -16,6 +16,15 @@ from .results import paired_metrics
 KINDS = {'artifact', 'protocol', 'evaluation', 'review', 'dataset', 'model', 'experiment', 'deployment', 'annotation'}
 
 
+def validate_protocol_samples(protocol):
+    """A frozen input must not disappear into evaluation's sample-ID lookup."""
+    seen = set()
+    for entry in protocol['entries']:
+        if entry['sample_id'] in seen:
+            raise ValueError('固定协议包含重复输入；同一输入协议请选择一份比较，不能重复选择不同历史记录')
+        seen.add(entry['sample_id'])
+
+
 def training_source_keys(manager, training):
     """Include canonical native origins for older immutable registry versions."""
     from .native_sources import native_source_key, source_provenance
@@ -207,12 +216,14 @@ class ResearchRegistry:
                 'sample_request': comparison['sample_request'], 'dataset_context': comparison.get('dataset_context'), 'split': split,
                 'reference_run': reference['id'], 'reference_identity': file_identity(self.manager.root / 'runs' / reference['id'] / 'result/result.json'),
                 'gt_hand_slots': int(np.count_nonzero(arrays['geometry_valid']))})
+        validate_protocol_samples({'entries': entries})
         return self.put('protocol', {'name': str(name)[:200], 'entries': entries, 'tags': list(tags or []),
             'metric_contract': 'same-input-openpose21-v1; geometry intersection, coverage includes missing/failed predictions',
             'input_information': 'GT is reference-only unless explicit calibration was frozen in the sample request'})
 
     def evaluate(self, *, protocol_id, run_ids, name='Offline fixed-protocol evaluation', split='test'):
         protocol = self.get(protocol_id, 'protocol')
+        validate_protocol_samples(protocol)
         if split not in {'validation', 'test'} or not isinstance(run_ids, list) or not run_ids or len(run_ids) > 1000:
             raise ValueError('Choose validation/test and explicit published or failed run IDs')
         entries = {e['sample_id']: e for e in protocol['entries'] if e['split'] == split}

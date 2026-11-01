@@ -97,7 +97,7 @@ function renderHistoryList(){
     row.onclick=()=>{if(window.innerWidth<=1100){workspaceUI.mobileSidebar=false;applyLayout();}openComparison(value.id).catch(e=>notify(e.message));};groupItems.append(row);
     }
   }
-  if(!rows.length)host.append(el('p',workspaceUI.history.length?'没有符合筛选条件的任务。':'还没有比较任务，点击右上角新建。','empty-hint'));
+  if(!rows.length)host.append(el('p',workspaceUI.history.length?'没有符合筛选条件的比较记录。':'还没有比较记录，点击右上角新建。','empty-hint'));
   host.scrollTop=scroll;
 }
 function updateHistorySelection(){
@@ -109,13 +109,14 @@ function syncSessionSummary(value){
   $('sessionStatus').dataset.state=status;$('sessionStatus').title=comparisonReferenceSummary(value);$('sessionTitle').title=[comparisonDisplayName(value),comparisonSourceSummary(value).description,'比较 ID：'+value.id].join('\n');
   const prior=workspaceUI.history.findIndex(v=>v.id===value.id);
   if(prior>=0){const changed=workspaceUI.history[prior].runs.map(r=>r.status).join()!==value.runs.map(r=>r.status).join();workspaceUI.history[prior]=value;if(changed)renderHistoryList();}
-  if(typeof refreshPlatformContext==='function')refreshPlatformContext();
+  if(typeof refreshPlatformContext==='function')refreshPlatformContext();if(typeof updateDiagnosticReturnLinks==='function')updateDiagnosticReturnLinks();
   const sample=value.sample;
   if(typeof syncPlaybackReadiness==='function')syncPlaybackReadiness();
   const results=value.runs.filter(r=>r.result).length;$('exportVideo').disabled=!sample||!results||!!state.exporting;
   if(sample){$('frameJump').max=sample.frames;$('sampleInfo').title=comparisonSourceSummary(value).description+'\n'+comparisonReferenceSummary(value);}
 }
 function openTaskDialog(importMode=false){
+  workspaceUI.taskDialogSession=(workspaceUI.taskDialogSession||0)+1;
   if($('platformDialog').open)$('platformDialog').close();
   pause();$('formError').textContent='';$('taskDialogTitle').textContent=importMode?'导入已有算法结果':'新建算法比较';
   if(!$('taskDialog').open)$('taskDialog').showModal();
@@ -196,7 +197,7 @@ function initializeWorkspace(){
   for(const button of document.querySelectorAll('[data-history-filter]'))button.onclick=()=>{workspaceUI.filter=button.dataset.historyFilter;for(const other of document.querySelectorAll('[data-history-filter]')){const selected=other===button;other.classList.toggle('active',selected);other.setAttribute('aria-pressed',String(selected));}renderHistoryList();};
   for(const id of ['newComparison','welcomeNew','editComparison'])$(id).onclick=()=>openTaskDialog();
   for(const id of ['openImport','manageImport'])$(id).onclick=()=>openTaskDialog(true);
-  $('closeTask').onclick=()=>$('taskDialog').close();
+  $('closeTask').onclick=()=>$('taskDialog').close();$('taskDialog').addEventListener('close',()=>{workspaceUI.taskDialogSession=(workspaceUI.taskDialogSession||0)+1;});
   $('importAlgorithm').onchange=updateImportFormats;$('importFormat').onchange=()=>{$('importGridLabel').hidden=$('importFormat').value!=='hawor_world_npz';};
   const jumpToFrame=()=>{const field=$('frameJump'),frame=comparisonJumpFrame(field.value,state.comparison?.sample?.frames);if(frame===null){if(field.value.trim())field.reportValidity();return;}field.value=String(frame+1);seek(frame);};
   $('frameJump').onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();jumpToFrame();}};

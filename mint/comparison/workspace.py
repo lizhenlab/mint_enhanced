@@ -235,9 +235,9 @@ class WorkspaceServices:
             self.index.sync(self._snapshot_tasks())
             self._indexed_at = time.monotonic()
 
-    def tasks(self, *, limit=100, offset=0, query='', status='all'):
+    def tasks(self, *, limit=100, offset=0, query='', status='all', kind='all'):
         self.refresh_index()
-        page = self.index.page(limit=limit, offset=offset, query=query, status=status)
+        page = self.index.page(limit=limit, offset=offset, query=query, status=status, kind=kind)
         scheduler = getattr(getattr(self.legacy, 'predictor', None), 'gpu_scheduler_status', {}) if self.legacy else {}
         return {**page, 'resource': scheduler, 'resources': self.resources.snapshot(),
                 'cached_predictions': self.cached_predictions()}

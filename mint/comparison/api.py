@@ -389,7 +389,7 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
     def workspace_index():
         workflows()
         return jsonify(json_values(workspace().tasks(limit=request.args.get('limit', 100),
-            offset=request.args.get('offset', 0), query=request.args.get('query', ''), status=request.args.get('status', 'all'))))
+            offset=request.args.get('offset', 0), query=request.args.get('query', ''), status=request.args.get('status', 'all'), kind=request.args.get('kind', 'all'))))
 
     @blueprint.get('/api/comparison/capabilities')
     def workspace_capabilities():

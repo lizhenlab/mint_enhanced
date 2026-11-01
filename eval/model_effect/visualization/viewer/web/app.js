@@ -118,8 +118,25 @@ function diagnosticPageURL(baseURI,parameters){
   const current=new URL(baseURI),url=new URL('diagnostics',diagnosticBaseURL(baseURI));
   if(parameters){
     for(const [key,value] of Object.entries(parameters))if(value!==undefined&&value!==null&&value!=='')url.searchParams.set(key,String(value));
+    const back=diagnosticSafeReturnPath(baseURI,current.searchParams.get('return_to'));if(back)url.searchParams.set('return_to',back);
   }else{url.search=current.search;url.hash=current.hash;}
   return url;
+}
+function diagnosticSafeReturnPath(baseURI,returnTo){
+  const base=diagnosticBaseURL(baseURI),raw=String(returnTo||'').trim();
+  if(!raw.startsWith('/')||raw.startsWith('//')||raw.includes('\\'))return null;
+  let chosen;try{chosen=new URL(raw,base);}catch(_){return null;}
+  const compare=new URL('compare',base);
+  if(chosen.origin!==base.origin||chosen.pathname.replace(/\/$/,'')!==compare.pathname)return null;
+  chosen.pathname=compare.pathname;chosen.searchParams.delete('return_to');
+  return chosen.pathname+chosen.search+chosen.hash;
+}
+function diagnosticWorkspaceReturnURL(baseURI,returnTo,target='compare'){
+  const base=diagnosticBaseURL(baseURI),fallback=new URL(target,base),safe=diagnosticSafeReturnPath(baseURI,returnTo);
+  if(!safe)return fallback;const chosen=new URL(safe,base);
+  if(target==='compare')return chosen;
+  if(target==='compare?hub=tools')for(const key of ['id','run'])if(chosen.searchParams.has(key))fallback.searchParams.set(key,chosen.searchParams.get(key));
+  return fallback;
 }
 const API_BASE = diagnosticBaseURL(document.baseURI).href;
 const U = p => new URL(String(p).replace(/^\/+/, ''),API_BASE).href;
@@ -174,7 +191,8 @@ function showDiagnosticView(mode,{focus=false,updateURL=true}={}){
   if(mode==='results'&&state.loaded) requestDraw();
 }
 function wireDiagnosticViews(){
-  document.querySelectorAll('[data-workspace-link]').forEach(link=>{link.href=U(link.dataset.workspaceLink);});
+  const returnTo=new URLSearchParams(location.search).get('return_to');
+  document.querySelectorAll('[data-workspace-link]').forEach(link=>{link.href=diagnosticWorkspaceReturnURL(document.baseURI,returnTo,link.dataset.workspaceLink).href;});
   document.querySelectorAll('button[data-diagnostic-view]').forEach(button=>{
     button.onclick=()=>showDiagnosticView(button.dataset.diagnosticView,{focus:true});
   });
@@ -284,6 +302,7 @@ function updateLoadBtn(){
   for(const id of ['#inBrow','#diagnosticModelBrowser']){const el=$(id);if(el)el.inert=!!state.loading;}
   const rawButton=$('#loadRawBtn');if(rawButton)rawButton.disabled=state.loading||!(curDatasetRel!==null&&EP_TOTAL>0);
   if(typeof renderBatch === 'function') renderBatch();
+  if(typeof syncMujocoButton==='function')syncMujocoButton();
 }
 let modelReadyTimer = null;
 let modelReadyPolling = false;
@@ -750,7 +769,7 @@ function onLoadRawClick(){
     state.comparisonSnapshot={
       loaded:true, fps:state.fps, nframes:state.nframes,
       epIdx:state.epIdx, epOrdinal:state.epOrdinal, epTotal:state.epTotal,
-      sourceName:state.sourceName, sourcePath:state.sourcePath,
+      sourceName:state.sourceName, sourcePath:state.sourcePath, resultModelTag:state.resultModelTag,
       gt:state.gt, pred:state.pred, metrics:state.metrics,
       metricsError:state.metricsError, nums:state.nums,
       layout:state.layout, inferenceDirty:state.inferenceDirty,
@@ -767,7 +786,7 @@ async function loadEpisode(eid, {explicitInference=false, restoredHandMode=null}
     queueInference('输入或设置已更新，点击 [▶ 开始推理] 才会运行模型');
     return;
   }
-  const btn = $('#loadBtn'), rawBtn = $('#loadRawBtn');
+  const btn = $('#loadBtn'), rawBtn = $('#loadRawBtn'),requestModelTag=typeof CKPT_TAG==='undefined'?'':CKPT_TAG;
   state.eid = eid; state.loading = true; state.stopped = false; state.cancelling = false;
   if(curDatasetRel !== null) _epCtlDisabled(true);             // 请求期间锁定 eid，避免结果与选择错位
   if(rawBtn) rawBtn.disabled = true;                          // 加载中禁用另一颗
@@ -820,6 +839,7 @@ async function loadEpisode(eid, {explicitInference=false, restoredHandMode=null}
       state.gt = d.gt; state.pred = d.pred; state.metrics = d.metrics || null;
       state.metricsError = d.metrics_error || null;
       state.nums = d.nums || null;
+      state.resultModelTag=state.rawOnly?'':requestModelTag;
       state.loaded = true; state.inferenceDirty = false;
       _lastMF = -1;                                                          // 强制刷新误差面板
       for(const k in state.views){ const v=state.views[k];                   // 换输入复位各块视角
@@ -2395,17 +2415,22 @@ async function analysisDirGo(path){
 function wireDatasetAnalysis(){
   const button=$('#datasetAnalysisBtn'), launcher=$('#datasetAnalysisLauncher');
   const close=$('#analysisClose'), browse=$('#analysisBrowse');
-  if(button) button.onclick=()=>{
-    if(!launcher) return;
-    launcher.classList.toggle('open');
-    button.setAttribute('aria-expanded',launcher.classList.contains('open')?'true':'false');
+  const menuOptions=[...document.querySelectorAll('[data-analysis-type]')];
+  const setMenu=(open,{focus=null}={})=>{
+    if(!launcher)return;launcher.classList.toggle('open',open);button?.setAttribute('aria-expanded',String(open));
+    if(focus!==null){const active=menuOptions.filter(option=>!option.disabled);active[focus<0?active.length-1:focus]?.focus();}
   };
-  document.querySelectorAll('[data-analysis-type]').forEach(option=>option.onclick=()=>{
-    selectDatasetAnalysis(option.dataset.analysisType||'video');
-    if(launcher) launcher.classList.remove('open');
-    option.blur();
-    if(button){ button.setAttribute('aria-expanded','false'); button.blur(); }
-  });
+  if(button){button.onclick=()=>setMenu(!launcher?.classList.contains('open'));
+    button.onkeydown=event=>{if(['ArrowDown','ArrowUp','Enter',' '].includes(event.key)){event.preventDefault();event.stopPropagation();setMenu(true,{focus:event.key==='ArrowUp'?-1:0});}else if(event.key==='Escape'&&launcher?.classList.contains('open')){event.preventDefault();event.stopPropagation();setMenu(false);}};}
+  for(const option of menuOptions){option.tabIndex=-1;option.onclick=()=>{selectDatasetAnalysis(option.dataset.analysisType||'video');setMenu(false);button?.focus();};
+    option.onkeydown=event=>{const active=menuOptions.filter(item=>!item.disabled),index=active.indexOf(option);let next;
+      if(event.key==='ArrowDown')next=(index+1)%active.length;else if(event.key==='ArrowUp')next=(index+active.length-1)%active.length;
+      else if(event.key==='Home')next=0;else if(event.key==='End')next=active.length-1;
+      else if(event.key==='Escape'){event.preventDefault();event.stopPropagation();setMenu(false);button?.focus();return;}
+      else if(event.key==='Tab'){setMenu(false);return;}else return;
+      event.preventDefault();event.stopPropagation();active[next]?.focus();};
+  }
+  document.addEventListener('click',event=>{if(launcher&&!launcher.contains(event.target))setMenu(false);});
   if(close) close.onclick=()=>showDatasetAnalysis(false);
   const useCurrent=$('#analysisUseCurrent');
   if(useCurrent) useCurrent.onclick=()=>{
@@ -5067,13 +5092,14 @@ function syncMujocoButton(){
   for(const [selector,id] of [['#mujocoBtn','mujoco_3d'],['#retargetBtn','wuji_retarget_3d']]){
     const button=$(selector);
     if(button){
-      const on=!state.hidden.has(id);
+      const on=!state.hidden.has(id);button.disabled=!state.loaded||state.loading;button.title=button.disabled?'请先在配置中加载诊断结果；点击不会自动推理':id==='mujoco_3d'?'在已有诊断结果上生成 MuJoCo 几何展示':'在已有诊断结果上生成 Wuji Hand 运动学视频';
       button.classList.toggle('on',on);
       button.setAttribute('aria-pressed',on?'true':'false');
     }
   }
 }
 function toggleMujocoPanel(){
+  if(!state.loaded||state.loading){info.textContent='请先加载诊断结果后再生成展示视频';return;}
   showDiagnosticView('results');
   if(state.hidden.has('mujoco_3d')) state.hidden.delete('mujoco_3d');
   else state.hidden.add('mujoco_3d');
@@ -5081,6 +5107,7 @@ function toggleMujocoPanel(){
   buildPanels(true);
 }
 function toggleRetargetPanel(){
+  if(!state.loaded||state.loading){info.textContent='请先加载诊断结果后再生成展示视频';return;}
   showDiagnosticView('results');
   if(state.hidden.has('wuji_retarget_3d')) state.hidden.delete('wuji_retarget_3d');
   else state.hidden.add('wuji_retarget_3d');

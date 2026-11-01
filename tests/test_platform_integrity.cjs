@@ -21,7 +21,7 @@ function fixture(){
   const get=id=>nodes[id]??=(new Element(/Camera$|Episode$|Sequence$|Group$|Metric$|Version$|Dataset$/.test(id)?'select':'div'));
   const context=vm.createContext({console,URL,URLSearchParams,structuredClone,Number,Node:Element,
     document:{addEventListener(){},querySelectorAll(){return [];}},
-    window:{addEventListener(){},dispatchEvent(event){events.push(event);}},CustomEvent:class {constructor(type,options){this.type=type;this.detail=options.detail;}},
+    window:{addEventListener(){},dispatchEvent(event){events.push(event);},history:{replaceState(){},pushState(){}}},location:{href:'http://localhost/compare?hub=research',search:'?hub=research'},CustomEvent:class {constructor(type,options){this.type=type;this.detail=options.detail;}},
     setTimeout(fn){timers.set(++timer,fn);return timer;},clearTimeout(id){timers.delete(id);},
     $:get,el:(tag,text)=>new Element(tag,text),api:async()=>{throw new Error('Unexpected API request');},hubError(error){throw error;},
     state:{comparison:null},TERMINAL:new Set(['completed','failed','cancelled','interrupted']),STAGES:{},

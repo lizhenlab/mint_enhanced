@@ -4,6 +4,18 @@
 const resultView={comparison:null,selected:[],reference:null,candidate:null,layout:'pair',pairSide:'candidate',expanded:null,known:[],signature:'',protocolSignature:''};
 const RESULT_PREFERENCES='mint.compare.results.v1';
 
+// One numerical publication can replace a partial result under the same run ID.
+// Keep every view keyed to the published arrays, rather than just the run name.
+function resultRevision(run){
+  const result=run?.result;
+  const arrays=Object.entries(result?.arrays||{}).sort(([a],[b])=>a.localeCompare(b)).map(([name,record])=>{
+    const file=record.file||{};return [name,record.shape,record.dtype,...['path','size','mtime_ns','ctime_ns','inode','missing'].map(key=>file[key]??null)];
+  });
+  return JSON.stringify([run?.id??null,run?.status??null,result?[result.run_id??null,result.frames??null,result.reference_role??null,arrays]:null]);
+}
+function comparisonResultRevision(comparison){return JSON.stringify([comparison?.id??null,comparison?.sample_id??null,comparison?.common_world_origin_source_frame??null,(comparison?.runs||[]).filter(run=>run.result).map(resultRevision)]);}
+function resultFrameKey(run,start,origin){return JSON.stringify([run.id,resultRevision(run),start,origin??null]);}
+
 function defaultResultSelection(runs){
   if(!runs.length)return {selected:[],reference:null};
   const reference=runs.find(run=>run.result?.reference_role==='user_declared_ground_truth')||runs.find(run=>run.algorithm==='mint')||runs[0];
@@ -251,4 +263,4 @@ function renderMetrics(rows){
   }
 }
 
-if(typeof module!=='undefined')module.exports={defaultResultSelection,normalizeResultSelection,toggleResultSelection,metricValue,metricPairScope,filterMetricRows,handPostprocessLabel,runProtocol,resultCandidate,resultCandidateNavigation,resultStateLabel,resultReferenceRole,displayResultIds,comparisonGridPlan,comparisonMetricSelection};
+if(typeof module!=='undefined')module.exports={resultRevision,comparisonResultRevision,resultFrameKey,defaultResultSelection,normalizeResultSelection,toggleResultSelection,metricValue,metricPairScope,filterMetricRows,handPostprocessLabel,runProtocol,resultCandidate,resultCandidateNavigation,resultStateLabel,resultReferenceRole,displayResultIds,comparisonGridPlan,comparisonMetricSelection};

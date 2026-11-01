@@ -34,29 +34,46 @@ function buildAlgorithms(){
 }
 function inputBody(){const camera=$('camera').value.trim();return decorateInputBody({source:$('source').value.trim(),view:$('view').value,target_fps:Number($('targetFps').value),start_frame:Number($('startFrame').value),max_frames:$('maxFrames').value===''?null:Number($('maxFrames').value),camera:camera?JSON.parse(camera):null,execution:{priority:$('executionPriority')?.value||'interactive',cache:$('executionCache')?.value||'exact'}});}
 function selectedAlgorithms(){return selectedAlgorithmsFrom($('algorithmOptions'));}
-async function submit(){try{$('formError').textContent='';validateTaskInput();const selections=selectedAlgorithms();if(!selections.length)throw new Error('至少选择一个算法');$('start').disabled=true;const preflight=await preflightComparison();if(!preflight.ready)throw new Error(preflight.errors.join('；'));const result=await api('api/comparisons',{...inputBody(),selections});await openComparison(result.id);$('taskDialog').close();await loadHistory();}catch(error){$('formError').textContent=error.message;}finally{$('start').disabled=false;}}
-async function refreshExisting(){if(!state.comparison)return;const data=await api('api/comparisons?limit=100');const select=$('existingRun');select.replaceChildren();const seen=new Set(state.comparison.run_ids);for(const value of data.comparisons){if(value.sample_id!==state.comparison.sample_id)continue;for(const run of value.runs){if(seen.has(run.id))continue;seen.add(run.id);const option=el('option',`${run.label} · ${STAGES[run.status]||run.status} · ${run.id.slice(0,8)}`);option.value=run.id;select.append(option);}}}
-async function loadHistory(){const data=await api('api/comparisons?limit=100');workspaceUI.history=data.comparisons;renderHistoryList();}
+function comparisonDraftPayload(){return structuredClone({...inputBody(),selections:selectedAlgorithms()});}
+function comparisonDraftSignature(payload=comparisonDraftPayload()){return JSON.stringify(payload);}
+function comparisonNavigation(){return [state.pollToken,state.comparison?.id??null,typeof platform==='undefined'?null:platform.serial,workspaceUI.taskDialogSession??null];}
+function comparisonNavigationCurrent(context){return JSON.stringify(comparisonNavigation())===JSON.stringify(context);}
+function comparisonDraftCurrent(signature,navigation,payload=comparisonDraftPayload){try{return $('taskDialog').open&&comparisonNavigationCurrent(navigation)&&signature===JSON.stringify(payload());}catch(_){return false;}}
+async function submit(){
+  if(state.submitting)return;let signature,navigation,posted=false;
+  try{
+    $('formError').textContent='';validateTaskInput();const payload=comparisonDraftPayload();if(!payload.selections.length)throw new Error('至少选择一个算法');signature=comparisonDraftSignature(payload);navigation=comparisonNavigation();state.submitting=true;$('start').disabled=true;
+    const preflight=await preflightComparison(payload);if(!comparisonNavigationCurrent(navigation)||!$('taskDialog').open)return;
+    if(!comparisonDraftCurrent(signature,navigation))throw new Error('输入或算法参数已变化，请重新预检');if(!preflight?.ready)throw new Error(preflight?.errors?.join('；')||'当前输入尚未通过预检');
+    posted=true;const result=await api('api/comparisons',payload);
+    if(!comparisonDraftCurrent(signature,navigation)){notify('比较已提交，当前页面与草稿已保留；可在比较记录或任务中心查看。',false);loadHistory().catch(()=>{});return result;}
+    const opening=state.pollToken+1;await openComparison(result.id);if(state.pollToken===opening&&state.comparison?.id===result.id)$('taskDialog').close();await loadHistory();return result;
+  }catch(error){if(!navigation||comparisonNavigationCurrent(navigation)&&$('taskDialog').open)$('formError').textContent=error.message;else if(posted)notify('此前比较提交未确认，可在任务中心核对：'+error.message);}
+  finally{state.submitting=false;$('start').disabled=false;}
+}
+async function refreshExisting(){if(!state.comparison)return;const comparison=state.comparison,token=state.pollToken,serial=state.existingSerial=(state.existingSerial||0)+1,old=$('existingRun').value;const data=await api('api/comparisons?limit=100');if(token!==state.pollToken||comparison.id!==state.comparison?.id||serial!==state.existingSerial)return;const select=$('existingRun');select.replaceChildren();const seen=new Set(comparison.run_ids);for(const value of data.comparisons){if(value.sample_id!==comparison.sample_id)continue;for(const run of value.runs){if(seen.has(run.id))continue;seen.add(run.id);const option=el('option',`${run.label} · ${STAGES[run.status]||run.status} · ${run.id.slice(0,8)}`);option.value=run.id;select.append(option);}}if([...select.options].some(option=>option.value===old))select.value=old;}
+async function loadHistory(){const serial=workspaceUI.historySerial=(workspaceUI.historySerial||0)+1,data=await api('api/comparisons?limit=100');if(serial!==workspaceUI.historySerial)return;workspaceUI.history=data.comparisons;renderHistoryList();}
 async function openComparison(id,{replace=false,history=true,keepPlatform=false}={}){
+  const draftSession=workspaceUI.taskDialogSession,restoreDraft=()=>workspaceUI.taskDialogSession===draftSession&&!$('taskDialog').open;
   if(!keepPlatform&&$('platformDialog').open)$('platformDialog').close();
   $('refreshMetrics').disabled=false;
-  pause();state.pollToken++;resetGeometryCache();state.cache.clear();state.loading.clear();state.cards.clear();state.comparison=null;state.metricsKey='';state.metricsRows=null;state.metricRequest=null;state.frame=0;state.lastRendered=-1;state.frameBuffer=null;
+  pause();state.pollToken++;resetGeometryCache();state.cache.clear();state.loading.clear();state.cards.clear();state.comparison=null;state.metricsKey='';state.metricsRows=null;state.metricsRowsKey=null;state.metricRequest=null;state.frame=0;state.lastRendered=-1;state.frameBuffer=null;
   $('workspace').setAttribute('aria-busy','true');$('sessionTitle').textContent='正在读取比较任务…';$('sessionStatus').textContent='';$('sampleInfo').textContent='';
   for(const control of ['editComparison','downloadReport','exportVideo','play','prev','next','timeline','frameJump','snapshot'])$(control).disabled=true;
   $('runs').replaceChildren();$('welcome').hidden=true;$('workspace').hidden=false;setWorkspaceTab('view');const token=state.pollToken;
   document.querySelectorAll('[data-comparison]').forEach(row=>{const active=row.dataset.comparison===id;row.classList.toggle('active',active);if(active)row.setAttribute('aria-current','page');else row.removeAttribute('aria-current');});
-  await refresh(id,token);if(token!==state.pollToken)return;restoreForm();$('workspace').setAttribute('aria-busy','false');$('editComparison').disabled=false;$('downloadReport').disabled=false;
-  if(history){const query=new URLSearchParams(location.search),method=replace||query.get('id')===id?'replaceState':'pushState';if(!keepPlatform)for(const key of ['hub','section','collection','tool_job','tools_tab','study','research_tab','source_type'])query.delete(key);query.set('id',id);window.history[method](null,'','/compare?'+query.toString());}
+  await refresh(id,token);if(token!==state.pollToken)return;if(restoreDraft())restoreForm();$('workspace').setAttribute('aria-busy','false');$('editComparison').disabled=false;$('downloadReport').disabled=false;
+  if(history){const query=new URLSearchParams(location.search),method=replace||query.get('id')===id?'replaceState':'pushState';if(!keepPlatform)for(const key of ['hub','section','collection','tool_job','tools_tab','workflow','study','research_tab','source_type','task_query','task_status','task_kind'])query.delete(key);query.set('id',id);window.history[method](null,'','/compare?'+query.toString());}
   try{localStorage.setItem('mint.compare.last',id);}catch(_){}
-  updateHistorySelection();await refreshExisting();restoreDatasetForm(state.comparison);poll(id,token);
+  updateHistorySelection();await refreshExisting();if(token!==state.pollToken)return;if(restoreDraft())restoreDatasetForm(state.comparison);poll(id,token);
 }
 function restoreForm(){const item=state.comparison?.sample_request;if(!item)return;$('source').value=item.source.path;$('examples').value=[...$('examples').options].some(option=>option.value===item.source.path)?item.source.path:'';$('view').value=item.view;$('targetFps').value=item.target_fps;$('startFrame').value=item.start_frame;$('maxFrames').value=item.max_frames??'';$('camera').value=item.camera?JSON.stringify(item.camera,null,2):'';
   for(const box of $('algorithmOptions').querySelectorAll('.algorithm')){const run=state.comparison.runs.find(r=>r.algorithm===box.dataset.algorithm);const check=box.querySelector('input[type=checkbox]');check.checked=!!run&&!check.disabled;const checkpoints=box.querySelector('[data-selection=checkpoint]'),configuration=box.querySelector('[data-selection=config]');if(checkpoints)checkpoints.value=state.comparison.runs.filter(r=>r.algorithm===box.dataset.algorithm&&r.checkpoint).map(r=>r.checkpoint).join('\n');if(configuration)configuration.value=run?.config||'';if(run)for(const field of box.querySelectorAll('[data-option]'))if(run.options[field.dataset.option]!==undefined&&run.options[field.dataset.option]!==null)field.value=field.dataset.option==='max_gpus'&&run.algorithm!=='mint'&&!run.result?.parallel_stages?8:run.options[field.dataset.option];}}
 async function poll(id,token){while(token===state.pollToken){await new Promise(resolve=>setTimeout(resolve,1000));if(token!==state.pollToken)return;try{await refresh(id,token);if(state.comparison.runs.every(r=>TERMINAL.has(r.status)))return;}catch(error){notify(error.message);}}}
-async function refresh(id,token){const value=await api(`api/comparisons/${id}`);if(token!==state.pollToken)return;state.comparison=value;if(typeof syncToolsComparison==='function')syncToolsComparison();syncSessionSummary(value);$('sessionTitle').textContent=comparisonDisplayName(value);const sample=value.sample;$('sampleInfo').textContent=sample?`${sample.frames} 帧 · ${sample.width}×${sample.height} · ${fmt(sample.fps,4)} FPS · ${{full:'完整画面',left:'左眼',right:'右眼'}[sample.request.view]||sample.request.view} · 源索引 ${sample.source_frame_indices[0]}…${sample.source_frame_indices.at(-1)}（从 0 开始）`:'共享输入准备中';if(sample){$('timeline').max=sample.frames-1;}
+async function refresh(id,token){if(token!==state.pollToken)return;const serial=state.refreshSerial=(state.refreshSerial||0)+1,value=await api(`api/comparisons/${id}`);if(token!==state.pollToken||serial!==state.refreshSerial)return;state.comparison=value;const revision=comparisonResultRevision(value);if(revision!==state.metricsKey){state.metricsKey=revision;state.metricsRows=null;state.metricsRowsKey=null;state.metricRequest=null;$('refreshMetrics').disabled=false;$('metrics').textContent='打开此页后计算共同有效帧的数值。';if(workspaceUI.tab==='metrics')loadComparisonMetrics().catch(error=>notify(error.message));}if(typeof syncToolsComparison==='function')syncToolsComparison();syncSessionSummary(value);$('sessionTitle').textContent=comparisonDisplayName(value);const sample=value.sample;$('sampleInfo').textContent=sample?`${sample.frames} 帧 · ${sample.width}×${sample.height} · ${fmt(sample.fps,4)} FPS · ${{full:'完整画面',left:'左眼',right:'右眼'}[sample.request.view]||sample.request.view} · 源索引 ${sample.source_frame_indices[0]}…${sample.source_frame_indices.at(-1)}（从 0 开始）`:'共享输入准备中';if(sample){$('timeline').max=sample.frames-1;}
   for(const [index,run] of value.runs.entries()){let card=state.cards.get(run.id);if(!card){card=createCard(run,index);state.cards.set(run.id,card);$('runs').append(card.node);}updateCard(card,run,sample);}
-  syncResultTools(value);updateCombination();render(true);await ensureFrame(state.frame);if(token!==state.pollToken)return;render(true);
-  const key=value.runs.filter(r=>r.result).map(r=>r.id).join(',');if(key!==state.metricsKey){state.metricsKey=key;state.metricsRows=null;state.metricRequest=null;$('metrics').textContent='打开此页后计算共同有效帧的数值。';if(workspaceUI.tab==='metrics')loadComparisonMetrics().catch(error=>notify(error.message));}
+  syncResultTools(value);updateCombination();render(true);await ensureFrame(state.frame);if(token!==state.pollToken||serial!==state.refreshSerial)return;render(true);
+
 }
 function openRunDetails(card){
   const dialog=$('runDetailsDialog'),body=$('runDetailsBody');if(!dialog||!body)return;
@@ -66,6 +83,12 @@ function openRunDetails(card){
   const source=state.comparison?.sample_request?.source?.path;if(source)body.append(el('p','比较输入：'+source,'run-details-source'));
   for(const child of card.meta.children)body.append(child.cloneNode(true));
   if(!dialog.open)dialog.showModal();
+}
+async function performRunAction(runId,action,button){
+  if(button.dataset.busy==='true'||!state.comparison)return;const comparisonId=state.comparison.id,token=state.pollToken,current=()=>token===state.pollToken&&state.comparison?.id===comparisonId;button.dataset.busy='true';button.disabled=true;
+  try{await api(`api/comparison/runs/${runId}/${action}`,{});if(!current())return;await refresh(comparisonId,token);if(current()&&action==='resume')poll(comparisonId,token);}
+  catch(error){if(current())notify(error.message);}
+  finally{button.dataset.busy='false';if(current()){const card=state.cards.get(runId);if(card)updateCard(card,card.run,state.comparison.sample);}}
 }
 function createCard(run,index){
   const node=el('section',undefined,'run-card'),color=algorithmColor(run,index);node.style.setProperty('--run-color',color);node.setAttribute('aria-label',run.label+' 结果');node.setAttribute('role','listitem');
@@ -82,8 +105,8 @@ function createCard(run,index){
   const actionMenu=el('details',undefined,'run-action-menu'),menuSummary=el('summary','更多'),menuContent=el('div',undefined,'run-action-menu-content');menuSummary.setAttribute('aria-label',run.label+' 更多操作');actionMenu.append(menuSummary,menuContent);menuContent.append(log,geometry,details);
   actionMenu.addEventListener('toggle',()=>{if(actionMenu.open)for(const other of document.querySelectorAll('.run-action-menu[open]'))if(other!==actionMenu)other.open=false;});
   enlarge.setAttribute('aria-label',run.label+' 单列放大或返回对比');enlarge.onclick=async()=>{resultView.expanded=resultView.expanded===run.id?null:run.id;applyResultVisibility();render(true);const token=state.pollToken;await ensureFrame(state.frame);if(token===state.pollToken)render(true);};
-  cancel.onclick=async()=>{try{await api(`api/comparison/runs/${run.id}/cancel`,{});await refresh(state.comparison.id,state.pollToken);}catch(e){notify(e.message);}};
-  resume.onclick=async()=>{try{await api(`api/comparison/runs/${run.id}/resume`,{});poll(state.comparison.id,state.pollToken);await refresh(state.comparison.id,state.pollToken);}catch(e){notify(e.message);}};
+  cancel.onclick=()=>performRunAction(run.id,'cancel',cancel);
+  resume.onclick=()=>performRunAction(run.id,'resume',resume);
   log.onclick=async()=>{actionMenu.open=false;const token=state.pollToken;try{const value=await api(`api/comparison/runs/${run.id}/log`);if(token!==state.pollToken)return;$('logTitle').textContent=run.label+' · 运行日志';$('logText').textContent=value.text;$('logDialog').showModal();}catch(e){if(token===state.pollToken)notify(e.message);}};
   details.onclick=()=>{actionMenu.open=false;openRunDetails({run:state.cards.get(run.id)?.run||run,meta});};geometry.onclick=()=>{actionMenu.open=false;};
   const inspect=el('button','逐帧分析');inspect.onclick=event=>{event.stopPropagation();inspectResult(run.id);};actions.append(inspect,enlarge,cancel,resume,actionMenu);node.append(head,protocol,visuals,numbers,summary,actions,meta);
@@ -96,50 +119,50 @@ function createCard(run,index){
   return {node,title,status,gpu,reference,protocol,execution,enlarge,inspect,video,videoBox,overlay,canvas,label,numbers,meta,cancel,resume,geometry,coverage,origin,color,run,trajectory:null,trajectoryKey:''};
 }
 function updateCard(card,run,sample){
+  const revision=resultRevision(run);if(card.resultRevision!==revision){card.resultRevision=revision;card.trajectory=null;card.trajectoryKey='';card.trajectoryRequest=null;}
   card.run=run;card.node.dataset.status=run.status;const progress=run.progress||{};
   const protocol=runProtocol(run,sample);card.protocol.textContent=protocol.short;card.protocol.title=protocol.rows.map(([label,value])=>`${label}：${value}`).join('\n');
   card.status.textContent=`${STAGES[run.status]||run.status}${!TERMINAL.has(run.status)?' · '+(STAGES[progress.stage]||progress.stage||'等待调度'):''}${!TERMINAL.has(run.status)&&progress.total?` ${progress.done||0}/${progress.total}`:''}`;
   card.status.title=run.error||card.status.textContent;const gpu=runGpuSummary(run);card.gpu.textContent=gpu.text;card.gpu.title=gpu.title;
   const execution=runExecutionSummary(run);card.execution.textContent=execution;card.execution.hidden=!execution;
-  card.cancel.disabled=TERMINAL.has(run.status);card.cancel.hidden=TERMINAL.has(run.status);card.resume.hidden=!TERMINAL.has(run.status)||run.status==='completed';card.geometry.hidden=!run.result;
+  card.cancel.disabled=TERMINAL.has(run.status)||card.cancel.dataset.busy==='true';card.resume.disabled=card.resume.dataset.busy==='true';card.cancel.hidden=TERMINAL.has(run.status);card.resume.hidden=!TERMINAL.has(run.status)||run.status==='completed';card.geometry.hidden=!run.result;
   card.inspect.disabled=!run.result;card.inspect.title=run.result?'查看当前结果的逐帧数值':'结果发布后可逐帧分析';
   card.coverage.textContent=run.result?`${run.result.frames}/${sample?.frames||run.result.frames} 帧`:sample?`${sample.frames} 帧 · 等待结果`:'准备共享输入';
   card.origin.textContent=run.reuse?'复用原生结果':run.imported?'已有结果导入':run.result?.component_sources?'相机组合':run.result?.reused_native_stages_from?'阶段复用':run.algorithm==='mint'&&run.result?.native_timings?.forward_worker_seconds===0?'窗口结果复用':'原生推理';card.origin.title=run.reuse?'本次未运行网络；所示 GPU 与耗时属于原运行':run.result?.reused_native_stages_from?'已复用：'+run.result.reused_native_stages_from.stages.map(name=>STAGES[name]||name).join('、'):card.origin.textContent==='窗口结果复用'?'窗口未执行新的 GPU 前向；耗时包含读取、拼接和后处理，不代表冷启动耗时':'';
   if(sample&&!card.video.src&&card===state.cards.values().next().value){card.video.src=`comparison-media/${sample.id}.mp4`;card.video.load();}
-  const signature=`${run.status}:${run.result?.run_id||''}:${run.error||''}`;if(signature===card.metaSignature)return;card.metaSignature=signature;
+  const signature=revision+':'+(run.error||'');if(signature===card.metaSignature)return;card.metaSignature=signature;
   card.meta.replaceChildren();if(run.result){const r=run.result;for(const [label,value] of [['相机',r.camera_source||('T_world_camera'in r.arrays?'原生世界相机':'无世界相机')],['K',r.K_source||'标准结果内参'],['覆盖',`${r.frames}/${sample?.frames||r.frames} 帧`],['策略',r.native_mode||run.options.mode],[r.native_analysis_size||r.encoded_size||r.import_source?.image_size?'原生工作网格':'展示网格',(r.native_analysis_size||r.encoded_size||r.import_source?.image_size||[sample?.width,sample?.height]).join('×')],['版本',r.backend_version?.slice(0,12)||'组件组合'],['后处理',r.postprocess||'原生'],['工作进程耗时',fmt(r.timings?.worker_end_to_end_seconds,2)+' 秒'],['主进程 RSS 峰值',fmt(r.peak_rss_gib)+' GiB']]){card.meta.append(el('div',`${label}：${value}`));}if(r.parallel_stages)for(const [stage,v]of Object.entries(r.parallel_stages)){card.meta.append(el('div',`${stage}：${v.gpu_devices.length} 卡 · 峰值并发 ${v.peak_running_workers} · ${fmt(v.wall_seconds,1)} 秒 · ${v.completed_tasks}/${v.total_tasks} 任务`));}if(r.slam_runtime)card.meta.append(el('div',`SLAM：跟踪 ${fmt(r.slam_runtime.track_compute_seconds,1)} 秒 · 全局优化 ${fmt(r.slam_runtime.global_ba_seconds,1)} 秒 · 全帧轨迹 ${fmt(r.slam_runtime.trajectory_seconds,1)} 秒 · 保存 ${fmt(r.slam_runtime.checkpoint_seconds,1)} 秒`));if(card.origin.textContent==='窗口结果复用')card.meta.append(el('div','本次复用已有窗口预测，耗时不代表从零运行完整模型。'));if(r.reused_native_stages_from)card.meta.append(el('div','复用已有阶段：'+r.reused_native_stages_from.stages.map(name=>STAGES[name]||name).join('、')+'；耗时不代表所有阶段从零执行。'));if(sample?.preparation_timings)card.meta.append(el('div',`共享输入准备：${fmt(sample.preparation_timings.preparation_seconds,1)} 秒（各算法共用）`));if(r.stage_error)card.meta.append(el('div','部分失败：'+r.stage_error.error,'run-error'));if(run.imported)card.meta.append(el('div','已有结果导入；所示耗时不含原始模型推理'));if(r.component_sources)card.meta.append(el('div','组件组合：只替换相机外参'));}
   if(run.error)card.meta.append(el('div',run.error,'run-error'));
 }
+function currentResultRead(card,revision,token,comparisonId,origin){return token===state.pollToken&&state.comparison?.id===comparisonId&&(state.comparison.common_world_origin_source_frame??null)===(origin??null)&&state.cards.get(card.run.id)===card&&resultRevision(card.run)===revision;}
 async function ensureFrame(frame){
   const comparison=state.comparison;if(!comparison?.sample)return;
-  const token=state.pollToken,start=Math.floor(frame/FRAME_READ_COUNT)*FRAME_READ_COUNT,origin=comparison.common_world_origin_source_frame;
+  const token=state.pollToken,start=Math.floor(frame/FRAME_READ_COUNT)*FRAME_READ_COUNT,origin=comparison.common_world_origin_source_frame??null;
   await Promise.all(frameReadCards().filter(card=>card.run.result).map(async card=>{
-    const key=`${card.run.id}:${start}:${origin}`;
+    const revision=resultRevision(card.run),current=()=>currentResultRead(card,revision,token,comparison.id,origin),key=resultFrameKey(card.run,start,origin);
     if(!state.cache.has(key)){
       if(!state.loading.has(key)){
         const query=new URLSearchParams({start,count:FRAME_READ_COUNT});if(origin!==null&&'T_world_camera'in card.run.result.arrays)query.set('origin',origin);
         const promise=api(`api/comparison/runs/${card.run.id}/frames?${query}`).then(value=>{
-          if(token!==state.pollToken)return;
-          state.cache.set(key,value);if(state.cache.size>72)state.cache.delete(state.cache.keys().next().value);
-        }).finally(()=>{if(state.loading.get(key)===promise)state.loading.delete(key);});
-        state.loading.set(key,promise);
+          if(!current())return;state.cache.set(key,value);if(state.cache.size>72)state.cache.delete(state.cache.keys().next().value);
+        }).finally(()=>{if(state.loading.get(key)===promise)state.loading.delete(key);});state.loading.set(key,promise);
       }
-      try{await state.loading.get(key);}catch(error){if(token===state.pollToken)notify(error.message);return;}
+      try{await state.loading.get(key);}catch(error){if(current())notify(error.message);return;}
     }
-    if(token!==state.pollToken)return;
-    const trajectoryKey=`${card.run.id}:${origin}`;
+    if(!current())return;
+    const trajectoryKey=resultFrameKey(card.run,'trajectory',origin);
     if(($('showTrails').checked||$('frameInspector').open)&&card.trajectoryKey!==trajectoryKey){
       const query=origin!==null&&'T_world_camera'in card.run.result.arrays?`?origin=${origin}`:'';
       if(card.trajectoryRequest?.key!==trajectoryKey){
-        const promise=api(`api/comparison/runs/${card.run.id}/trajectory${query}`).then(value=>{if(token===state.pollToken){card.trajectory=value;card.trajectoryKey=trajectoryKey;}});
-        card.trajectoryRequest={key:trajectoryKey,promise};
+        const promise=api(`api/comparison/runs/${card.run.id}/trajectory${query}`).then(value=>{if(current()&&card.trajectoryRequest?.key===trajectoryKey){card.trajectory=value;card.trajectoryKey=trajectoryKey;}});card.trajectoryRequest={key:trajectoryKey,promise};
       }
-      try{await card.trajectoryRequest.promise;}catch(error){card.trajectoryRequest=null;if(token===state.pollToken)notify(error.message);}
+      const pending=card.trajectoryRequest;
+      try{await pending.promise;}catch(error){if(card.trajectoryRequest===pending)card.trajectoryRequest=null;if(current())notify(error.message);}
     }
   }));
-  await ensureMeshFrame(frame);
+  if(token===state.pollToken&&comparison.id===state.comparison?.id)await ensureMeshFrame(frame);
 }
-function dataFor(card){const start=Math.floor(state.frame/FRAME_READ_COUNT)*FRAME_READ_COUNT;const key=`${card.run.id}:${start}:${state.comparison.common_world_origin_source_frame}`;const payload=state.cache.get(key);return payload?{payload,index:state.frame-start}:null;}
+function dataFor(card){if(!card?.run||!state.comparison)return null;const start=Math.floor(state.frame/FRAME_READ_COUNT)*FRAME_READ_COUNT,key=resultFrameKey(card.run,start,state.comparison.common_world_origin_source_frame);const payload=state.cache.get(key);return payload?{payload,index:state.frame-start}:null;}
 function resizeCanvas(canvas,width,height){if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}return canvas.getContext('2d');}
 function project2D(point,K){if(!point||!point.every(Number.isFinite)||point[2]<=.001)return null;return [(K[0][0]*point[0]+K[0][1]*point[1])/point[2]+K[0][2],(K[1][0]*point[0]+K[1][1]*point[1])/point[2]+K[1][2]];}
 function visible(data,index,slot){return data.geometry_valid?.[index]?.[slot]&&($('showAbsent').checked||data.presence===null||data.presence?.[index]?.[slot]);}
@@ -204,22 +227,46 @@ async function play(){
 function tick(){const video=masterVideo();if(state.playing&&video&&(!video.requestVideoFrameCallback||workspaceUI.mode==='3d'||video.closest('.run-card')?.hidden))captureVideo(video,true);requestAnimationFrame(tick);}
 function updateCombination(){for(const [id,worldOnly]of [['handRun',false],['cameraRun',true]]){const select=$(id),old=select.value;select.replaceChildren();for(const run of state.comparison.runs){if(!run.result||(worldOnly&&!('T_world_camera'in run.result.arrays)))continue;const option=el('option',run.label+' · '+run.id.slice(0,6));option.value=run.id;select.append(option);}if([...select.options].some(o=>o.value===old))select.value=old;}}
 async function loadComparisonMetrics(){
-  if(!state.comparison)return;const comparison=state.comparison,token=state.pollToken,key=comparison.id+':'+state.metricsKey;
-  if(state.metricsRows){renderMetrics(state.metricsRows);return;}
+  if(!state.comparison)return;const comparison=state.comparison,token=state.pollToken,key=comparison.id+':'+comparisonResultRevision(comparison),current=()=>token===state.pollToken&&state.comparison?.id===comparison.id&&key===comparison.id+':'+comparisonResultRevision(state.comparison);
+  if(state.metricsRows&&state.metricsRowsKey===key){renderMetrics(state.metricsRows);return;}
   if(comparison.runs.filter(r=>r.result).length<2){renderMetrics([]);return;}
   if(state.metricRequest?.key===key)return state.metricRequest.promise;
   $('metrics').textContent='正在计算共同有效帧与覆盖情况…';$('refreshMetrics').disabled=true;
-  const promise=api(`api/comparisons/${comparison.id}/metrics`).then(value=>{if(token===state.pollToken&&key===state.comparison.id+':'+state.metricsKey){state.metricsRows=value.metrics;renderMetrics(value.metrics);}}).catch(error=>{if(token===state.pollToken){state.metricRequest=null;$('metrics').textContent='指标暂不可用，可重新打开此页重试。';throw error;}});
-  state.metricRequest={key,promise};promise.finally(()=>{if(token===state.pollToken)$('refreshMetrics').disabled=false;}).catch(()=>{});return promise;
+  const promise=api(`api/comparisons/${comparison.id}/metrics`).then(value=>{if(current()&&state.metricRequest?.promise===promise){state.metricsRows=value.metrics;state.metricsRowsKey=key;renderMetrics(value.metrics);}}).catch(error=>{if(current()&&state.metricRequest?.promise===promise){$('metrics').textContent='指标暂不可用，可重新打开此页重试。';throw error;}}).finally(()=>{if(state.metricRequest?.promise===promise){state.metricRequest=null;if(current())$('refreshMetrics').disabled=false;}});
+  state.metricRequest={key,promise};return promise;
 }
 $('start').onclick=submit;$('refreshHistory').onclick=()=>loadHistory().catch(e=>notify(e.message));$('source').oninput=()=>{$('examples').value=[...$('examples').options].some(option=>option.value===$('source').value.trim())?$('source').value.trim():'';};$('examples').onchange=()=>{if($('examples').value){$('source').value=$('examples').value;$('view').value=$('source').value.includes('stereo_720')?'left':'full';}};$('play').onclick=play;$('prev').onclick=()=>seek(state.frame-1);$('next').onclick=()=>seek(state.frame+1);$('timeline').oninput=()=>seek(Number($('timeline').value));$('speed').onchange=()=>{state.rate=Number($('speed').value);for(const card of state.cards.values())card.video.playbackRate=state.rate;};for(const id of ['space','showAbsent'])$(id).onchange=()=>render(true);$('showTrails').onchange=()=>{render(true);if($('showTrails').checked)ensureFrame(state.frame).then(()=>render(true));};$('resetView').onclick=()=>{state.orbit={yaw:-.3,pitch:-.2,zoom:1};render(true);};$('closeLog').onclick=()=>$('logDialog').close();
-$('refreshExisting').onclick=()=>refreshExisting().catch(e=>notify(e.message));$('attachExisting').onclick=async()=>{try{if(!$('existingRun').value)throw new Error('没有可加入的同输入结果');await api(`api/comparisons/${state.comparison.id}/attach`,{run_id:$('existingRun').value});await refresh(state.comparison.id,state.pollToken);await refreshExisting();}catch(e){notify(e.message);}};
-$('combine').onclick=async()=>{try{if(!$('handRun').value||!$('cameraRun').value)throw new Error('先选择有完整结果的手部和世界相机');await api(`api/comparisons/${state.comparison.id}/combine`,{hand_run:$('handRun').value,camera_run:$('cameraRun').value});await refresh(state.comparison.id,state.pollToken);}catch(error){notify(error.message);}};
-$('import').onclick=async()=>{try{validateTaskInput(false);if(!$('importPath').value.trim())throw new Error('请填写服务器结果路径。');const value=await api('api/comparison/import',{...inputBody(),selections:[{algorithm:$('importAlgorithm').value}],import_entry:{path:$('importPath').value.trim(),format:$('importFormat').value,frame_map:JSON.parse($('importMap').value),declared_source:$('importSource').value,image_size:$('importGrid').value.trim()?JSON.parse($('importGrid').value):undefined}});let id=value.id;if(state.comparison?.sample_id===value.sample_id){id=state.comparison.id;await api(`api/comparisons/${id}/attach`,{run_id:value.run_ids[0]});}await openComparison(id);$('taskDialog').close();await loadHistory();}catch(error){notify(error.message);}};
+$('refreshExisting').onclick=()=>refreshExisting().catch(e=>notify(e.message));
+$('attachExisting').onclick=async()=>{const button=$('attachExisting');if(button.dataset.busy==='true')return;const comparison=state.comparison,token=state.pollToken,run=$('existingRun').value;try{if(!comparison||!run)throw new Error('没有可加入的同输入结果');button.dataset.busy='true';button.disabled=true;await api(`api/comparisons/${comparison.id}/attach`,{run_id:run});if(token!==state.pollToken||state.comparison?.id!==comparison.id)return;await refresh(comparison.id,token);if(token===state.pollToken)await refreshExisting();}catch(error){if(token===state.pollToken)notify(error.message);}finally{button.dataset.busy='false';button.disabled=false;}};
+$('combine').onclick=async()=>{const button=$('combine');if(button.dataset.busy==='true')return;const comparison=state.comparison,token=state.pollToken,hand=$('handRun').value,camera=$('cameraRun').value;try{if(!comparison||!hand||!camera)throw new Error('先选择有完整结果的手部和世界相机');button.dataset.busy='true';button.disabled=true;await api(`api/comparisons/${comparison.id}/combine`,{hand_run:hand,camera_run:camera});if(token===state.pollToken&&state.comparison?.id===comparison.id)await refresh(comparison.id,token);}catch(error){if(token===state.pollToken)notify(error.message);}finally{button.dataset.busy='false';button.disabled=false;}};
+function importDraftPayload(){return structuredClone({...inputBody(),selections:[{algorithm:$('importAlgorithm').value}],import_entry:{path:$('importPath').value.trim(),format:$('importFormat').value,frame_map:JSON.parse($('importMap').value),declared_source:$('importSource').value,image_size:$('importGrid').value.trim()?JSON.parse($('importGrid').value):undefined}});}
+async function importExistingResult(){
+  const button=$('import');if(button.dataset.busy==='true')return;let navigation,posted=false;
+  try{validateTaskInput(false);if(!$('importPath').value.trim())throw new Error('请填写服务器结果路径。');const payload=importDraftPayload(),signature=JSON.stringify(payload),original=state.comparison?{id:state.comparison.id,sample_id:state.comparison.sample_id}:null;navigation=comparisonNavigation();button.dataset.busy='true';button.disabled=true;
+    posted=true;const value=await api('api/comparison/import',payload);let id=value.id;
+    if(!comparisonDraftCurrent(signature,navigation,importDraftPayload)){notify('结果已导入，当前页面与草稿已保留；可在比较记录中查看。',false);loadHistory().catch(()=>{});return value;}
+    if(original?.sample_id===value.sample_id){id=original.id;await api(`api/comparisons/${id}/attach`,{run_id:value.run_ids[0]});if(!comparisonDraftCurrent(signature,navigation,importDraftPayload)){notify('结果已加入原比较，当前页面已保留。',false);loadHistory().catch(()=>{});return value;}}
+    const opening=state.pollToken+1;await openComparison(id);if(state.pollToken===opening&&state.comparison?.id===id)$('taskDialog').close();await loadHistory();return value;
+  }catch(error){if(!navigation||comparisonNavigationCurrent(navigation))notify(error.message);else if(posted)notify('此前结果导入未确认，可在比较记录中核对：'+error.message);}
+  finally{button.dataset.busy='false';button.disabled=false;}
+}
+$('import').onclick=importExistingResult;
 $('downloadReport').onclick=async()=>{try{const comparison=state.comparison;const metrics=await api(`api/comparisons/${comparison.id}/metrics`);download('comparison-'+comparison.id.slice(0,8)+'.json',JSON.stringify({comparison,...metrics},null,2));}catch(error){notify(error.message);}};
 $('exportVideo').onclick=()=>{$('exportGeometry').value=geometryMode();$('exportBaseline').checked=$('showBaseline').checked;$('exportDialog').showModal();};
 $('confirmVideoExport').onclick=exportSelectedVideo;
-async function exportSelectedVideo(){try{$('exportDialog').close();state.exporting=true;$('exportVideo').disabled=true;notify('正在后台生成同步对比视频…',false);let result=await api(`api/comparisons/${state.comparison.id}/export`,{include_absent:$('showAbsent').checked,geometry:$('exportGeometry').value,...($('exportScope').value==='visible'?{run_ids:visibleResultCards().filter(card=>card.run.result).map(card=>card.run.id)}:{}),...($('exportBaseline').checked&&resultView.reference?{baseline_run:resultView.reference}:{})});while(!['completed','failed','evicted','cancelled','interrupted','absent'].includes(result.status)){await new Promise(resolve=>setTimeout(resolve,1200));result=await api(`api/comparison/exports/${result.id}`);notify(`正在生成同步视频：${result.done||0}/${result.total||'…'} 帧`,false);}if(result.status!=='completed')throw new Error(result.error||'导出已失效');const link=el('a');link.href=result.url;link.download='';link.click();notify('同步对比视频已生成。',false);}catch(error){notify(error.message);}finally{state.exporting=false;$('exportVideo').disabled=false;}}
+async function exportSelectedVideo(){
+  const comparison=state.comparison;if(!comparison||state.exporting)return;const token=state.pollToken,revision=comparisonResultRevision(comparison),attempt={comparison:comparison.id,token},current=()=>state.pollToken===token&&state.comparison?.id===comparison.id&&comparisonResultRevision(state.comparison)===revision;
+  const options={include_absent:$('showAbsent').checked,geometry:$('exportGeometry').value,...($('exportScope').value==='visible'?{run_ids:visibleResultCards().filter(card=>card.run.result).map(card=>card.run.id)}:{}),...($('exportBaseline').checked&&resultView.reference?{baseline_run:resultView.reference}:{})};
+  state.exportAttempt=attempt;state.exporting=true;$('exportDialog').close();$('exportVideo').disabled=true;
+  try{notify('正在后台生成同步对比视频…',false);let result=await api(`api/comparisons/${comparison.id}/export`,options);
+    if(!current()){notify('先前比较的导出任务已提交，可从任务中心查看；当前比较已保留。',false);return result;}
+    while(!['completed','failed','evicted','cancelled','interrupted','absent'].includes(result.status)){
+      await new Promise(resolve=>setTimeout(resolve,1200));if(!current())return result;result=await api(`api/comparison/exports/${result.id}`);if(!current())return result;notify(`正在生成同步视频：${result.done||0}/${result.total||'…'} 帧`,false);
+    }
+    if(result.status!=='completed')throw new Error(result.error||'导出已失效');if(!current())return result;const link=el('a');link.href=result.url;link.download='';link.click();notify('同步对比视频已生成。',false);return result;
+  }catch(error){if(current())notify(error.message);}
+  finally{if(state.exportAttempt===attempt){state.exportAttempt=null;state.exporting=false;if(typeof syncPlaybackReadiness==='function')syncPlaybackReadiness();$('exportVideo').disabled=!state.comparison?.sample||!state.comparison.runs.some(run=>run.result);}}
+}
 $('snapshot').onclick=async()=>{
   if(!state.comparison?.sample)return;pause();const token=state.pollToken,selectedFrame=state.frame;await ensureFrame(selectedFrame);if(token!==state.pollToken||selectedFrame!==state.frame)return;
   if(workspaceUI.mode!=='3d'&&masterVideo()?.seeking){notify('当前画面正在定位，请稍后再保存。',false);return;}captureVideo(masterVideo(),false);render(true);
@@ -237,10 +284,10 @@ document.addEventListener('keydown',event=>{
 document.addEventListener('click',event=>{for(const menu of document.querySelectorAll('.run-action-menu[open]'))if(!menu.contains(event.target))menu.open=false;});
 document.addEventListener('keydown',event=>{if(event.key==='Escape')for(const menu of document.querySelectorAll('.run-action-menu[open]'))menu.open=false;});
 if($('closeRunDetails'))$('closeRunDetails').onclick=()=>$('runDetailsDialog').close();
-window.addEventListener('popstate',()=>{const query=new URLSearchParams(location.search);if(query.get('hub'))return;const id=query.get('id');if(id)openComparison(id,{history:false}).catch(e=>notify(e.message));});
 initializeWorkspace();
 (async()=>{try{
   const legacyDiagnostic=legacyDiagnosticHashURL(location.pathname,location.search,location.hash);if(legacyDiagnostic){location.replace(legacyDiagnostic);return;}
+  let startupToken=state.pollToken;const startupCurrent=()=>startupToken===state.pollToken;
   // History is useful context, but explicit links must not wait for the full catalog.
   const historyReady=loadHistory().catch(error=>notify(error.message));
   const explicitRoute=query=>['id','run','hub','collection','tool_job','workflow','study'].some(key=>query.get(key));
@@ -250,23 +297,26 @@ initializeWorkspace();
   if(examples.examples.length&&!$('source').value.trim()){$('source').value=examples.examples[0].path;$('examples').value=examples.examples[0].path;}
   let query=new URLSearchParams(location.search);
   if(!explicitRoute(query)&&!$('platformDialog').open&&!$('taskDialog').open){await historyReady;query=new URLSearchParams(location.search);}
-  if($('taskDialog').open)return;
+  if($('taskDialog').open||!startupCurrent())return;
   // A module link must become visible before loading its optional comparison context.
   const initialHub=query.get('hub');
   if(initialHub&&HUB_LABELS[initialHub]&&(!$('platformDialog').open||platform.pane!==initialHub))await openPlatform(initialHub);
+  if(!startupCurrent())return;
   query=new URLSearchParams(location.search);
   let id=query.get('id');
-  if(query.get('run')&&!id){const requestedRun=query.get('run'),parents=await api('api/comparison/runs/'+encodeURIComponent(requestedRun)+'/parent');query=new URLSearchParams(location.search);id=query.get('id')||(query.get('run')===requestedRun?parents.comparisons[0]:null);}
+  if(query.get('run')&&!id){const requestedRun=query.get('run'),parents=await api('api/comparison/runs/'+encodeURIComponent(requestedRun)+'/parent');if(!startupCurrent())return;query=new URLSearchParams(location.search);id=query.get('id')||(query.get('run')===requestedRun?parents.comparisons[0]:null);}
   if(!id&&!explicitRoute(query)&&!$('platformDialog').open){
     let remembered;try{remembered=localStorage.getItem('mint.compare.last');}catch(_){}
     id=preferredComparison(workspaceUI.history,remembered)?.id;
   }
   // A navigation made while the request is pending retains its pane and route.
-  if(id&&state.comparison?.id!==id)await openComparison(id,{replace:true,keepPlatform:true});
-  query=new URLSearchParams(location.search);if($('taskDialog').open)return;
+  if(!startupCurrent())return;
+  if(id&&state.comparison?.id!==id){const opening=openComparison(id,{replace:true,keepPlatform:true});startupToken=state.pollToken;await opening;}
+  query=new URLSearchParams(location.search);if($('taskDialog').open||!startupCurrent())return;
   const hub=query.get('hub');
   if(!$('platformDialog').open&&!hub){if(query.get('run'))inspectResult(query.get('run'));if(query.get('frame'))seek(Math.max(0,Number(query.get('frame'))-1));}
   if(query.get('collection')){if(platform.collection!==query.get('collection'))await openCollection(query.get('collection'));}
   else if(query.get('tool_job')){if(!$('platformDialog').open||platform.pane!=='tools')await openPlatform('tools');await inspectRenderJob(query.get('tool_job'));}
   else if(hub&&HUB_LABELS[hub]&&(!$('platformDialog').open||platform.pane!==hub))await openPlatform(hub);
+if(typeof updateDiagnosticReturnLinks==='function')updateDiagnosticReturnLinks();
 }catch(error){notify(error.message);}})();tick();

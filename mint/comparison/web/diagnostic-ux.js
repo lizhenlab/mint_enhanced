@@ -29,7 +29,7 @@
     const source=loaded?(context.sourceName||context.sourcePath||context.vidName||'当前输入'):(selectedInput||'请选择服务器视频或 Episode');
     const episode=loaded&&context.epOrdinal!=null?` · Episode ${context.epOrdinal}${context.epTotal!=null?' / '+context.epTotal:''}`:'';
     return {source:source+episode,path:loaded?context.sourcePath||source:selectedInput,
-      model:loaded&&context.rawOnly?'原始 GT · 未使用预测模型':String(modelTag||'尚未选择模型').replace(/^checkpoints_/,'').replace(/_([a-f0-9]{8,})$/,' · $1'),
+      model:loaded&&context.rawOnly?'原始 GT · 未使用预测模型':String((loaded?context.resultModelTag||modelTag:modelTag)||'尚未选择模型').replace(/^checkpoints_/,'').replace(/_([a-f0-9]{8,})$/,' · $1'),
       status:context.loading?(context.cancelling?'正在停止…':'正在处理当前输入…'):
         loaded?(context.rawOnly?'原始 GT':context.no_truth?'预测结果 · 无 GT':'GT 与预测结果'):
         context.inferenceDirty?'输入 / 参数待应用 · 未运行':'尚未加载结果',
@@ -49,7 +49,7 @@
     });
     const readInputReady=options.getInputReady||(()=>typeof curDatasetRel!=='undefined'&&curDatasetRel!==null?
       typeof EP_TOTAL!=='undefined'&&EP_TOTAL>0:!!(readState().no_truth&&readState().vidName&&readState().eid!=null));
-    const ids=['diagnosticPlayback','diagnosticPlay','diagnosticPrevFrame','diagnosticNextFrame','diagnosticTimeline','diagnosticFrameLabel','diagnosticFrameJump','diagnosticSpeed','diagnosticPlaybackStatus','diagnosticInputLabel','diagnosticModelLabel','diagnosticResultState','diagnosticConfiguredInput','diagnosticConfiguredModel','diagnosticInputBrowser','diagnosticRunSummary'];
+    const ids=['diagnosticPlayback','diagnosticPlay','diagnosticPrevFrame','diagnosticNextFrame','diagnosticTimeline','diagnosticFrameLabel','diagnosticFrameJump','diagnosticSpeed','diagnosticPlaybackStatus','diagnosticInputLabel','diagnosticModelLabel','diagnosticResultState','diagnosticConfiguredInput','diagnosticConfiguredModel','diagnosticInputBrowser','diagnosticRunSummary','diagnosticContextBar','diagnosticInferenceStatus','diagnosticToolContext','diagnosticBackgroundTask','diagnosticBackgroundStatus'];
     const nodes=Object.fromEntries(ids.map(id=>[id,doc.getElementById(id)]));
     if(!nodes.diagnosticPlayback)return null;
     let clock=null,detach=()=>{},speed=1,disposed=false,initialInput=true,inputBrowserTouched=false;
@@ -72,6 +72,11 @@
       if(disposed)return;
       const context=readState(),view=readView(),video=readVideo();
       bindClock(video);
+      if(nodes.diagnosticContextBar)nodes.diagnosticContextBar.hidden=view==='tools';
+      if(nodes.diagnosticInferenceStatus)nodes.diagnosticInferenceStatus.hidden=view==='tools';
+      if(nodes.diagnosticToolContext)nodes.diagnosticToolContext.hidden=view!=='tools';
+      if(nodes.diagnosticBackgroundTask)nodes.diagnosticBackgroundTask.hidden=view!=='tools'||!context.loading;
+      text(nodes.diagnosticBackgroundStatus,context.cancelling?'MINT 诊断正在停止…':context.rawOnly?'原始标注仍在后台读取':'MINT 诊断仍在后台运行');
       const snap=playbackSnapshot(context,video),bar=nodes.diagnosticPlayback;
       bar.hidden=view!=='results'||!context.loaded;
       const summary=resultContext(context,{selectedInput:readSelected(),modelTag:readModel()});

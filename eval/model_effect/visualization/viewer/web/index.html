@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MINT 单算法诊断 · 算法工作台</title>
-<link rel="stylesheet" href="style.css?v=20261101-diagnostic-config">
+<link rel="stylesheet" href="style.css?v=20261102-global-diagnostic-1">
 </head>
 <body data-diagnostic-view="config">
 <div id="app">
@@ -31,12 +31,13 @@
     <span class="diagnostic-context-item"><span>模型</span><strong id="diagnosticModelLabel">等待模型信息</strong></span>
     <span id="diagnosticResultState" class="diagnostic-result-state" role="status">尚无结果</span>
   </div>
-  <div class="status-rail">
+  <div id="diagnosticInferenceStatus" class="status-rail">
     <span id="stepInfo" class="step" title="当前进行到哪一步">待操作</span>
     <span id="progWrap" class="progwrap" title="加载进度（推理为确定进度，其余为不确定动画）" style="display:none"><span id="progBar" class="progbar"></span></span>
     <span id="info">选择输入与参数后，点击“开始推理”运行模型。</span>
   </div>
 
+  <div id="diagnosticToolContext" class="diagnostic-tool-context" hidden><p>数据分析、公开基准与代码对比各自选择输入与参数；上方 MINT 诊断设置不会自动作为这些工具的输入。</p><div id="diagnosticBackgroundTask" class="diagnostic-background-task" role="status" hidden><span id="diagnosticBackgroundStatus"></span><button type="button" data-diagnostic-view="config">查看诊断任务</button></div></div>
   <section id="diagnosticConfiguration" role="tabpanel" aria-labelledby="diagnosticTab-config">
 
   <div class="diagnostic-config-heading" id="diagnostic-input"><h2>推理设置</h2><p>选择输入与模型，确认策略后开始。</p></div>
@@ -186,12 +187,12 @@
   <div class="metrics" id="metricsWrap"><details class="cap diagnostic-loss-guide"><summary>逐帧损失说明与计量口径</summary><p>逐帧 loss（与训练同公式，随当前帧联动）。权重=组权重×项权重；值/加权/占比同口径（旋转项按弧度，值列括号补度数便于观看）；加权=权重×值；占比=加权值÷加权总 loss，看谁主导。</p></details>
     <div id="metrics"></div></div>
   <details class="diagnostic-tools" id="diagnostic-tools"><summary>选择专项工具</summary><p>在已有结果上检查仿真和重定向，或打开数据分析、MINT 专项评测及代码对比。批量多算法任务请到 <a href="/compare?hub=batch" data-workspace-link="compare?hub=batch">批量比较</a>。</p><div class="utility-rail">
-    <button id="mujocoBtn" class="ghost" aria-pressed="false" title="默认关闭；点击后才按当前样本启动 MuJoCo 渲染">MuJoCo 仿真</button>
-    <button id="retargetBtn" class="ghost" aria-pressed="false" title="默认关闭；点击后才将当前 21 点驱动 Wuji Hand 并启动渲染">Wuji Hand 运动学重定向</button>
+    <button id="mujocoBtn" class="ghost" disabled aria-pressed="false" title="默认关闭；点击后才按当前样本启动 MuJoCo 渲染">MuJoCo 几何展示</button>
+    <button id="retargetBtn" class="ghost" disabled aria-pressed="false" title="默认关闭；点击后才将当前 21 点驱动 Wuji Hand 并启动渲染">Wuji Hand 运动学重定向</button>
     <span id="datasetAnalysisLauncher" class="analysis-launcher">
-      <button id="datasetAnalysisBtn" class="ghost" aria-haspopup="menu" aria-expanded="false">数据集分析 <span aria-hidden="true">▾</span></button>
+      <button id="datasetAnalysisBtn" class="ghost" aria-haspopup="menu" aria-controls="datasetAnalysisMenu" aria-expanded="false">数据集分析 <span aria-hidden="true">▾</span></button>
       <span id="datasetAnalysisMenu" class="analysis-launcher-menu" role="menu">
-        <button type="button" role="menuitem" data-analysis-type="video"><b>视频分析</b><small>ffprobe 媒体属性与质量</small></button>
+        <button type="button" role="menuitem" data-analysis-type="video"><b>视频分析</b><small>ffprobe 分辨率、帧率与时长</small></button>
         <button type="button" role="menuitem" data-analysis-type="intrinsics"><b>内参分析</b><small>LeRobot episode 首帧 FOV</small></button>
         <button type="button" role="menuitem" data-analysis-type="diversity"><b>多样性分析</b><small>场景、动作、活动范围与手监督</small></button>
       </span>
@@ -501,10 +502,10 @@
   <label class="diagnostic-frame-jump" for="diagnosticFrameJump">跳至<input id="diagnosticFrameJump" type="number" min="1" max="1" value="1" step="1" disabled><span>帧</span></label>
   <label for="diagnosticSpeed" class="diagnostic-visually-hidden">播放速度</label><select id="diagnosticSpeed" aria-label="播放速度" disabled><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
 </footer>
-<script src="i18n.js?v=20261101-diagnostic-config"></script>
+<script src="i18n.js?v=20261102-global-diagnostic-1"></script>
 <script src="camera_baselines.js?v=20260814-1"></script>
 <script src="benchmark_suites.js?v=20260906-coverage"></script>
-<script src="app.js?v=20261101-diagnostic-config"></script>
-<script src="comparison-assets/diagnostic-ux.js?v=20261101-diagnostic-config"></script>
+<script src="app.js?v=20261102-global-diagnostic-1"></script>
+<script src="comparison-assets/diagnostic-ux.js?v=20261102-global-diagnostic-1"></script>
 </body>
 </html>

@@ -4,25 +4,26 @@ const meshView={cache:new Map(),loading:new Map(),topology:null,topologyRequest:
 const HAND_COLORS=['#6ad5f0','#ffdf80'];
 function handColor(slot){return HAND_COLORS[slot];}
 function geometryMode(){return $('geometryStyle')?.value||'skeleton';}
-function meshKey(run,frame){const start=Math.floor(frame/4)*4;return `${run.id}:${start}:${state.comparison.common_world_origin_source_frame}`;}
+function meshKey(run,frame){const start=Math.floor(frame/4)*4;return resultFrameKey(run,start,state.comparison.common_world_origin_source_frame);}
 function resetGeometryCache(){meshView.cache.clear();meshView.loading.clear();}
 async function ensureMeshFrame(frame){
   if(geometryMode()==='skeleton'||!state.comparison?.sample)return;
-  const token=state.pollToken;
+  const token=state.pollToken,comparison=state.comparison,origin=comparison.common_world_origin_source_frame??null;
   if(!meshView.topology){
     if(!meshView.topologyRequest)meshView.topologyRequest=api('api/comparison/topology').then(value=>meshView.topology=value).catch(error=>{meshView.topologyRequest=null;throw error;});
-    try{await meshView.topologyRequest;}catch(error){notify('网格拓扑不可用：'+error.message);return;}
+    try{await meshView.topologyRequest;}catch(error){if(token===state.pollToken)notify('网格拓扑不可用：'+error.message);return;}
   }
+  if(token!==state.pollToken||comparison.id!==state.comparison?.id)return;
   await Promise.all(visibleResultCards().filter(card=>card.run.result?.arrays.vertices_camera_m).map(async card=>{
-    const key=meshKey(card.run,frame);if(meshView.cache.has(key))return;
+    const revision=resultRevision(card.run),current=()=>currentResultRead(card,revision,token,comparison.id,origin),key=meshKey(card.run,frame);if(meshView.cache.has(key))return;
     if(!meshView.loading.has(key)){
       const query=new URLSearchParams({start:Math.floor(frame/4)*4,count:4,vertices:1});
-      const origin=state.comparison.common_world_origin_source_frame;if(origin!==null&&card.run.result.arrays.T_world_camera)query.set('origin',origin);
+      if(origin!==null&&card.run.result.arrays.T_world_camera)query.set('origin',origin);
       const promise=api(`api/comparison/runs/${card.run.id}/frames?${query}`).then(value=>{
-        if(token!==state.pollToken)return;meshView.cache.set(key,value);if(meshView.cache.size>24)meshView.cache.delete(meshView.cache.keys().next().value);
+        if(!current())return;meshView.cache.set(key,value);if(meshView.cache.size>24)meshView.cache.delete(meshView.cache.keys().next().value);
       }).finally(()=>{if(meshView.loading.get(key)===promise)meshView.loading.delete(key);});meshView.loading.set(key,promise);
     }
-    try{await meshView.loading.get(key);}catch(error){if(token===state.pollToken)notify(error.message);}
+    try{await meshView.loading.get(key);}catch(error){if(current())notify(error.message);}
   }));
 }
 function meshFor(card){

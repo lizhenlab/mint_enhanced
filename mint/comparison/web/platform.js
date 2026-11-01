@@ -7,7 +7,7 @@ const HUB_GROUPS={data:'data',catalog:'data',batch:'data',evaluation:'evaluation
 const HUB_CONTEXT={data:'选择输入来源，再选择视频、Episode 或已准备的数据版本。',catalog:'检索不可变结果、数据版本、模型和协议。比较记录保存一组对照，任务中心管理实际执行过程。',batch:'多个输入按统一设置运行，每个输入独立保存比较。先核对输入与预检结果，再提交后台批次。',evaluation:'有 GT 的样本用于量化误差；已有预测可在逐帧质检中定位问题。',quality:'逐帧检查、区间复核和二维点修正。二维修正不会自动变成三维或 MANO 真值。',research:'准备数据 → 训练 → 检查点回归 → 模型发布。数据、模型和协议均保留独立版本。',tasks:'查看执行阶段、等待原因、资源与日志。一个比较可能包含多个算法任务。',tools:'选择工具用途；展示视频使用已有几何，分析与诊断工具各自选择输入。'};
 const platformNavigation={scroll:new Map(),restoring:false};
 function platformRoute(tab,replace=false){
-  const url=new URL(location.href);if(tab){if(url.searchParams.get('hub')!==tab)url.searchParams.delete('section');if(tab!==platform.collectionKind)url.searchParams.delete('collection');if(tab!=='tools'){url.searchParams.delete('tool_job');url.searchParams.delete('tools_tab');}if(tab!=='research')url.searchParams.delete('study');if(tab!=='research')url.searchParams.delete('research_tab');if(tab!=='data')url.searchParams.delete('source_type');url.searchParams.set('hub',tab);}else{for(const key of ['hub','section','collection','tool_job','tools_tab','study','research_tab','source_type'])url.searchParams.delete(key);}
+  const url=new URL(location.href);if(tab){if(url.searchParams.get('hub')!==tab)url.searchParams.delete('section');if(tab!==platform.collectionKind)url.searchParams.delete('collection');if(tab!=='tools'){url.searchParams.delete('tool_job');url.searchParams.delete('tools_tab');}if(tab!=='research'){url.searchParams.delete('study');url.searchParams.delete('workflow');}if(tab!=='research')url.searchParams.delete('research_tab');if(tab!=='data')url.searchParams.delete('source_type');if(tab!=='tasks')for(const key of ['task_query','task_status','task_kind'])url.searchParams.delete(key);url.searchParams.set('hub',tab);}else{for(const key of ['hub','section','collection','tool_job','tools_tab','workflow','study','research_tab','source_type','task_query','task_status','task_kind'])url.searchParams.delete(key);}
   if(url.href!==location.href)window.history[replace?'replaceState':'pushState']({mintHub:tab||'compare'},'',url.pathname+url.search+url.hash);
 }
 function syncPlatformNavigation(tab){
@@ -78,10 +78,11 @@ function selectedAlgorithmsFrom(container){
     return checkpoints.length?checkpoints.map(checkpoint=>({...selection,checkpoint,...(config?{config}:{})})):[{...selection,...(config?{config}:{})}];
   });
 }
-function hubError(error){$('platformError').textContent=error?.message||String(error);}
+function hubError(error){const message=error?.message||String(error);if(!$('platformDialog').open){notify(message);return;}const host=$('platformError'),feedback=$('workspaceFeedback'),changed=host.textContent!==message||feedback?.hidden;host.textContent=message;if(feedback)feedback.hidden=false;if(changed)host.focus?.({preventScroll:true});}
 function selectionSummary(){
   const values=[...platform.selection.values()],episodes=values.filter(value=>value.dataset).length;
   $('collectionSelectionSummary').textContent=`批量列表：已选择 ${values.length} 项 · ${episodes} 个 Episode · ${values.length-episodes} 个视频`;
+  for(const [id,disabled]of [['useSingleEpisode',values.length!==1],['prepareBatch',!values.length],['clearCollectionSelection',!values.length],['prepareEvaluation',!values.length||values.some(value=>!(value.dataset&&value.annotation?.ready)&&!value.reference)]]){const button=$(id);if(button)button.disabled=disabled;}
   for(const kind of ['batch','evaluation'])if($(kind+'Composer')?.children.length){invalidateCollectionReview(kind);$(kind+'-camera-shared').checked=false;renderCollectionInputs(kind);updateCollectionDraft(kind);}
   refreshPlatformContext();
 }
@@ -207,10 +208,10 @@ async function submitCollection(kind){
 function setCollectionMode(kind,mode,{route=true}={}){
   const draft=collectionDraft(kind);if(mode==='results'&&(!platform.collection||platform.collectionKind!==kind))mode='draft';draft.mode=mode;$(kind+'Setup').open=mode==='draft';
   $('collectionDetails').hidden=mode!=='results'||platform.pane!==kind;$(kind+'-draft-mode').classList.toggle('active',mode==='draft');$(kind+'-results-mode').classList.toggle('active',mode==='results');$(kind+'-results-mode').hidden=!platform.collection||platform.collectionKind!==kind;
-  if(route&&platform.pane===kind){const url=new URL(location.href);if(mode==='results')url.searchParams.set('collection',platform.collection);else url.searchParams.delete('collection');window.history.replaceState(null,'',url.pathname+url.search+url.hash);}refreshPlatformContext();
+  if(route&&!platformNavigation.restoring&&platform.pane===kind){const url=new URL(location.href);if(mode==='results')url.searchParams.set('collection',platform.collection);else url.searchParams.delete('collection');window.history.replaceState(null,'',url.pathname+url.search+url.hash);}refreshPlatformContext();
 }
 async function openPlatform(tab='data'){
-  pause();$('platformError').textContent='';if(!$('platformDialog').open)$('platformDialog').show();
+  pause();clearPlatformError();if(!$('platformDialog').open)$('platformDialog').show();
   if(!$('collectionDirectory').value)$('collectionDirectory').value=sourceBrowser.path||'/data1/lizhen_dataset';
   if(!$('hubDatasetRoot').value)$('hubDatasetRoot').value=$('datasetRoot').value||'/data1/lizhen_algo/mint/data/samples/lerobot_v3';
   switchHub(tab);
@@ -218,16 +219,16 @@ async function openPlatform(tab='data'){
 function switchHub(tab){
   if(!HUB_LABELS[tab])return;
   const body=document.querySelector('.platform-body');platformNavigation.scroll.set(platform.pane,body.scrollTop);
-  platform.pane=tab;platform.serial++;clearTimeout(platform.timer);$('platformTitle').textContent=HUB_LABELS[tab];$('platformError').textContent='';
+  platform.pane=tab;platform.serial++;clearTimeout(platform.timer);$('platformTitle').textContent=HUB_LABELS[tab];clearPlatformError();
   for(const key of Object.keys(HUB_LABELS))$('hub-'+key).hidden=key!==tab;
   syncPlatformNavigation(tab);if(!platformNavigation.restoring)platformRoute(tab);requestAnimationFrame(()=>{if(platform.pane===tab)body.scrollTop=platformNavigation.scroll.get(tab)||0;});
   $('collectionDetails').hidden=!platform.collection||platform.collectionKind!==tab;
   if(['batch','evaluation'].includes(tab)){createComposer(tab);setCollectionMode(tab,collectionDraft(tab).mode,{route:false});}
-  if(tab==='tools')refreshToolOptions().catch(hubError);
+  if(tab==='data'){const reuse=$('useCurrentDirectory'),path=typeof sourceBrowser==='undefined'?null:sourceBrowser.path;reuse.disabled=!path;reuse.title=path?'使用新建比较输入浏览器的目录：'+path:'先在新建比较的输入浏览器中浏览目录，或直接填写服务器目录';}if(tab==='tools')refreshToolOptions().catch(hubError);
   if(tab==='catalog')refreshArtifactCatalog().catch(hubError);
-  if(tab==='quality')refreshQualityContext().catch(hubError);
+  if(tab==='quality')refreshQualityContext().catch(hubError);if(tab==='tasks'){restoreTaskFilters();taskFilterRoute();}
   if(tab==='research')refreshResearchChoices().catch(hubError);
-  window.dispatchEvent(new CustomEvent('mint-platform-open',{detail:tab}));refreshPlatformContext();
+  window.dispatchEvent(new CustomEvent('mint-platform-open',{detail:tab}));refreshPlatformContext();updateDiagnosticReturnLinks();requestAnimationFrame(()=>{if(platform.pane===tab&&$('platformDialog').open)focusWorkspaceContent();});
   pollPlatform();
 }
 async function pollPlatform(){
@@ -238,28 +239,31 @@ async function pollPlatform(){
 }
 function statusLabel(status){return STAGES[status]||({waiting_gpu:'等待 GPU',evicted:'缓存已释放',absent:'尚未生成'})[status]||status;}
 async function refreshWorkspaceTasks(){
-  const serial=++platform.taskSerial,query=new URLSearchParams({limit:50,offset:platform.taskOffset,query:$('taskSearch').value,status:$('taskStatusFilter').value});
-  const value=await api('api/comparison/workspace?'+query);if(serial!==platform.taskSerial)return;
-  renderTaskResourceSummary(value);
-  const table=el('table'),head=el('tr');for(const label of ['任务 / 来源','状态 / 当前阶段','完成量','操作'])head.append(el('th',label));table.append(head);
-  for(const task of value.tasks){const row=el('tr'),name=el('td');name.append(el('strong',task.label),el('small',task.source||task.kind));const progress=task.progress||{},phase=progress.stage||progress.phase;row.append(name,el('td',statusLabel(task.status)+(phase?' · '+(STAGES[phase]||phase):'')),el('td',progress.total?`${progress.done||0}/${progress.total}${progress.unit==='frames'?' 帧':progress.unit==='optimizer_steps'?' 步':''}`:'—'));const actions=el('td');
-    if(task.waiting_reason)name.append(el('small',task.waiting_reason,'waiting-reason'));if(task.eta)name.append(el('small',`当前阶段预计剩余 ${Math.ceil(task.eta.seconds)} 秒 · 估算`));
-    const history=researchButton('阶段记录',async()=>researchDetails(await api(`api/comparison/tasks/${task.kind}/${task.id}`)));actions.append(history);
-    const open=el('button','打开');open.onclick=()=>{if(task.kind==='batch'||task.kind==='evaluation')openCollection(task.id).catch(hubError);else if(task.kind==='render'){inspectRenderJob(task.id).catch(hubError);}else if(task.kind==='workflow'){switchHub('research');inspectWorkflow(task.id,{navigate:true}).catch(hubError);}else if(task.kind==='study'){nextUI.study=task.id;openPlatform('research').then(()=>showResearchView('regression')).catch(hubError);}else if(task.comparison_id){$('platformDialog').close();openComparison(task.comparison_id).then(()=>inspectResult(task.id)).catch(error=>notify(error.message));}else if(task.url)location.href=task.url;};open.disabled=!(['batch','evaluation','render','workflow','study'].includes(task.kind)||task.comparison_id||task.url);actions.append(open);
-    const terminal=TERMINAL.has(task.status)||task.status==='evicted';if(['inference','batch','evaluation','render','export','workflow','study'].includes(task.kind)&&task.status!=='completed'){
-      const action=el('button',terminal?'恢复':'取消');action.onclick=async()=>{try{if(task.kind==='inference')await api(`api/comparison/runs/${task.id}/${terminal?'resume':'cancel'}`,{});else if(task.kind==='render'){if(terminal){platform.renderJob=task.id;await resumeRenderTool(task.id);}else await api(`api/comparison/tools/${task.id}/cancel`,{});}else if(task.kind==='export')await api(`api/comparison/exports/${task.id}/${terminal?'resume':'cancel'}`,{});else if(task.kind==='study')await api(`api/comparison/studies/${task.id}/${terminal?'resume':'cancel'}`,{});else if(task.kind==='workflow')await api(`api/comparison/workflows/${task.id}/${terminal?'resume':'cancel'}`,{});else await api(`api/comparison/collections/${task.id}/${terminal?'resume':'cancel'}`,{});await refreshWorkspaceTasks();}catch(error){hubError(error);}};actions.append(action);
-    }
-    if(task.error){const error=el('small',task.error,'task-error');name.append(error);}row.append(actions);table.append(row);
+  const serial=++platform.taskSerial,signature=workspaceTaskFilterSignature(),query=new URLSearchParams({limit:50,offset:platform.taskOffset,query:$('taskSearch').value,status:$('taskStatusFilter').value,kind:$('taskKindFilter')?.value||'all'});
+  const host=$('workspaceTasks'),changing=signature!==platform.taskDisplayedFilter;if(changing){host.setAttribute('aria-busy','true');host.replaceChildren(el('p','正在读取符合条件的任务…','hint'));$('taskPageInfo').textContent='正在读取任务…';}
+  let value;try{value=await api('api/comparison/workspace?'+query);}catch(error){if(serial!==platform.taskSerial||signature!==workspaceTaskFilterSignature())return null;host.setAttribute('aria-busy','false');if(changing)host.replaceChildren(el('p','任务读取失败，请刷新重试。','task-error'));throw error;}if(serial!==platform.taskSerial||signature!==workspaceTaskFilterSignature())return null;host.setAttribute('aria-busy','false');
+  renderTaskResourceSummary(value);const renderKey=JSON.stringify([signature,value.total,value.offset,value.tasks.map(task=>[task.id,task.kind,task.label,task.source,task.status,task.comparison_id,task.url,task.error,task.waiting_reason,task.eta?.seconds,...['stage','phase','done','total','unit'].map(key=>task.progress?.[key])])]);
+  if(renderKey!==platform.taskRenderKey){const focused=document.activeElement?.dataset?.taskControl;host.replaceChildren();
+  if(!value.tasks.length){const empty=el('div',undefined,'workspace-empty');empty.append(el('h3',value.total?'此页暂无任务':'没有符合条件的任务'),el('p',$('taskStatusFilter').value==='active'?'当前没有运行中或排队任务。可以查看全部记录，或到比较页创建任务。':'调整类别、状态或搜索条件后重试。'));const reset=el('button','查看全部任务');reset.onclick=()=>{$('taskSearch').value='';$('taskStatusFilter').value='all';$('taskKindFilter').value='all';platform.taskOffset=0;taskFilterRoute();refreshWorkspaceTasks().catch(hubError);};empty.append(reset);host.append(empty);}
+  else{const table=el('table'),head=el('tr');for(const label of ['任务 / 来源','状态 / 当前阶段','完成量','操作'])head.append(el('th',label));table.append(head);
+    for(const task of value.tasks){const row=el('tr'),name=el('td'),status=el('td'),actions=el('td',undefined,'task-actions'),progress=task.progress||{},phase=progress.stage||progress.phase;
+      name.append(el('span',taskKindLabel(task.kind),'task-kind'),el('strong',task.label));if(task.source)name.append(el('small',task.kind==='workflow'?({train:'模型训练',native_import:'公开数据准备',prepare_training:'训练数据转换',produce_pseudo:'伪标签生产',curate_dataset:'复核数据导出',diagnostic:'环境诊断',pipeline:'参考研究流程'})[task.source]||task.source:task.source));
+      status.append(el('strong',statusLabel(task.status)));if(phase&&phase!==task.status)status.append(el('small',STAGES[phase]||phase));if(task.waiting_reason&&!TERMINAL.has(task.status)&&task.status!=='evicted')status.append(el('small',task.waiting_reason,'waiting-reason'));if(task.eta)status.append(el('small',`当前阶段预计剩余 ${Math.ceil(task.eta.seconds)} 秒 · 估算`));
+      const open=el('button',task.kind==='export'&&task.status==='completed'?'下载视频':'打开');open.dataset.taskControl=task.kind+':'+task.id+':open';open.onclick=()=>openWorkspaceTask(task).catch(hubError);open.disabled=!(['batch','evaluation','render','workflow','study'].includes(task.kind)||task.comparison_id||task.url);actions.append(open);
+      const detail=researchButton('阶段记录',async()=>researchDetails(await api(`api/comparison/tasks/${task.kind}/${task.id}`)));detail.dataset.taskControl=task.kind+':'+task.id+':detail';actions.append(detail);
+      const terminal=TERMINAL.has(task.status)||task.status==='evicted';if(['inference','batch','evaluation','render','export','workflow','study'].includes(task.kind)&&task.status!=='completed'){const button=el('button',terminal?(task.kind==='render'?'重新生成':'恢复'):'取消');button.dataset.taskAction=task.kind+':'+task.id;button.dataset.taskControl=button.dataset.taskAction+':action';button.disabled=!!platform.taskActions?.has(button.dataset.taskAction)||task.status==='cancelling';button.onclick=()=>workspaceTaskAction(task,terminal?'resume':'cancel').catch(hubError);actions.append(button);}
+      if(task.error){const error=el('small',String(task.error).split('\n')[0].slice(0,200),'task-error');error.title=task.error;status.append(error);}row.append(name,status,el('td',progress.total?`${progress.done||0}/${progress.total}${progress.unit==='frames'?' 帧':progress.unit==='optimizer_steps'?' 步':''}`:'—'),actions);table.append(row);
+    }host.append(table);
   }
-  $('workspaceTasks').replaceChildren(table);$('taskPageInfo').textContent=`${value.total} 条 · 当前 ${value.total?value.offset+1:0}–${Math.min(value.offset+value.tasks.length,value.total)}`;$('taskPreviousPage').disabled=value.offset===0;$('taskNextPage').disabled=value.offset+value.tasks.length>=value.total;
-  $('legacyResults').replaceChildren();for(const entry of value.cached_predictions){const row=el('div',undefined,'legacy-result');row.append(el('span',`${entry.source.split('/').pop()} · ${entry.frames} 帧 · ${entry.camera_mode} · ${entry.hand_mode}`));const button=el('button','导入到比较');button.onclick=async()=>{button.disabled=true;try{const comparison=await api('api/comparison/legacy-results/import',{id:entry.id});$('platformDialog').close();await openComparison(comparison.id);}catch(error){hubError(error);}finally{button.disabled=false;}};row.append(button);$('legacyResults').append(row);}
-  if(!value.cached_predictions.length)$('legacyResults').textContent='当前没有诊断页的内存预测；可在 MINT 单算法诊断中加载已有结果，或导入保存的 NPZ。';
+  platform.taskRenderKey=renderKey;platform.taskDisplayedFilter=signature;if(focused)Array.from(host.querySelectorAll('[data-task-control]')).find(button=>button.dataset.taskControl===focused)?.focus?.({preventScroll:true});}
+  $('taskPageInfo').textContent=`${value.total} 条 · 当前 ${value.total?value.offset+1:0}–${Math.min(value.offset+value.tasks.length,value.total)}`;$('taskPreviousPage').disabled=value.offset===0;$('taskNextPage').disabled=value.offset+value.tasks.length>=value.total;
+  renderCachedPredictions(value.cached_predictions||[]);
 }
-async function openCollection(id){
+async function openCollection(id,{history=true}={}){
   const serial=platform.collectionOpenSerial=(platform.collectionOpenSerial||0)+1,navigation=platform.serial,value=await api('api/comparison/collections/'+id);
   if(serial!==platform.collectionOpenSerial||navigation!==platform.serial)return null;
   platform.collection=id;platform.collectionKind=value.kind;platform.collectionValue=value;platform.collectionPage=0;platform.report=null;platform.collectionReportSerial=(platform.collectionReportSerial||0)+1;$('evaluationResults').replaceChildren();$('collectionResultFilter').value='';
-  if(!$('platformDialog').open)$('platformDialog').show();switchHub(value.kind);setCollectionMode(value.kind,'results');const openedNavigation=platform.serial;
+  if(!$('platformDialog').open)$('platformDialog').show();const navigate=()=>{switchHub(value.kind);setCollectionMode(value.kind,'results',{route:history});};if(history)navigate();else restoringRoute(navigate);const openedNavigation=platform.serial;
   await renderCollection(value);if(id===platform.collection&&openedNavigation===platform.serial)$('collectionDetails').scrollIntoView({block:'start'});return value;
 }
 async function refreshCollection(){const id=platform.collection;if(!id)return;const serial=platform.collectionRefreshSerial=(platform.collectionRefreshSerial||0)+1,value=await api('api/comparison/collections/'+id);if(id===platform.collection&&serial===platform.collectionRefreshSerial)await renderCollection(value);}
@@ -306,7 +310,7 @@ function showToolsView(view,{route=true,kind=null}={}){
   for(const panel of $('hub-tools').querySelectorAll('[data-tools-view]'))panel.hidden=panel.dataset.toolsView!==view;
   for(const button of $('hub-tools').querySelectorAll('[data-tools-tab]')){const active=button.dataset.toolsTab===view;button.classList.toggle('active',active);button.setAttribute('aria-current',active?'page':'false');}
   if(kind)$('renderKind').value=kind;
-  if(route&&platform.pane==='tools'){const url=new URL(location.href);url.searchParams.set('tools_tab',view);if(platform.renderJob)url.searchParams.set('tool_job',platform.renderJob);window.history.replaceState(null,'',url.pathname+url.search+url.hash);}
+  if(route&&!platformNavigation.restoring&&platform.pane==='tools'){const url=new URL(location.href);url.searchParams.set('tools_tab',view);if(platform.renderJob)url.searchParams.set('tool_job',platform.renderJob);window.history.replaceState(null,'',url.pathname+url.search+url.hash);}
   refreshPlatformContext();syncRenderSettings();if(view==='render'){if(toolsUI.options?.run_id!==$('renderRun').value)loadRenderOptions().catch(hubError);if(toolsUI.activeJob?.status==='completed')$('renderToolVideo').hidden=false;}else $('renderToolVideo').pause();
 }
 function syncToolRuns(){
@@ -410,25 +414,25 @@ function inspectResult(id){if(!state.cards.has(id))return;resultView.expanded=id
 function initializePlatform(){
   for(const button of document.querySelectorAll('[data-platform-tab]'))button.onclick=()=>openPlatform(button.dataset.platformTab);
   for(const button of document.querySelectorAll('[data-hub-pane]'))button.onclick=()=>switchHub(button.dataset.hubPane);
-  $('backToResults').onclick=()=>{closePlatformWorkspace();if(!state.comparison&&workspaceUI.history.length)openComparison(workspaceUI.history[0].id).catch(error=>notify(error.message));else setWorkspaceTab('view');};$('closePlatform').onclick=()=>closePlatformWorkspace();$('platformDialog').addEventListener('close',()=>{if($('platformDialog').open)return;platform.serial++;clearTimeout(platform.timer);$('renderToolVideo').pause();syncPlatformNavigation(null);if(!platformNavigation.restoring)platformRoute(null,true);});
+  $('backToResults').onclick=()=>returnToComparison().catch(hubError);$('workspaceHome').onclick=event=>{if(event.button||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;event.preventDefault();returnToComparison({home:true}).catch(hubError);};$('workspaceSkip').onclick=event=>{event.preventDefault();focusWorkspaceContent();};$('dismissPlatformError').onclick=()=>{clearPlatformError();focusWorkspaceContent();};$('closePlatform').onclick=()=>closePlatformWorkspace();$('platformDialog').addEventListener('close',()=>{if($('platformDialog').open)return;platform.serial++;clearTimeout(platform.timer);$('renderToolVideo').pause();syncPlatformNavigation(null);if(!platformNavigation.restoring)platformRoute(null,true);});
   $('newComparison').addEventListener('click',interceptPlatformPrimaryAction,{capture:true});
   $('chooseNativeInput').onclick=()=>{$('taskDialog').close();focusHubSection('data','开源数据集原生接入');};
   $('chooseExistingInput').onclick=()=>{$('importSection').open=true;$('importSection').scrollIntoView({block:'nearest',behavior:'smooth'});$('importPath').focus({preventScroll:true});};
   for(const button of document.querySelectorAll('[data-evaluation-route]'))button.onclick=()=>{const route=button.dataset.evaluationRoute;if(route==='current'){openEvaluationCurrentMetrics().catch(hubError);}else if(route==='dataset')switchHub('evaluation');else if(route==='quality')switchHub('quality');else focusHubSection('research','固定集回归与性能对照');};
-  window.addEventListener('popstate',()=>{platformNavigation.restoring=true;try{const query=new URLSearchParams(location.search),tab=query.get('hub');if(tab&&HUB_LABELS[tab]){openPlatform(tab);}else closePlatformWorkspace({history:false});}finally{platformNavigation.restoring=false;}});
+  window.addEventListener('popstate',()=>restoreWorkspaceRoute().catch(hubError));
   window.addEventListener('mint-platform-open',()=>{const section=new URLSearchParams(location.search).get('section');if(section)requestAnimationFrame(()=>{const target=findHubSection(platform.pane,section);if(target)revealPlatformTarget(target);});});
   $('chooseVideoInput').onclick=()=>setDatasetMode(false);$('chooseDatasetInput').onclick=()=>setDatasetMode(true);
   $('loadDataset').onclick=()=>loadDatasetForm(0).catch(error=>{$('datasetSummary').textContent=error.message;});$('datasetUseDirectory').onclick=()=>{$('datasetRoot').value=sourceBrowser.path;loadDatasetForm(0).catch(error=>{$('datasetSummary').textContent=error.message;});};
   $('datasetCamera').onchange=()=>loadDatasetForm(0).catch(error=>notify(error.message));$('datasetEpisode').onchange=chooseDatasetEpisode;
   $('datasetPreviousPage').onclick=()=>loadDatasetForm(Math.max(0,datasetForm.offset-100)).catch(error=>notify(error.message));$('datasetNextPage').onclick=()=>loadDatasetForm(datasetForm.offset+100).catch(error=>notify(error.message));
-  $('useCurrentDirectory').onclick=()=>{$('collectionDirectory').value=sourceBrowser.path||'/data1/lizhen_dataset';};$('scanVideos').onclick=()=>scanCollectionVideos().catch(hubError);
+  $('useCurrentDirectory').onclick=()=>{if(sourceBrowser.path)$('collectionDirectory').value=sourceBrowser.path;};$('scanVideos').onclick=()=>scanCollectionVideos().catch(hubError);
   $('hubLoadDataset').onclick=()=>loadHubDataset(0).catch(hubError);$('hubDatasetCamera').onchange=()=>loadHubDataset(0).catch(hubError);$('hubDatasetPrevious').onclick=()=>loadHubDataset(Math.max(0,platform.datasetOffset-100)).catch(hubError);$('hubDatasetNext').onclick=()=>loadHubDataset(platform.datasetOffset+100).catch(hubError);
   $('selectAllVideos').onclick=()=>{for(const row of platform.scanned||[])platform.selection.set('video:'+row.source,{source:row.source,name:row.name});for(const check of $('collectionVideos').querySelectorAll('input'))check.checked=true;selectionSummary();};
   $('selectAllEpisodes').onclick=()=>{for(const check of $('hubEpisodes').querySelectorAll('input'))if(!check.checked){check.checked=true;check.dispatchEvent(new Event('change'));}};
   $('clearCollectionSelection').onclick=()=>{platform.selection.clear();for(const check of document.querySelectorAll('.collection-items input'))check.checked=false;selectionSummary();};
   $('useSingleEpisode').onclick=async()=>{try{const selected=[...platform.selection.values()];if(selected.length!==1)throw new Error('单次比较请选择一个视频或 Episode');const item=selected[0];$('platformDialog').close();if(item.dataset){$('datasetRoot').value=item.dataset.root;await loadDatasetForm(0,item.dataset);}else{setDatasetMode(false);$('source').value=item.source;}$('maxFrames').value='';openTaskDialog();}catch(error){hubError(error);}};
   $('prepareBatch').onclick=()=>newCollectionForm('batch');$('prepareEvaluation').onclick=()=>newCollectionForm('evaluation');
-  $('refreshWorkspaceTasks').onclick=()=>refreshWorkspaceTasks().catch(hubError);let searchTimer;$('taskSearch').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{platform.taskOffset=0;refreshWorkspaceTasks().catch(hubError);},250);};$('taskStatusFilter').onchange=()=>{platform.taskOffset=0;refreshWorkspaceTasks().catch(hubError);};$('taskPreviousPage').onclick=()=>{platform.taskOffset=Math.max(0,platform.taskOffset-50);refreshWorkspaceTasks().catch(hubError);};$('taskNextPage').onclick=()=>{platform.taskOffset+=50;refreshWorkspaceTasks().catch(hubError);};
+  $('refreshWorkspaceTasks').onclick=()=>refreshWorkspaceTasks().catch(hubError);let searchTimer;$('taskSearch').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{platform.taskOffset=0;taskFilterRoute();refreshWorkspaceTasks().catch(hubError);},250);};const taskFilterChanged=()=>{platform.taskOffset=0;platform.taskSerial++;taskFilterRoute();refreshWorkspaceTasks().catch(hubError);};$('taskStatusFilter').onchange=taskFilterChanged;$('taskKindFilter').onchange=taskFilterChanged;$('taskPreviousPage').onclick=()=>{platform.taskOffset=Math.max(0,platform.taskOffset-50);refreshWorkspaceTasks().catch(hubError);};$('taskNextPage').onclick=()=>{platform.taskOffset+=50;refreshWorkspaceTasks().catch(hubError);};
   $('cancelCollection').onclick=()=>collectionAction('cancel').catch(hubError);$('resumeCollection').onclick=()=>collectionAction('resume').catch(hubError);$('downloadCollectionJSON').onclick=()=>downloadCollectionReport().catch(hubError);
   $('collectionResultFilter').oninput=()=>{platform.collectionPage=0;if(platform.collectionValue)renderCollection(platform.collectionValue).catch(hubError);};
   $('collectionResultPrevious').onclick=()=>{platform.collectionPage=Math.max(0,(platform.collectionPage||0)-1);if(platform.collectionValue)renderCollection(platform.collectionValue).catch(hubError);};$('collectionResultNext').onclick=()=>{platform.collectionPage=(platform.collectionPage||0)+1;if(platform.collectionValue)renderCollection(platform.collectionValue).catch(hubError);};
@@ -489,12 +493,76 @@ function newCollectionForm(kind){platform.collectionOpenSerial=(platform.collect
 
 
 // Module views preserve their original controls; switching never creates jobs or resets drafts.
-function platformPrimaryAction(tab){return ({data:{label:'选择输入',kind:'data'},catalog:{label:'准备数据',kind:'data'},batch:{label:'新建批次',kind:'batch'},evaluation:{label:'新建评测',kind:'evaluation'},quality:{label:'选择比较',kind:'quality'},research:{label:'新建训练',kind:'train'}})[tab]||null;}
+function renderCachedPredictions(entries){
+  const host=$('legacyResults'),signature=JSON.stringify(entries.map(entry=>[entry.id,entry.source,entry.frames,entry.camera_mode,entry.hand_mode]));
+  if(signature!==platform.legacyRenderKey){platform.legacyRenderKey=signature;host.replaceChildren();for(const entry of entries){const row=el('div',undefined,'legacy-result');row.append(el('span',`${entry.source.split('/').pop()} · ${entry.frames} 帧 · ${entry.camera_mode} · ${entry.hand_mode}`));const button=el('button','导入到比较');button.dataset.legacyImport=entry.id;button.onclick=()=>importLegacyPrediction(entry).catch(hubError);row.append(button);host.append(row);}if(!entries.length)host.textContent='当前没有诊断页的内存预测；可在单算法诊断中加载已有结果，或导入保存的 NPZ。';}
+  for(const button of host.querySelectorAll('[data-legacy-import]'))button.disabled=!!platform.legacyImports?.has(button.dataset.legacyImport);
+}
+async function importLegacyPrediction(entry){
+  platform.legacyImports??=new Set();if(platform.legacyImports.has(entry.id))return null;platform.legacyImports.add(entry.id);for(const button of $('legacyResults').querySelectorAll('[data-legacy-import]'))if(button.dataset.legacyImport===entry.id)button.disabled=true;
+  const navigation=platform.serial,token=state.pollToken,filter=workspaceTaskFilterSignature();
+  try{const comparison=await api('api/comparison/legacy-results/import',{id:entry.id});if(navigation!==platform.serial||token!==state.pollToken||platform.pane!=='tasks'||!$('platformDialog').open||filter!==workspaceTaskFilterSignature()){notify('已有预测已导入比较记录，当前页面已保留。',false);return comparison;}closePlatformWorkspace();await openComparison(comparison.id);return comparison;}
+  finally{platform.legacyImports.delete(entry.id);for(const button of $('legacyResults').querySelectorAll('[data-legacy-import]'))if(button.dataset.legacyImport===entry.id)button.disabled=false;}
+}
+function clearPlatformError(){const host=$('platformError');if(host)host.textContent='';const feedback=$('workspaceFeedback');if(feedback)feedback.hidden=true;}
+function focusWorkspaceContent(){const target=$('platformDialog').open?$('platformTitle'):$('comparisonMain');target?.focus?.({preventScroll:true});}
+function comparisonReturnPath(){
+  const url=new URL(location.href),match=url.pathname.match(/^(.*)\/compare\/?$/);if(!match)return '/compare';
+  url.searchParams.delete('return_to');if(state.comparison?.id&&!url.searchParams.has('id'))url.searchParams.set('id',state.comparison.id);
+  if(!$('platformDialog').open&&state.comparison)url.searchParams.set('frame',String((state.frame||0)+1));return url.pathname+url.search;
+}
+function diagnosticContextURL(href){
+  const url=new URL(href,location.href),current=new URL(location.href);if(url.origin!==current.origin||!url.pathname.endsWith('/diagnostics'))return href;
+  const prefix=current.pathname.match(/^(.*)\/compare\/?$/)?.[1]||'';url.pathname=prefix+'/diagnostics';url.searchParams.set('return_to',comparisonReturnPath());return url.pathname+url.search+url.hash;
+}
+function updateDiagnosticReturnLinks(){for(const link of document.querySelectorAll('a[href]')){const href=link.getAttribute?.('href');if(href&&new URL(href,location.href).pathname.endsWith('/diagnostics'))link.setAttribute('href',diagnosticContextURL(href));}}
+async function returnToComparison({home=false}={}){
+  closePlatformWorkspace();if(!state.comparison){let remembered;try{remembered=localStorage.getItem('mint.compare.last');}catch(_){}const preferred=preferredComparison(workspaceUI.history,remembered);if(preferred)await openComparison(preferred.id);}
+  if($('platformDialog').open)return;if(home)setWorkspaceTab('view');focusWorkspaceContent();updateDiagnosticReturnLinks();
+}
+function restoringRoute(fn){const before=platformNavigation.restoring;platformNavigation.restoring=true;try{return fn();}finally{platformNavigation.restoring=before;}}
+async function restoreWorkspaceRoute(){
+  const serial=platformNavigation.routeSerial=(platformNavigation.routeSerial||0)+1,href=location.href,query=new URLSearchParams(location.search),current=()=>serial===platformNavigation.routeSerial&&href===location.href;
+  let id=query.get('id');if(!id&&query.get('run')){const parents=await api('api/comparison/runs/'+encodeURIComponent(query.get('run'))+'/parent');if(!current())return null;id=parents.comparisons[0];}
+  if(id&&state.comparison?.id!==id){await openComparison(id,{history:false,keepPlatform:true});if(!current())return null;}
+  const hub=query.get('hub');
+  if(query.get('collection')&&(!hub||['batch','evaluation'].includes(hub))){await openCollection(query.get('collection'),{history:false});if(!current())return null;}
+  else if(query.get('tool_job')&&(!hub||hub==='tools')){restoringRoute(()=>openPlatform('tools'));selectRenderJob(query.get('tool_job'));showToolsView('render',{route:false});await refreshRenderTool();if(!current())return null;}
+  else if(query.get('workflow')&&(!hub||hub==='research')){restoringRoute(()=>openPlatform('research'));if(typeof showResearchView==='function')showResearchView(query.get('research_tab')||'train',{route:false});if(query.get('research_tab')==='curves'&&typeof selectTrainingCurve==='function')await selectTrainingCurve(query.get('workflow'),{route:false});else await inspectWorkflow(query.get('workflow'),{route:false});if(!current())return null;}
+  else if(query.get('study')&&(!hub||hub==='research')){nextUI.study=query.get('study');restoringRoute(()=>openPlatform('research'));if(typeof showResearchView==='function')showResearchView('regression',{route:false});await pollNext();if(!current())return null;}
+  else if(hub&&HUB_LABELS[hub])restoringRoute(()=>openPlatform(hub));
+  else{restoringRoute(()=>closePlatformWorkspace({history:false}));if(query.get('run'))inspectResult(query.get('run'));if(query.get('frame')&&state.comparison?.sample){const frame=comparisonJumpFrame(query.get('frame'),state.comparison.sample.frames);if(frame!==null)seek(frame);}}
+  if(!current())return null;focusWorkspaceContent();updateDiagnosticReturnLinks();return state.comparison;
+}
+function workspaceTaskFilterSignature(){return JSON.stringify([$('taskSearch').value,$('taskStatusFilter').value,$('taskKindFilter')?.value||'all',platform.taskOffset]);}
+function taskFilterRoute(){if(platform.pane!=='tasks'||platformNavigation.restoring)return;const url=new URL(location.href);for(const [key,value,defaultValue]of [['task_query',$('taskSearch').value.trim(),''],['task_status',$('taskStatusFilter').value,'active'],['task_kind',$('taskKindFilter').value,'all']])if(value!==defaultValue)url.searchParams.set(key,value);else url.searchParams.delete(key);window.history.replaceState(null,'',url.pathname+url.search+url.hash);}
+function restoreTaskFilters(){const query=new URLSearchParams(location.search);if(query.get('hub')!=='tasks')return;const explicit=['task_query','task_status','task_kind'].some(key=>query.has(key));if(platform.tasksVisited&&!platformNavigation.restoring&&!explicit)return;platform.tasksVisited=true;const allowed=(select,value)=>Array.from(select.options).some(option=>option.value===value);$('taskSearch').value=query.get('task_query')||'';const status=query.get('task_status')||'active',kind=query.get('task_kind')||'all';$('taskStatusFilter').value=allowed($('taskStatusFilter'),status)?status:'active';$('taskKindFilter').value=allowed($('taskKindFilter'),kind)?kind:'all';platform.taskOffset=0;}
+function taskKindLabel(kind){return ({inference:'算法推理',batch:'批量比较',evaluation:'数据集评测',workflow:'数据生产与训练',study:'回归与性能',render:'展示视频',export:'比较视频导出',mint_workspace:'单算法诊断',mint_batch:'诊断批量推理',mint_benchmark:'专项基准',code_diff:'代码差异',dataset_analysis:'数据分析'})[kind]||kind;}
+async function openWorkspaceTask(task){
+  if(['batch','evaluation'].includes(task.kind))return openCollection(task.id);
+  if(task.kind==='render')return inspectRenderJob(task.id);
+  if(task.kind==='workflow'){switchHub('research');return inspectWorkflow(task.id,{navigate:true});}
+  if(task.kind==='study'){nextUI.study=task.id;await openPlatform('research');showResearchView('regression');return;}
+  if(task.kind==='export'&&task.status==='completed'&&task.url){location.href=task.url;return;}
+  if(task.comparison_id){closePlatformWorkspace();const serial=platform.serial;await openComparison(task.comparison_id);if(serial===platform.serial&&state.comparison?.id===task.comparison_id&&!$('platformDialog').open)inspectResult(task.id);return;}
+  if(task.url)location.href=diagnosticContextURL(task.url);
+}
+async function workspaceTaskAction(task,action){
+  platform.taskActions??=new Map();const key=task.kind+':'+task.id;if(platform.taskActions.has(key))return null;platform.taskActions.set(key,action);platform.taskSerial++;
+  const update=()=>{for(const button of $('workspaceTasks').querySelectorAll('[data-task-action]'))if(button.dataset.taskAction===key)button.disabled=platform.taskActions.has(key);};update();
+  try{let value;if(task.kind==='inference')value=await api(`api/comparison/runs/${task.id}/${action}`,{});else if(task.kind==='render')value=action==='resume'?await resumeRenderTool(task.id):await api(`api/comparison/tools/${task.id}/cancel`,{});else{const endpoint=({export:'exports',workflow:'workflows',study:'studies',batch:'collections',evaluation:'collections'})[task.kind];if(!endpoint)throw new Error('此任务需要回到原工具继续操作');value=await api(`api/comparison/${endpoint}/${task.id}/${action}`,{});}if(platform.pane==='tasks'&&$('platformDialog').open)await refreshWorkspaceTasks();return value;}
+  finally{platform.taskActions.delete(key);update();}
+}
+function platformPrimaryAction(tab){
+  if(tab==='research'){const view=$('hub-research')?.dataset.researchTab||'train',action=({models:['登记检查点','modelName'],curves:['选择训练任务','curveWorkflowPicker'],regression:['配置回归','suiteProtocol'],protocol:['配置固定评测','offlineProtocol'],production:['配置伪标签生产','productionComparisonPicker']})[view];if(action)return {label:action[0],kind:'research-view',view,target:action[1]};return {label:'新建训练',kind:'train'};}
+  return ({data:{label:'选择输入',kind:'data'},catalog:{label:'准备数据',kind:'data'},batch:{label:'新建批次',kind:'batch'},evaluation:{label:'新建评测',kind:'evaluation'},quality:{label:'选择比较',kind:'quality'}})[tab]||null;
+}
 function syncPlatformPrimaryAction(tab){const button=$('newComparison'),action=platformPrimaryAction(tab);button.hidden=!!tab&&!action;const label=tab?action?.label:'新建比较';if(label){button.replaceChildren(icon('plus'),document.createTextNode(label));button.setAttribute('aria-label',label);button.title=tab?'配置当前模块，不会立即提交计算任务':'配置算法与输入';}}
 function interceptPlatformPrimaryAction(event){if(!$('platformDialog').open)return false;event.preventDefault();event.stopImmediatePropagation();activatePlatformPrimaryAction();return true;}
 function activatePlatformPrimaryAction(){
-  const kind=platformPrimaryAction(platform.pane)?.kind;
+  const action=platformPrimaryAction(platform.pane),kind=action?.kind;
   if(kind==='train'){showResearchView('train');$('workflowKind').value='train';updateWorkflowFields();revealPlatformTarget($('workflowKind'));$('workflowName').focus({preventScroll:true});}
+  else if(kind==='research-view'){showResearchView(action.view);if(action.view==='models')$('modelRegistrationDetails').open=true;const target=$(action.target);if(target){revealPlatformTarget(target);target.focus({preventScroll:true});}}
   else if(kind==='data'){openPlatform('data');requestAnimationFrame(()=>{$('dataSourceTabs')?.focus();});}
   else if(kind==='evaluation'||kind==='batch'){newCollectionForm(kind);revealPlatformTarget($(kind+'Composer'));}
   else if(kind==='quality'){revealPlatformTarget($('qualityComparison'));$('qualityComparison').focus({preventScroll:true});}
@@ -520,7 +588,7 @@ function platformContextText(comparison,pane,selectionCount=0){
 function refreshPlatformContext(){
   let host=$('platformCurrentContext');if(!host){const parent=$('moduleContext');if(!parent)return;host=el('div',undefined,'platform-current-context');host.id='platformCurrentContext';host.setAttribute('role','status');parent.after(host);}
   const frozen=['batch','evaluation'].includes(platform.pane)&&collectionDraft(platform.pane).mode==='results'&&platform.collectionValue?.kind===platform.pane?platform.collectionValue:null;
-  const text=frozen?`已提交批次：${frozen.title} · ${frozen.total} 个冻结输入；待提交清单 ${platform.selection.size} 项另行管理。`:platformContextText(state.comparison,platform.pane,platform.selection.size);host.hidden=!$('platformDialog').open||!text||platform.pane==='quality'||platform.pane==='tools'||(platform.pane==='evaluation'&&!frozen);host.title=state.comparison?.sample_request?.source?.path||'';host.replaceChildren();if(!text)return;host.append(el('span',text));
+  const text=frozen?`已提交批次：${frozen.title} · ${frozen.total} 个冻结输入；待提交清单 ${platform.selection.size} 项另行管理。`:platformContextText(state.comparison,platform.pane,platform.selection.size);host.hidden=!$('platformDialog').open||!text||platform.pane==='quality'||platform.pane==='tools'||(platform.pane==='research'&&!(typeof nextUI!=='undefined'&&['regression','protocol'].includes(nextUI.researchView)))||(platform.pane==='evaluation'&&!frozen);host.title=state.comparison?.sample_request?.source?.path||'';host.replaceChildren();if(!text)return;host.append(el('span',text));
   if(['quality','tools','research'].includes(platform.pane)){const change=el('button',state.comparison?'更换比较':'选择比较','text-button');change.onclick=()=>{closePlatformWorkspace();if(window.innerWidth<=1100){workspaceUI.mobileSidebar=true;applyLayout();}$('historySearch').focus();};host.append(change);}
 }
 function renderTaskResourceSummary(value){

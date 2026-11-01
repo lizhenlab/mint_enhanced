@@ -1314,3 +1314,134 @@ body:has(#diagnosticPlayback:not([hidden])) .diagnostic-section-menu{max-height:
  #diagnosticSpeed{width:52px}
  .diagnostic-frame-jump{gap:3px;font-size:10px}
 }
+
+/* Configuration follows input -> model -> strategy, with one visible run action. */
+.diagnostic-view-navigation{position:relative;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 10px}
+.diagnostic-view-navigation .diagnostic-steps{margin:0;flex:0 1 auto}
+.diagnostic-view-navigation .diagnostic-context{flex:none;margin:0;padding:5px 0;border:0;background:none}
+.diagnostic-view-navigation .diagnostic-context>summary{padding:5px 8px;border-radius:6px;font-size:11px;white-space:nowrap}
+.diagnostic-view-navigation .diagnostic-context>summary:hover{color:var(--cyan);background:var(--surface-2)}
+.diagnostic-view-navigation .diagnostic-context p{position:absolute;z-index:45;right:0;top:calc(100% + 4px);width:min(480px,calc(100vw - 44px));margin:0;padding:12px 14px;border:1px solid var(--line);border-radius:9px;background:var(--surface);box-shadow:var(--shadow);color:var(--mut);font-size:12px;line-height:1.7}
+body[data-diagnostic-view=config] .control-deck{padding-top:14px;padding-bottom:16px}
+body[data-diagnostic-view=config] .masthead{margin-bottom:12px}
+body[data-diagnostic-view=config] .masthead,body[data-diagnostic-view=config] .diagnostic-view-navigation,body[data-diagnostic-view=config] .status-rail,#diagnosticConfiguration{max-width:1480px;margin-inline:auto}
+body[data-diagnostic-view=config] #diagnosticContextBar{display:none}
+body[data-diagnostic-view=config] .status-rail{min-height:29px;gap:9px;margin-bottom:10px;padding:3px 0;border:0;border-radius:0;background:none}
+body[data-diagnostic-view=config] .status-rail .step{min-height:22px;padding:2px 8px;font-size:10px}
+body[data-diagnostic-view=config] #info{font-size:11px;line-height:1.5;overflow-wrap:anywhere}
+body[data-diagnostic-view=config] #progWrap{flex-basis:110px;width:110px}
+.diagnostic-config-heading{display:flex;align-items:baseline;gap:12px;margin:0 0 10px;scroll-margin-top:14px}
+.diagnostic-config-heading h2{margin:0;color:var(--fg);font-size:15px;letter-spacing:.02em}
+.diagnostic-config-heading p{margin:0;color:var(--mut);font-size:11px;line-height:1.5}
+#diagnosticConfiguration .diagnostic-config-grid{grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);align-items:start;gap:14px}
+#diagnosticConfiguration .diagnostic-source-column{display:flex;min-width:0;flex-direction:column;gap:12px}
+#diagnosticConfiguration .control-card{gap:10px;padding:14px;border-radius:11px}
+#diagnosticConfiguration .control-title{margin:0 0 1px;padding:0 0 10px;border-bottom:1px solid var(--line-soft);font-size:12px;letter-spacing:.04em}
+#diagnosticConfiguration .source-card{grid-template-columns:minmax(0,1fr)}
+#diagnosticConfiguration .diagnostic-selection-summary{grid-column:1/-1;display:grid;min-width:0;gap:4px}
+#diagnosticConfiguration .diagnostic-selection-summary strong{display:-webkit-box;min-width:0;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow-wrap:anywhere;color:var(--fg);font-size:12px;font-weight:550;line-height:1.6}
+#diagnosticConfiguration .diagnostic-field-label{font-size:10px;font-weight:600}
+#diagnosticConfiguration .diagnostic-input-browser{display:block;min-width:0;margin:0;padding:0;border:0}
+#diagnosticConfiguration .diagnostic-input-browser>summary,#diagnosticConfiguration .diagnostic-model-browser>summary{min-height:32px;padding:6px 9px;border:1px solid var(--line-soft);border-radius:7px;background:rgba(4,9,8,.28);color:var(--cyan);font-size:11px;cursor:pointer;line-height:1.7}
+#diagnosticConfiguration .diagnostic-input-browser[open]>summary,#diagnosticConfiguration .diagnostic-model-browser[open]>summary{margin:0 0 8px}
+#diagnosticConfiguration #inBrow{gap:8px}
+#diagnosticConfiguration #inNav{align-items:center;gap:8px}
+#diagnosticConfiguration #inCrumb{flex:1;max-height:52px;overflow:auto;font-size:10px;line-height:1.7}
+#diagnosticConfiguration #inUp{flex:none;min-height:28px;padding:3px 7px;font-size:10px}
+#diagnosticConfiguration #inList{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));max-height:160px;min-height:40px;gap:5px;padding:6px;overscroll-behavior:contain}
+#diagnosticConfiguration #inList button{min-width:0;min-height:30px;text-align:left;white-space:normal;overflow-wrap:anywhere;line-height:1.5}
+#diagnosticConfiguration #inList .bmut{grid-column:1/-1}
+#diagnosticConfiguration .episode-field{align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:8px;padding-top:2px}
+#diagnosticConfiguration .episode-field>label{margin-right:4px}
+#diagnosticConfiguration #ep{width:60px;min-height:30px;padding:3px 6px;font-size:12px}
+#diagnosticConfiguration #epPrev,#diagnosticConfiguration #epNext{min-height:30px;min-width:30px;padding:3px 7px}
+#diagnosticConfiguration #epTotal{margin-left:auto;font-size:10px}
+#diagnosticConfiguration .diagnostic-model-card{grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:10px 12px}
+#diagnosticConfiguration .diagnostic-model-card>.diagnostic-selection-summary{grid-column:1}
+#diagnosticConfiguration .diagnostic-model-actions{grid-column:2;align-self:center;min-width:0}
+#diagnosticConfiguration #loadModelBtn{min-width:115px;min-height:33px;padding:5px 10px;border-radius:7px;font-size:11px}
+#diagnosticConfiguration #loadModelBtn:disabled{opacity:.66}
+#diagnosticConfiguration .diagnostic-model-browser{grid-column:1/-1;margin:0;padding:0;border:0;border-radius:0;background:none}
+#diagnosticConfiguration .diagnostic-model-browser .checkpoint-field{gap:6px}
+#diagnosticConfiguration .checkpoint-path-row{gap:5px;flex-wrap:wrap}
+#diagnosticConfiguration .checkpoint-path-row input{flex:1 0 100%;min-height:31px;font-size:10px}
+#diagnosticConfiguration .checkpoint-path-row button{min-height:28px;padding:3px 9px;font-size:10px}
+#diagnosticConfiguration #ckptCrumb{max-height:52px;overflow:auto;font-size:10px;line-height:1.7}
+#diagnosticConfiguration #ckptList{max-height:120px;overscroll-behavior:contain}
+#diagnosticConfiguration .inference-card{grid-template-columns:minmax(0,1fr);gap:11px}
+#diagnosticConfiguration .inference-card>.field{display:grid;grid-template-columns:86px minmax(0,1fr);align-items:center;gap:9px}
+#diagnosticConfiguration .inference-card>.field>label{font-size:11px}
+#diagnosticConfiguration .inference-card>.field>select{width:100%;min-height:34px;font-size:12px}
+#diagnosticConfiguration #gpuSchedulerStatus{border-radius:7px;padding:6px 9px;font-size:10px;line-height:1.6;overflow-wrap:anywhere}
+#diagnosticConfiguration #handModeSeg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%}
+#diagnosticConfiguration #handModeSeg button{min-width:0;min-height:34px;padding:5px 7px;font-size:11px;line-height:1.5;white-space:normal}
+#diagnosticConfiguration .diagnostic-advanced{padding:8px 10px;border-radius:7px}
+#diagnosticConfiguration .diagnostic-advanced>summary{font-size:11px;line-height:1.6}
+#diagnosticConfiguration .diagnostic-advanced-fields{gap:8px}
+#diagnosticConfiguration .diagnostic-advanced-fields select{min-height:31px;font-size:11px}
+#diagnosticConfiguration .diagnostic-run-actions{min-width:0;margin:2px 0 0}
+#diagnosticConfiguration .diagnostic-run-actions .inference-actions{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;margin:0;padding:11px;border:1px solid rgba(185,244,90,.3);border-radius:9px;background:rgba(185,244,90,.045)}
+#diagnosticConfiguration .inference-actions-label{grid-column:1/-1;margin:0;font-size:9px;line-height:1.4}
+#diagnosticConfiguration .diagnostic-run-summary{grid-column:1/-1;min-width:0;margin:0 0 2px;color:var(--mut);font-size:11px;line-height:1.6;overflow-wrap:anywhere}
+#diagnosticConfiguration #loadBtn{min-width:0;width:100%;min-height:38px;padding:7px 12px;font-size:13px;border-radius:7px;box-shadow:none}
+#diagnosticConfiguration #loadRawBtn{min-width:0;min-height:36px;margin:0;padding:6px 10px;font-size:11px;border-radius:7px}
+#diagnosticConfiguration #taskHistory{margin:12px 0 0;padding:10px 13px;border-radius:9px}
+#diagnosticConfiguration #taskHistory>summary{font-size:11px;line-height:1.7}
+@media(max-width:1100px){
+ #diagnosticConfiguration .diagnostic-config-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:11px}
+ #diagnosticConfiguration .inference-card>.field{grid-template-columns:74px minmax(0,1fr);gap:7px}
+ #diagnosticConfiguration #handModeSeg button{padding-inline:4px;font-size:10px}
+ #diagnosticConfiguration .diagnostic-model-card{column-gap:8px}
+ #diagnosticConfiguration #loadModelBtn{min-width:105px;padding-inline:8px}
+}
+@media(max-width:900px){
+ #diagnosticConfiguration .diagnostic-config-grid{grid-template-columns:minmax(0,1fr);gap:12px}
+ #diagnosticConfiguration .diagnostic-source-column{gap:10px}
+ #diagnosticConfiguration .inference-card>.field{grid-template-columns:100px minmax(0,1fr)}
+ #diagnosticConfiguration #handModeSeg button{font-size:11px}
+ #diagnosticConfiguration .diagnostic-advanced-fields{grid-template-columns:repeat(3,minmax(0,1fr))}
+ .diagnostic-view-navigation{gap:8px;flex-wrap:wrap}
+}
+@media(max-width:600px){
+ body[data-diagnostic-view=config] .control-deck{padding:12px 13px}
+ body[data-diagnostic-view=config] .masthead{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px 11px;margin-bottom:11px}
+ body[data-diagnostic-view=config] .masthead .brand-block{grid-column:1;grid-row:1;min-width:0;gap:9px}
+ body[data-diagnostic-view=config] .masthead .brand-block>span:last-child{min-width:0}
+ body[data-diagnostic-view=config] .masthead .brand-block b{font-size:14px;letter-spacing:.04em;line-height:1.2}
+ body[data-diagnostic-view=config] .masthead .brand-block small{font-size:8px;letter-spacing:.08em}
+ body[data-diagnostic-view=config] .masthead .brand-mark{width:36px;height:36px;flex:none}
+ body[data-diagnostic-view=config] .masthead .language-picker{grid-column:2;grid-row:1;justify-self:end;align-self:center;gap:5px}
+ body[data-diagnostic-view=config] .masthead .language-picker select{width:90px;min-width:82px;min-height:30px;padding-left:7px;font-size:11px}
+ body[data-diagnostic-view=config] .masthead .diagnostic-breadcrumb{grid-column:1/-1;grid-row:2;min-width:0;gap:6px;margin:0;font-size:10px}
+ body[data-diagnostic-view=config] .masthead .diagnostic-breadcrumb a:first-child{padding:5px 8px;border-radius:6px}
+ .diagnostic-view-navigation{align-items:flex-start;margin-bottom:8px}
+ .diagnostic-view-navigation .diagnostic-steps{gap:4px}
+ .diagnostic-view-navigation .diagnostic-steps button{padding:6px 9px;font-size:11px}
+ .diagnostic-view-navigation .diagnostic-context>summary{padding:5px;font-size:10px}
+ .diagnostic-view-navigation .diagnostic-context p{width:calc(100vw - 26px)}
+ body[data-diagnostic-view=config] .status-rail{gap:7px;align-items:flex-start;flex-wrap:wrap;margin-bottom:8px}
+ body[data-diagnostic-view=config] .status-rail #info{flex:1 1 180px;font-size:10px}
+ .diagnostic-config-heading{gap:7px;align-items:flex-start;flex-wrap:wrap}
+ .diagnostic-config-heading h2{font-size:14px}
+ .diagnostic-config-heading p{font-size:10px}
+ #diagnosticConfiguration .control-card{padding:12px;gap:9px}
+ #diagnosticConfiguration .inference-card>.field{grid-template-columns:minmax(0,1fr);gap:5px}
+ #diagnosticConfiguration .diagnostic-advanced-fields{grid-template-columns:minmax(0,1fr)}
+ #diagnosticConfiguration #epWrap{flex-direction:row;align-items:center;flex-wrap:nowrap}
+ #diagnosticConfiguration #epWrap>label,#diagnosticConfiguration .episode-stepper{flex:none}
+ #diagnosticConfiguration #epTotal{min-width:0;margin-left:auto;font-size:10px}
+ #diagnosticConfiguration #epScanProg{flex-basis:90px;max-width:90px}
+ #diagnosticConfiguration .diagnostic-selection-summary strong{font-size:11px}
+ #diagnosticConfiguration #inList{grid-template-columns:minmax(0,1fr)}
+}
+@media(max-width:380px){
+ body[data-diagnostic-view=config] .masthead .brand-block b{font-size:12px}
+ body[data-diagnostic-view=config] .masthead .brand-mark{width:32px;height:32px}
+ body[data-diagnostic-view=config] .masthead .language-picker>span{display:none}
+ #diagnosticConfiguration #epWrap{flex-wrap:wrap}
+ #diagnosticConfiguration #epTotal{margin-left:0}
+ #diagnosticConfiguration .diagnostic-model-card{grid-template-columns:minmax(0,1fr)}
+ #diagnosticConfiguration .diagnostic-model-actions{grid-column:1;justify-self:start}
+ #diagnosticConfiguration .diagnostic-run-actions .inference-actions{grid-template-columns:minmax(0,1fr)}
+ #diagnosticConfiguration #loadRawBtn{width:100%}
+}

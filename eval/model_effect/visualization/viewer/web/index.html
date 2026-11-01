@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MINT 单算法诊断 · 算法工作台</title>
-<link rel="stylesheet" href="style.css?v=20261101-diagnostic-workflow">
+<link rel="stylesheet" href="style.css?v=20261101-diagnostic-config">
 </head>
 <body data-diagnostic-view="config">
 <div id="app">
@@ -25,8 +25,7 @@
     </label>
   </div>
 
-  <details class="diagnostic-context"><summary>用途与算法工作台的关系</summary><p>常规推理和算法横向对照请使用算法工作台。这里用于分窗、平滑、手形、内参与逐帧 loss 诊断；已有预测可加入同输入比较，设置不会自动同步。</p></details>
-  <nav class="diagnostic-steps" role="tablist" aria-label="单算法诊断视图"><button id="diagnosticTab-config" type="button" role="tab" data-diagnostic-view="config" aria-selected="true" aria-controls="diagnosticConfiguration">配置与运行</button><button id="diagnosticTab-results" type="button" role="tab" data-diagnostic-view="results" aria-selected="false" aria-controls="diagnosticStage" tabindex="-1">结果与损失</button><button id="diagnosticTab-tools" type="button" role="tab" data-diagnostic-view="tools" aria-selected="false" aria-controls="diagnosticStage" tabindex="-1">专项工具</button></nav>
+  <div class="diagnostic-view-navigation"><nav class="diagnostic-steps" role="tablist" aria-label="单算法诊断视图"><button id="diagnosticTab-config" type="button" role="tab" data-diagnostic-view="config" aria-selected="true" aria-controls="diagnosticConfiguration">配置与运行</button><button id="diagnosticTab-results" type="button" role="tab" data-diagnostic-view="results" aria-selected="false" aria-controls="diagnosticStage" tabindex="-1">结果与损失</button><button id="diagnosticTab-tools" type="button" role="tab" data-diagnostic-view="tools" aria-selected="false" aria-controls="diagnosticStage" tabindex="-1">专项工具</button></nav><details class="diagnostic-context"><summary>用途说明</summary><p>常规推理和算法横向对照请使用算法工作台。这里用于分窗、平滑、手形、内参与逐帧 loss 诊断；已有预测可加入同输入比较，设置不会自动同步。</p></details></div>
   <div id="diagnosticContextBar" class="diagnostic-context-bar" aria-label="当前诊断输入与模型">
     <span class="diagnostic-context-item"><span>输入</span><strong id="diagnosticInputLabel">尚未选择输入</strong></span>
     <span class="diagnostic-context-item"><span>模型</span><strong id="diagnosticModelLabel">等待模型信息</strong></span>
@@ -40,22 +39,17 @@
 
   <section id="diagnosticConfiguration" role="tabpanel" aria-labelledby="diagnosticTab-config">
 
-  <div class="diagnostic-section-title" id="diagnostic-input"><h2>1 · 输入与运行</h2><span>先选模型和视频，再显式开始推理。</span></div>
-  <div class="diagnostic-run-actions">    <span id="inferenceActions" class="inference-actions">
-      <span class="inference-actions-label">运行当前 MINT 输入</span>
-      <button id="loadModelBtn" disabled class="primary secondary-action" title="加载当前检查点；推理时按调度策略分配 GPU，须模型就绪后开始">加载模型</button>
-      <button id="loadBtn" disabled class="primary infer-action" title="只有点击此按钮才会运行模型；选择输入和参数不会自动推理">▶ 开始推理</button>
-    <button id="loadRawBtn" disabled class="ghost" aria-pressed="false" title="只看原始标注，不跑模型推理；再次点击返回已有 GT 对照">仅看原始 GT</button>
-    </span></div>
-  <div class="control-grid">
+  <div class="diagnostic-config-heading" id="diagnostic-input"><h2>推理设置</h2><p>选择输入与模型，确认策略后开始。</p></div>
+  <div class="control-grid diagnostic-config-grid">
+    <div class="diagnostic-source-column">
     <section class="control-card source-card">
-      <div class="control-title"><span>01</span> 模型与输入</div>
+      <div class="control-title"><span>01</span> 选择输入</div>
+      <div class="diagnostic-selection-summary"><span class="diagnostic-field-label">当前输入</span><strong id="diagnosticConfiguredInput" data-i18n-ignore>请选择视频或 Episode</strong></div>
 
-      <div class="diagnostic-input-browser">  <span class="diagnostic-field-label">输入目录</span>
-  <div class="side-hint">进入目录浏览；选择视频或 Episode 后，点击“开始推理”才会计算。</div>
+      <details id="diagnosticInputBrowser" class="diagnostic-input-browser" open><summary>浏览服务器目录 / 更换输入</summary>
   <span class="brow" id="inBrow"><span id="inNav"><span id="inCrumb" class="crumb" title="已选路径,点某层可回退"></span><button id="inUp" title="返回上一级目录" hidden>⬆ 上一级</button></span>
     <span id="inList" class="browlist" title="点目录进入 / 点视频文件选中输入（不会自动推理）"></span></span>
-</div>
+</details>
       <div id="epWrap" class="field episode-field" style="display:none"><label for="ep">Episode</label>
         <span class="episode-stepper"><button id="epPrev" title="上一个">←</button>
           <input id="ep" type="number" min="0" value="0" step="1">
@@ -63,7 +57,13 @@
         <span id="epTotal" class="k"></span>
         <span id="epScan" class="step" style="display:none"></span>
         <span id="epScanProg" class="progwrap" title="枚举 episode 进度" style="display:none"><span class="progbar"></span></span></div>
-      <details id="diagnosticModelBrowser" class="diagnostic-model-browser"><summary>更换模型 / 浏览检查点</summary>
+
+    </section>
+    <section class="control-card diagnostic-model-card" aria-labelledby="diagnosticModelHeading">
+      <div class="control-title" id="diagnosticModelHeading"><span>02</span> 模型检查点</div>
+      <div class="diagnostic-selection-summary"><span class="diagnostic-field-label">当前检查点</span><strong id="diagnosticConfiguredModel" data-i18n-ignore>等待模型信息</strong></div>
+      <div class="diagnostic-model-actions"><button id="loadModelBtn" disabled class="primary secondary-action" title="加载当前检查点；推理时按调度策略分配 GPU，须模型就绪后开始">加载模型</button></div>
+      <details id="diagnosticModelBrowser" class="diagnostic-model-browser"><summary>更换检查点 / 浏览路径</summary>
       <div class="field wide-field checkpoint-field"><label for="ckptPath">模型检查点路径</label>
         <span class="brow">
           <span class="checkpoint-path-row"><input id="ckptPath" type="text" spellcheck="false"
@@ -75,9 +75,10 @@
         </span></div>
       </details>
     </section>
+    </div>
 
     <section class="control-card inference-card">
-      <div class="control-title"><span>02</span> 推理策略</div>
+      <div class="control-title"><span>03</span> 推理策略与运行</div>
       <div id="gpuSchedulerStatus" class="batch-devices" style="display:none" aria-live="polite" data-i18n-ignore></div>
       <div class="field" data-i18n-ignore><label for="videoView">视频视角</label><select id="videoView" title="Full keeps the image; left/right select one eye of a side-by-side stereo video. 视频不截断时间。"><option value="full">完整画面</option><option value="left">双目左眼</option><option value="right">双目右眼</option></select></div>
 
@@ -115,6 +116,12 @@
       <div class="field"><label for="predFov">预测内参</label><select id="predFov" title="只更新设置，点击开始推理后生效；2D、MuJoCo 与 Retargeting 共用">
         <option value="per_frame">每帧</option><option value="mean">整段平均</option></select></div>
 </div></details>
+  <div class="diagnostic-run-actions">    <div id="inferenceActions" class="inference-actions">
+      <span class="inference-actions-label">运行确认</span><p id="diagnosticRunSummary" class="diagnostic-run-summary">当前设置仅在点击开始推理后应用。</p>
+
+      <button id="loadBtn" disabled class="primary infer-action" title="只有点击此按钮才会运行模型；选择输入和参数不会自动推理">▶ 开始推理</button>
+    <button id="loadRawBtn" disabled class="ghost" aria-pressed="false" title="只看原始标注，不跑模型推理；再次点击返回已有 GT 对照">仅看原始 GT</button>
+    </div></div>
     </section>
 
 
@@ -494,10 +501,10 @@
   <label class="diagnostic-frame-jump" for="diagnosticFrameJump">跳至<input id="diagnosticFrameJump" type="number" min="1" max="1" value="1" step="1" disabled><span>帧</span></label>
   <label for="diagnosticSpeed" class="diagnostic-visually-hidden">播放速度</label><select id="diagnosticSpeed" aria-label="播放速度" disabled><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
 </footer>
-<script src="i18n.js?v=20260816-3"></script>
+<script src="i18n.js?v=20261101-diagnostic-config"></script>
 <script src="camera_baselines.js?v=20260814-1"></script>
 <script src="benchmark_suites.js?v=20260906-coverage"></script>
-<script src="app.js?v=20261101-diagnostic-workflow"></script>
-<script src="comparison-assets/diagnostic-ux.js?v=20261101-diagnostic-workflow"></script>
+<script src="app.js?v=20261101-diagnostic-config"></script>
+<script src="comparison-assets/diagnostic-ux.js?v=20261101-diagnostic-config"></script>
 </body>
 </html>

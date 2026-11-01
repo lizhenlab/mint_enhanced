@@ -43,12 +43,16 @@
     const readSelected=options.getSelectedInput||(()=>{
       const dataset=typeof curDatasetRel!=='undefined'&&curDatasetRel;
       if(dataset)return dataset+' · Episode '+(doc.getElementById('ep')?.value||'0');
-      return readState().vidName||((typeof inCur!=='undefined'&&inCur)?'浏览目录：'+inCur+' · 请选择视频':'');
+      const directory=typeof inCur!=='undefined'?inCur:'';
+      return readState().vidName?(directory.replace(/\/$/,'')+'/'+readState().vidName):directory?
+        (win.ViewerI18n?.language==='en'?'Directory: '+directory+' · Select a video':'浏览目录：'+directory+' · 请选择视频'):'';
     });
-    const ids=['diagnosticPlayback','diagnosticPlay','diagnosticPrevFrame','diagnosticNextFrame','diagnosticTimeline','diagnosticFrameLabel','diagnosticFrameJump','diagnosticSpeed','diagnosticPlaybackStatus','diagnosticInputLabel','diagnosticModelLabel','diagnosticResultState'];
+    const readInputReady=options.getInputReady||(()=>typeof curDatasetRel!=='undefined'&&curDatasetRel!==null?
+      typeof EP_TOTAL!=='undefined'&&EP_TOTAL>0:!!(readState().no_truth&&readState().vidName&&readState().eid!=null));
+    const ids=['diagnosticPlayback','diagnosticPlay','diagnosticPrevFrame','diagnosticNextFrame','diagnosticTimeline','diagnosticFrameLabel','diagnosticFrameJump','diagnosticSpeed','diagnosticPlaybackStatus','diagnosticInputLabel','diagnosticModelLabel','diagnosticResultState','diagnosticConfiguredInput','diagnosticConfiguredModel','diagnosticInputBrowser','diagnosticRunSummary'];
     const nodes=Object.fromEntries(ids.map(id=>[id,doc.getElementById(id)]));
     if(!nodes.diagnosticPlayback)return null;
-    let clock=null,detach=()=>{},speed=1,disposed=false;
+    let clock=null,detach=()=>{},speed=1,disposed=false,initialInput=true,inputBrowserTouched=false;
     const text=(node,value)=>{if(node&&node.textContent!==String(value))node.textContent=String(value);};
     function bindClock(video){
       if(video===clock)return;
@@ -74,6 +78,20 @@
       text(nodes.diagnosticInputLabel,summary.source);if(nodes.diagnosticInputLabel)nodes.diagnosticInputLabel.title=summary.path||summary.source;
       text(nodes.diagnosticModelLabel,summary.model);if(nodes.diagnosticModelLabel)nodes.diagnosticModelLabel.title=summary.model;
       text(nodes.diagnosticResultState,summary.status);if(nodes.diagnosticResultState)nodes.diagnosticResultState.dataset.state=summary.state;
+      const selected=readSelected(),english=win.ViewerI18n?.language==='en',configuredModel=readModel()?
+        resultContext({loaded:false},{modelTag:readModel()}).model:english?'No model selected':'尚未选择模型';
+      text(nodes.diagnosticConfiguredInput,selected||(english?'Select a video or Episode':'请选择视频或 Episode'));
+      if(nodes.diagnosticConfiguredInput)nodes.diagnosticConfiguredInput.title=selected||'';
+      text(nodes.diagnosticConfiguredModel,configuredModel);
+      if(nodes.diagnosticConfiguredModel)nodes.diagnosticConfiguredModel.title=configuredModel;
+      const inputBrowser=nodes.diagnosticInputBrowser;
+      if(initialInput&&readInputReady()&&inputBrowser){
+        if(!inputBrowserTouched)inputBrowser.open=false;
+        initialInput=false;
+      }
+      const camera=doc.getElementById('camMode')?.selectedOptions?.[0]?.textContent;
+      const hand=doc.getElementById('handModeSeg')?.querySelector?.('.on')?.textContent;
+      text(nodes.diagnosticRunSummary,[camera,hand].filter(Boolean).join(' · ')||'当前设置仅在点击开始推理后应用。');
       for(const key of ['diagnosticPlay','diagnosticPrevFrame','diagnosticNextFrame','diagnosticTimeline','diagnosticFrameJump','diagnosticSpeed'])if(nodes[key])nodes[key].disabled=!snap.ready;
       const play=nodes.diagnosticPlay;
       text(play,snap.playing?'暂停':'播放');if(play){play.setAttribute('aria-label',snap.playing?'暂停联动播放':'播放联动结果');play.setAttribute('aria-pressed',String(snap.playing));}
@@ -104,6 +122,14 @@
     }
     const handlers=[];
     function listen(node,name,handler){if(!node)return;node.addEventListener(name,handler);handlers.push(()=>node.removeEventListener(name,handler));}
+    listen(nodes.diagnosticInputBrowser,'click',event=>{
+      inputBrowserTouched=true;
+      if(event.target?.closest?.('.bleaf[data-eid]')&&readInputReady()&&!readState().loading){
+        nodes.diagnosticInputBrowser.open=false;
+        nodes.diagnosticInputBrowser.querySelector?.('summary')?.focus();
+      }
+    });
+    listen(nodes.diagnosticInputBrowser,'keydown',()=>{inputBrowserTouched=true;});
     listen(nodes.diagnosticPlay,'click',toggle);
     listen(nodes.diagnosticPrevFrame,'click',()=>seek(playbackSnapshot(readState(),readVideo()).frame-1));
     listen(nodes.diagnosticNextFrame,'click',()=>seek(playbackSnapshot(readState(),readVideo()).frame+1));

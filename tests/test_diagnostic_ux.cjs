@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs');
 const ux=require('../mint/comparison/web/diagnostic-ux.js');
-function fixture(){
+function fixture(options={}){
   class Node{
     constructor(){this.handlers={};this.textContent='';this.value='';this.dataset={};this.attributes={};this.hidden=false;}
     addEventListener(name,handler){(this.handlers[name]??=[]).push(handler);}
@@ -9,12 +9,13 @@ function fixture(){
     setAttribute(key,value){this.attributes[key]=value;}
     fire(name,event={}){for(const fn of this.handlers[name]||[])fn({target:this,...event});}
   }
-  const ids=['diagnosticPlayback','diagnosticPlay','diagnosticPrevFrame','diagnosticNextFrame','diagnosticTimeline','diagnosticFrameLabel','diagnosticFrameJump','diagnosticSpeed','diagnosticPlaybackStatus','diagnosticInputLabel','diagnosticModelLabel','diagnosticResultState'];
+  const ids=['diagnosticPlayback','diagnosticPlay','diagnosticPrevFrame','diagnosticNextFrame','diagnosticTimeline','diagnosticFrameLabel','diagnosticFrameJump','diagnosticSpeed','diagnosticPlaybackStatus','diagnosticInputLabel','diagnosticModelLabel','diagnosticResultState','diagnosticConfiguredInput','diagnosticConfiguredModel','diagnosticInputBrowser','diagnosticRunSummary'];
   const nodes=Object.fromEntries(ids.map(id=>[id,new Node()])),document=new Node();document.getElementById=id=>nodes[id];document.activeElement=null;
   const video=new Node();Object.assign(video,{currentTime:12.5,readyState:2,paused:true,ended:false,playbackRate:1,pause(){this.paused=true;},async play(){this.paused=false;}});
   const state={loaded:true,fps:30,nframes:450,sourceName:'sample.mp4',sourcePath:'/dataset/sample.mp4',hidden:new Set()};
   let clock=video,view='results',redraws=0,interval;
-  const controller=ux.mount({document,window:{setInterval(fn){interval=fn;return 1;},clearInterval(){}},getState:()=>state,getVideo:()=>clock,getView:()=>view,redraw:()=>redraws++,getModelTag:()=> 'model-v1',getSelectedInput:()=>'/dataset/draft.mp4'});
+  nodes.diagnosticInputBrowser.open=true;
+  const controller=ux.mount({document,window:{setInterval(fn){interval=fn;return 1;},clearInterval(){}},getState:()=>state,getVideo:()=>clock,getView:()=>view,redraw:()=>redraws++,getModelTag:()=> 'model-v1',getSelectedInput:()=>'/dataset/draft.mp4',...options});
   return {nodes,document,video,state,controller,tick:()=>interval(),setClock:value=>{clock=value;},setView:value=>{view=value;},redraws:()=>redraws,Node};
 }
 test('playback frames are one-based in UI and clamp seeks to the real last sample frame',()=>{
@@ -52,6 +53,33 @@ test('context uses the loaded source, distinguishes original GT and never promot
   assert.equal(loaded.source,'loaded.mp4');assert.equal(loaded.path,'/real/loaded.mp4');assert.match(loaded.model,/未使用预测/);
   const pending=ux.resultContext({loaded:false,inferenceDirty:true},{selectedInput:'/draft/new.mp4',modelTag:'model'});
   assert.equal(pending.source,'/draft/new.mp4');assert.match(pending.status,/待应用.*未运行/);assert.equal(pending.state,'pending');
+});
+test('configuration summary names the selected input while results retain their loaded provenance',()=>{
+  let selected='/dataset/new.mp4';const f=fixture({getSelectedInput:()=>selected});
+  assert.equal(f.nodes.diagnosticConfiguredInput.textContent,selected);
+  assert.equal(f.nodes.diagnosticInputLabel.textContent,'sample.mp4');
+  selected='/dataset/long/path/another.mp4';f.tick();
+  assert.equal(f.nodes.diagnosticConfiguredInput.title,selected);
+  assert.equal(f.nodes.diagnosticInputLabel.textContent,'sample.mp4');
+});
+test('input browser folds once for an initial valid selection and respects explicit browsing',()=>{
+  let ready=false;const f=fixture({getInputReady:()=>ready});
+  assert.equal(f.nodes.diagnosticInputBrowser.open,true);
+  ready=true;f.tick();assert.equal(f.nodes.diagnosticInputBrowser.open,false);
+  f.nodes.diagnosticInputBrowser.open=true;f.nodes.diagnosticInputBrowser.fire('click');
+  f.tick();assert.equal(f.nodes.diagnosticInputBrowser.open,true);
+  let laterReady=false;const browsing=fixture({getInputReady:()=>laterReady});
+  browsing.nodes.diagnosticInputBrowser.fire('click');laterReady=true;browsing.tick();
+  assert.equal(browsing.nodes.diagnosticInputBrowser.open,true,'an Episode response cannot close active browsing');
+});
+test('explicit video selection folds only its directory browser and never runs inference',()=>{
+  const f=fixture({getInputReady:()=>true}),browser=f.nodes.diagnosticInputBrowser;
+  let focused=0;browser.querySelector=()=>({focus(){focused++;}});browser.open=true;
+  browser.fire('click',{target:{closest:selector=>selector==='.bleaf[data-eid]'?{}:null}});
+  assert.equal(browser.open,false);assert.equal(focused,1);assert.equal(f.redraws(),0);
+  f.state.loading=true;browser.open=true;
+  browser.fire('click',{target:{closest:()=>({})}});
+  assert.equal(browser.open,true,'running input remains frozen');
 });
 const app=fs.readFileSync(require.resolve('../eval/model_effect/visualization/viewer/web/app.js'),'utf8');
 test('input browsing cannot change an in-flight request, including a late directory response',async()=>{

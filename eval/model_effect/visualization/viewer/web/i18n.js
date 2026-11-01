@@ -9,6 +9,19 @@
 
   // Long, user-facing phrases come first; the word dictionary below handles dynamic combinations.
   const PHRASES = new Map([
+    ['用途说明', 'About this workspace'],
+    ['推理设置', 'Inference Settings'],
+    ['选择输入与模型，确认策略后开始。', 'Choose an input and model, then confirm the strategy and run.'],
+    ['选择输入', 'Choose Input'],
+    ['当前输入', 'Selected Input'],
+    ['请选择视频或 Episode', 'Select a video or Episode'],
+    ['浏览服务器目录 / 更换输入', 'Browse Server / Change Input'],
+    ['模型检查点', 'Model Checkpoint'],
+    ['当前检查点', 'Selected Checkpoint'],
+    ['更换检查点 / 浏览路径', 'Change Checkpoint / Browse'],
+    ['推理策略与运行', 'Strategy and Run'],
+    ['运行确认', 'Confirm and Run'],
+    ['当前设置仅在点击开始推理后应用。', 'Settings apply when you click Start Inference.'],
     ['待操作', 'Ready'],
     ['选择输入与参数后，点击“开始推理”运行模型。', 'Choose an input and settings, then click Start Inference.'],
     ['当前进行到哪一步', 'Current workflow step'],

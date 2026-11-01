@@ -145,6 +145,8 @@ def paired_metrics(first_dir, second_dir):
     if first_meta['sample_id'] != second_meta['sample_id']:
         raise ValueError('Metrics require the same sample and optical coordinate system')
     common, ia, ib = np.intersect1d(a['source_frame_indices'], b['source_frame_indices'], return_indices=True)
+    if not np.allclose(a['timestamps_s'][ia], b['timestamps_s'][ib], atol=1e-5, rtol=1e-6):
+        raise ValueError('Metric result timestamps do not match the reference timeline')
     available_a, available_b = a['geometry_valid'][ia], b['geometry_valid'][ib]
     valid = available_a & available_b
     ja, jb = a['joints_camera_m'][ia], b['joints_camera_m'][ib]

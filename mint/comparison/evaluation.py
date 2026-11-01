@@ -41,73 +41,112 @@ def aggregate_pairs(records):
     return output
 
 
+def _comparison_snapshot(manager, comparison_id, tracked=None):
+    """Read only frozen run metadata, without loading unrelated geometry."""
+    with manager.db() as db:
+        row = db.execute('SELECT payload FROM comparisons WHERE id=?', (comparison_id,)).fetchone()
+    if row is None:
+        raise KeyError('Comparison not found')
+    comparison = json.loads(row['payload'])
+    allowed = set(tracked) if tracked is not None else None
+    runs = []
+    for run_id in comparison['run_ids']:
+        if allowed is not None and run_id not in allowed:
+            continue
+        try:
+            runs.append(manager.run(run_id, summary=True))
+        except (KeyError, OSError, ValueError):
+            # A missing requested prediction is counted below; an unrelated
+            # attachment must not invalidate a frozen batch or its GT.
+            continue
+    return {**comparison, 'runs': runs}
+
+
 def collection_report(manager, collection):
     models, sequences = {}, []
     expected = [(selection['algorithm'], normalize_options(selection['algorithm'], selection.get('options')),
                  collection['backend_versions'][selection['algorithm'] + ':' + digest(selection)])
                 for selection in collection['selections']]
-    # Start from the frozen submission, not just successfully-created child
-    # runs: a failed child creation must still appear in the model's attempts.
     for algorithm, options, version in expected:
         key = digest({'algorithm': algorithm, 'options': options, 'backend': version})
         models.setdefault(key, {'id': key, 'algorithm': algorithm, 'label': ALGORITHMS[algorithm]['label'],
             'options': options, 'attempted_sequences': 0, 'scored_sequences': 0,
+            'completed_sequences': 0, 'partial_sequences': 0,
             'failed_sequences': 0, 'unscorable_sequences': 0, 'gt_hand_slots': 0,
             'paired_hand_slots': 0, 'records': []})
-    for index, item in enumerate(collection['items']):
-        descriptor = collection['inputs'][index]
-        sequence = {'index': index, 'source': descriptor['source'], 'name': descriptor.get('name'),
+    # The denominator follows the submitted inputs, including absent execution
+    # rows. Later manual attachments are outside this batch's frozen protocol.
+    for index, descriptor in enumerate(collection['inputs']):
+        item = collection['items'][index] if index < len(collection['items']) else {'status': 'failed', 'error': 'No child execution record'}
+        sequence = {'index': index, 'source': descriptor.get('source'), 'name': descriptor.get('name'),
                     'comparison_id': item.get('comparison_id'), 'status': item['status'], 'metrics': []}
         for record in models.values():
             record['attempted_sequences'] += 1
-        if not item.get('comparison_id'):
-            sequence['error'] = item.get('error', 'No comparison was created')
+        try:
+            if not item.get('comparison_id'):
+                raise ValueError(item.get('error', 'No comparison was created'))
+            comparison = _comparison_snapshot(manager, item['comparison_id'], item.get('run_ids'))
+            runs = comparison['runs']
+            references = [run for run in runs if run['result'] and
+                          run['result'].get('reference_role') == 'user_declared_ground_truth']
+            if len(references) != 1:
+                raise ValueError('Evaluation needs exactly one validated declared reference in the frozen batch')
+            reference = references[0]
+            reference_dir = manager.root / 'runs' / reference['id'] / 'result'
+            reference_meta, arrays = load_result(reference_dir)
+            if reference_meta['sample_id'] != comparison['sample_id']:
+                raise ValueError('Reference belongs to a different input sample')
+            gt_slots = int(arrays['geometry_valid'].sum())
+            poses = arrays.get('pose_valid')
+            if not gt_slots and (poses is None or not poses.any()):
+                raise ValueError('Reference contains no valid hand geometry or camera poses')
+        except (KeyError, OSError, ValueError) as error:
+            sequence['error'] = str(error)
             for record in models.values():
                 record['failed_sequences'] += 1
                 record['unscorable_sequences'] += 1
             sequences.append(sequence)
             continue
-        comparison = manager.comparison(item['comparison_id'])
-        references = [run for run in comparison['runs'] if run['result'] and
-                      run['result'].get('reference_role') == 'user_declared_ground_truth']
-        if len(references) != 1:
-            sequence['error'] = 'Evaluation needs exactly one validated declared reference'
-            for record in models.values():
-                record['failed_sequences'] += 1
-                record['unscorable_sequences'] += 1
-            sequences.append(sequence)
-            continue
-        reference = references[0]
-        reference_dir = manager.root / 'runs' / reference['id'] / 'result'
-        reference_meta, arrays = load_result(reference_dir)
-        gt_slots = int(arrays['geometry_valid'].sum())
         sequence.update(reference_run=reference['id'], gt_hand_slots=gt_slots)
         for record in models.values():
             record['gt_hand_slots'] += gt_slots
         seen = set()
-        for run in comparison['runs']:
-            if run['algorithm'] == 'reference' or run['result'] and run['result'].get('component_sources'):
+        for run in runs:
+            metadata = run['result'] or {}
+            if run['id'] == reference['id'] or run['algorithm'] == 'reference' or \
+                    metadata.get('reference_role') == 'user_declared_ground_truth' or metadata.get('component_sources'):
                 continue
-            backend = (run['result'] or {}).get('backend_version') or json.loads(manager.row(run['id'])['payload'])['backend_version']
-            if run.get('imported') or not any(run['algorithm'] == algorithm and run['options'] == options and backend == version for algorithm, options, version in expected):
+            if run.get('imported'):
                 continue
-            key = digest({'algorithm': run['algorithm'], 'options': run['options'],
-                          'backend': backend})
+            # A bad/missing result is one failed sequence, not a reason to
+            # discard other inputs or a valid reference denominator.
+            try:
+                backend = metadata.get('backend_version') or json.loads(manager.row(run['id'])['payload'])['backend_version']
+            except (KeyError, OSError, ValueError):
+                continue
+            if not any(run['algorithm'] == algorithm and run['options'] == options and backend == version
+                       for algorithm, options, version in expected):
+                continue
+            key = digest({'algorithm': run['algorithm'], 'options': run['options'], 'backend': backend})
             if key in seen:
                 continue
-            seen.add(key)
-            record = models[key]
-            record['label'] = run['label']
-            if run['result']:
-                row = paired_metrics(manager.root / 'runs' / run['id'] / 'result', reference_dir)
-                row.update(sequence=index, algorithm=run['algorithm'])
-                record['records'].append(row)
-                record['scored_sequences'] += 1
-                record['paired_hand_slots'] += row['paired_hand_slots']
-                sequence['metrics'].append(row)
-            else:
+            seen.add(key); record = models[key]; record['label'] = run['label']
+            if not run['result']:
                 record['failed_sequences'] += 1
                 sequence['metrics'].append({'algorithm': run['algorithm'], 'run_id': run['id'], 'error': run.get('error') or run['status']})
+                continue
+            try:
+                row = paired_metrics(manager.root / 'runs' / run['id'] / 'result', reference_dir)
+            except (KeyError, OSError, ValueError) as error:
+                record['failed_sequences'] += 1
+                sequence['metrics'].append({'algorithm': run['algorithm'], 'run_id': run['id'], 'error': str(error)})
+                continue
+            row.update(sequence=index, algorithm=run['algorithm'], prediction_status=run['status'])
+            record['records'].append(row)
+            record['scored_sequences'] += 1
+            record['completed_sequences' if run['status'] == 'completed' else 'partial_sequences'] += 1
+            record['paired_hand_slots'] += row['paired_hand_slots']
+            sequence['metrics'].append(row)
         for key, record in models.items():
             if key not in seen:
                 record['failed_sequences'] += 1
@@ -121,12 +160,13 @@ def collection_report(manager, collection):
         rows.append({**model, **aggregate_pairs(records),
                      'gt_geometry_coverage': coverage if not model['unscorable_sequences'] else None,
                      'available_reference_geometry_coverage': coverage})
-    return json_values({'schema': 1, 'collection_id': collection['id'], 'status': collection['status'],
+    return json_values({'schema': 2, 'collection_id': collection['id'], 'status': collection['status'],
         'protocol': {'name': 'same-input-openpose21-v1', 'source': 'Explicit LeRobot or user-declared normalized reference',
                      'input_options': collection['options'], 'selections': collection['selections'],
                      'backend_versions': collection['backend_versions'],
                      'hand_aggregation': 'Joint/hand count-weighted means on finite intersections; coverage includes failed predictions; overall coverage unavailable when any reference is unscorable',
                      'camera_aggregation': 'Each sequence aligned separately; RMSE combined using valid camera/relative-pose counts',
+                     'sequence_counts': 'Scored sequences have published metric calculations; completed and partial are disjoint subsets. Failed sequences include unscorable references; these are not inference-process failure counts.',
                      'information': 'Dataset annotations are reference-only unless explicit calibration is enabled',
                      'scope': 'Dataset evaluation under this declared protocol, not an automatic reproduction of public paper leaderboard protocols'},
         'total_sequences': len(collection['inputs']), 'scorable_sequences': sum('error' not in row for row in sequences),
@@ -136,7 +176,7 @@ def collection_report(manager, collection):
 def report_csv(report):
     stream = io.StringIO()
     rows = report.get('rows', [])
-    fields = ['label', 'algorithm', 'attempted_sequences', 'scored_sequences', 'failed_sequences', 'unscorable_sequences',
+    fields = ['label', 'algorithm', 'attempted_sequences', 'scored_sequences', 'completed_sequences', 'partial_sequences', 'failed_sequences', 'unscorable_sequences',
               'gt_hand_slots', 'paired_hand_slots', 'gt_geometry_coverage', 'available_reference_geometry_coverage', *MEANS, *RMS]
     writer = csv.DictWriter(stream, fieldnames=fields, extrasaction='ignore')
     writer.writeheader()

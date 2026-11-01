@@ -5,7 +5,7 @@
   <meta name="color-scheme" content="dark"><title>MINT · 多算法工作台</title>
   <link rel="stylesheet" href="comparison-assets/style.css?v=20261101-platform-integrity-2">
   <link rel="stylesheet" href="comparison-assets/comparison-layout.css?v=20261101-platform-integrity-2">
-  <link rel="stylesheet" href="comparison-assets/platform-layout.css?v=20261102-batch-workspace-1">
+  <link rel="stylesheet" href="comparison-assets/platform-layout.css?v=20261102-evaluation-quality-1">
 </head>
 <body>
 <svg class="icon-definitions" aria-hidden="true"><defs>
@@ -105,7 +105,7 @@
   <div class="dialog-heading"><div><p class="eyebrow">MINT WORKSPACE</p><h2 id="platformTitle">统一工作台</h2></div><button id="closePlatform" class="quiet-button" aria-label="返回比较工作区" title="返回比较工作区；数据选择和表单保留">← 返回比较</button></div>
   <nav class="platform-tabs" aria-label="当前模块功能"><button data-hub-pane="data">数据接入</button><button data-hub-pane="catalog">数据与结果目录</button><button data-hub-pane="batch">批量比较</button><button data-hub-pane="evaluation">数据集评测</button><button data-hub-pane="quality">逐帧质检与复核</button><button data-hub-pane="research">训练与模型</button><button data-hub-pane="tasks">任务与恢复</button><button data-hub-pane="tools">专项工具</button></nav>
   <div id="moduleContext" class="module-context" role="status"></div>
-  <nav id="evaluationRoutes" class="evaluation-routes" aria-label="评测与质检入口" hidden><button data-evaluation-route="current">当前比较指标</button><button data-evaluation-route="dataset">数据集评测</button><button data-evaluation-route="quality">逐帧质检</button><button data-evaluation-route="regression">检查点回归 / 性能</button><a href="/diagnostics?tool=benchmark">公开基准 · MINT 专项</a></nav>
+  <nav id="evaluationRoutes" class="evaluation-routes" aria-label="评测与质检入口" hidden><button data-evaluation-route="dataset">数据集评测</button><button data-evaluation-route="quality">逐帧质检</button><button data-evaluation-route="current" hidden>所选比较的指标 ↗</button><details class="evaluation-more"><summary>更多工具</summary><div class="evaluation-more-items"><button data-evaluation-route="regression">检查点回归 / 性能</button><a href="/diagnostics?tool=benchmark">公开基准 · MINT 专项</a></div></details></nav>
   <div class="platform-body">
     <section id="hub-data" class="hub-pane"><div class="hub-grid">
       <section class="panel"><h3>视频目录</h3><label>服务器目录<div class="source-path-row"><input id="collectionDirectory" placeholder="/data1/lizhen_dataset"><button id="useCurrentDirectory">当前目录</button></div></label><div class="button-row"><label><input id="scanRecursive" type="checkbox" checked>递归子目录</label><button id="scanVideos">扫描视频</button><button id="selectAllVideos">选中本页</button></div><p id="scanSummary" class="hint"></p><div id="collectionVideos" class="collection-items"></div></section>
@@ -113,7 +113,7 @@
     </div><div class="hub-footer"><span id="collectionSelectionSummary">批量列表尚未选择输入</span><button id="clearCollectionSelection">清空选择</button><button id="useSingleEpisode">用于单次比较</button><button id="prepareBatch" class="primary">多视频多算法批量</button><button id="prepareEvaluation">创建数据集评测</button></div></section>
     <section id="hub-tasks" class="hub-pane" hidden><p class="explanation">这里管理实际执行的任务及资源；一个比较可以包含多个算法任务。历史画面对照在“比较”，不可变产物和版本在“数据 → 数据与结果目录”。</p><div id="resourceSummary" class="resource-summary"></div><div class="hub-filters"><input id="taskSearch" type="search" placeholder="搜索算法、视频、任务或来源"><select id="taskStatusFilter"><option value="all">全部状态</option><option value="active">运行中与排队</option><option value="completed">已完成</option><option value="attention">需要关注</option></select><button id="refreshWorkspaceTasks">刷新</button></div><div id="workspaceTasks" class="hub-table"></div><div class="button-row"><button id="taskPreviousPage">上一页</button><span id="taskPageInfo"></span><button id="taskNextPage">下一页</button></div><details class="hub-secondary"><summary>诊断页已缓存预测 · 导入数值结果</summary><p class="hint">直接保存并导入已存在的预测，不重复网络推理。仅列出 MINT 单算法诊断页当前已缓存的结果。</p><div id="legacyResults"></div></details></section>
     <section id="hub-batch" class="hub-pane" hidden><p class="explanation">多个输入使用同一套算法设置，每个输入保存一份独立比较。例如 10 个视频 × 4 个算法，会创建 10 组比较、40 个推理任务。</p><details id="batchSetup" class="collection-composer" open><summary>新批次草稿 · 输入清单与统一协议</summary><div id="batchComposer"></div></details></section>
-    <section id="hub-evaluation" class="hub-pane" hidden><p class="explanation">同输入、同帧范围和声明的 GT 下执行多算法数据集评测；分别报告误差、覆盖、失败样本与相机对齐方式。</p><p class="hint">这是本平台的标准几何评测协议。公开 Benchmark 的固定数据集、参考表和 MINT 检查点对照可从“工具 → 模型验证”打开。</p><details id="evaluationSetup" class="collection-composer" open><summary>创建新评测 · 输入与算法参数</summary><div id="evaluationComposer"></div></details></section>
+    <section id="hub-evaluation" class="hub-pane" hidden><p class="explanation">用参考标注（GT）衡量算法的误差与覆盖率。先选样本，再选算法，预检后提交。</p><details id="evaluationSetup" class="collection-composer" open><summary>创建新评测 · 输入与算法参数</summary><div id="evaluationComposer"></div></details></section>
     <section id="hub-tools" class="hub-pane" hidden><div class="tool-groups">
       <section class="panel tool-group"><h3>算法诊断</h3><p class="hint">日常 MINT 推理直接在“比较”中新建；这里用于查看逐帧损失、调整研究参数和定位模型问题。</p><div class="tool-links"><a href="/diagnostics">MINT 单算法诊断 →</a></div><p class="hint">诊断结果需点击“将已有结果加入比较”后，才会进入统一比较列表；两处表单参数各自保存。</p></section>
       <section class="panel tool-group"><h3>数据分析</h3><p class="hint">检查输入质量和数据分布，帮助判断推理问题是否来自数据。</p><div class="tool-links"><a href="/diagnostics?tool=analysis-video">视频质量</a><a href="/diagnostics?tool=analysis-intrinsics">相机内参 / FOV</a><a href="/diagnostics?tool=analysis-diversity">数据集多样性</a></div></section>
@@ -131,9 +131,9 @@
 <script src="comparison-assets/source-browser.js?v=20261101-platform-integrity-2"></script>
 <script src="comparison-assets/result-tools.js?v=20261101-platform-integrity-2"></script>
 <script src="comparison-assets/geometry-tools.js?v=20261101-platform-integrity-2"></script>
-<script src="comparison-assets/platform.js?v=20261102-batch-workspace-1"></script>
-<script src="comparison-assets/research.js?v=20261101-platform-integrity-2"></script>
-<script src="comparison-assets/enhancements.js?v=20261102-native-data-1"></script>
-<script src="comparison-assets/locale.js?v=20261102-batch-workspace-1"></script>
+<script src="comparison-assets/platform.js?v=20261102-evaluation-quality-1"></script>
+<script src="comparison-assets/research.js?v=20261102-evaluation-quality-1"></script>
+<script src="comparison-assets/enhancements.js?v=20261102-evaluation-quality-1"></script>
+<script src="comparison-assets/locale.js?v=20261102-evaluation-quality-1"></script>
 <script src="comparison-assets/app.js?v=20261101-platform-integrity-2"></script>
 </body></html>

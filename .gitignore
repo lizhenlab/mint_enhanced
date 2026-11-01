@@ -120,3 +120,7 @@ docs/dataset-card/
 /model/
 
 !tests/test_comparison_platform.py
+
+!tests/test_evaluation_quality_integrity.py
+!tests/test_quality_annotation_guards.cjs
+!tests/test_evaluation_quality_workspace.cjs

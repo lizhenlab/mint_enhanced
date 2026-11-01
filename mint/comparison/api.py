@@ -219,7 +219,12 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
     @blueprint.post('/api/comparison/quality')
     def create_quality():
         from .quality import QualityService
-        return jsonify(QualityService(manager()).create(**body())), 201
+        data = body()
+        if set(data) - {'run_id', 'reference_run', 'joint_mm', 'acceleration'} or not isinstance(data.get('run_id'), str) or not data['run_id'].strip():
+            raise ValueError('Choose one published prediction and known quality settings')
+        if data.get('reference_run') is not None and not isinstance(data['reference_run'], str):
+            raise ValueError('Choose an optional published reference result')
+        return jsonify(QualityService(manager()).create(**data)), 201
 
     @blueprint.get('/api/comparison/quality/<quality_id>')
     def get_quality(quality_id):

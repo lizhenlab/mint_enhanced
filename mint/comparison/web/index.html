@@ -5,7 +5,7 @@
   <meta name="color-scheme" content="dark"><title>MINT · 多算法工作台</title>
   <link rel="stylesheet" href="comparison-assets/style.css?v=20261101-platform-integrity-2">
   <link rel="stylesheet" href="comparison-assets/comparison-layout.css?v=20261101-platform-integrity-2">
-  <link rel="stylesheet" href="comparison-assets/platform-layout.css?v=20261102-native-data-1">
+  <link rel="stylesheet" href="comparison-assets/platform-layout.css?v=20261102-batch-workspace-1">
 </head>
 <body>
 <svg class="icon-definitions" aria-hidden="true"><defs>
@@ -112,7 +112,7 @@
       <section class="panel"><h3>LeRobot 数据集</h3><label>数据集根目录<div class="source-path-row"><input id="hubDatasetRoot" placeholder="包含 meta/info.json 的目录"><button id="hubLoadDataset">读取</button></div></label><label>相机流<select id="hubDatasetCamera"></select></label><div class="button-row"><button id="hubDatasetPrevious">上一页</button><button id="hubDatasetNext">下一页</button><button id="selectAllEpisodes">选中本页</button></div><p id="hubDatasetSummary" class="hint"></p><div id="hubEpisodes" class="collection-items"></div></section>
     </div><div class="hub-footer"><span id="collectionSelectionSummary">批量列表尚未选择输入</span><button id="clearCollectionSelection">清空选择</button><button id="useSingleEpisode">用于单次比较</button><button id="prepareBatch" class="primary">多视频多算法批量</button><button id="prepareEvaluation">创建数据集评测</button></div></section>
     <section id="hub-tasks" class="hub-pane" hidden><p class="explanation">这里管理实际执行的任务及资源；一个比较可以包含多个算法任务。历史画面对照在“比较”，不可变产物和版本在“数据 → 数据与结果目录”。</p><div id="resourceSummary" class="resource-summary"></div><div class="hub-filters"><input id="taskSearch" type="search" placeholder="搜索算法、视频、任务或来源"><select id="taskStatusFilter"><option value="all">全部状态</option><option value="active">运行中与排队</option><option value="completed">已完成</option><option value="attention">需要关注</option></select><button id="refreshWorkspaceTasks">刷新</button></div><div id="workspaceTasks" class="hub-table"></div><div class="button-row"><button id="taskPreviousPage">上一页</button><span id="taskPageInfo"></span><button id="taskNextPage">下一页</button></div><details class="hub-secondary"><summary>诊断页已缓存预测 · 导入数值结果</summary><p class="hint">直接保存并导入已存在的预测，不重复网络推理。仅列出 MINT 单算法诊断页当前已缓存的结果。</p><div id="legacyResults"></div></details></section>
-    <section id="hub-batch" class="hub-pane" hidden><p class="explanation">按选定输入创建持久比较任务，复用现有 GPU 调度、阶段缓存和恢复机制。每个视频的结果独立保存。</p><details id="batchSetup" class="collection-composer" open><summary>创建新批次 · 输入与算法参数</summary><div id="batchComposer"></div></details></section>
+    <section id="hub-batch" class="hub-pane" hidden><p class="explanation">多个输入使用同一套算法设置，每个输入保存一份独立比较。例如 10 个视频 × 4 个算法，会创建 10 组比较、40 个推理任务。</p><details id="batchSetup" class="collection-composer" open><summary>新批次草稿 · 输入清单与统一协议</summary><div id="batchComposer"></div></details></section>
     <section id="hub-evaluation" class="hub-pane" hidden><p class="explanation">同输入、同帧范围和声明的 GT 下执行多算法数据集评测；分别报告误差、覆盖、失败样本与相机对齐方式。</p><p class="hint">这是本平台的标准几何评测协议。公开 Benchmark 的固定数据集、参考表和 MINT 检查点对照可从“工具 → 模型验证”打开。</p><details id="evaluationSetup" class="collection-composer" open><summary>创建新评测 · 输入与算法参数</summary><div id="evaluationComposer"></div></details></section>
     <section id="hub-tools" class="hub-pane" hidden><div class="tool-groups">
       <section class="panel tool-group"><h3>算法诊断</h3><p class="hint">日常 MINT 推理直接在“比较”中新建；这里用于查看逐帧损失、调整研究参数和定位模型问题。</p><div class="tool-links"><a href="/diagnostics">MINT 单算法诊断 →</a></div><p class="hint">诊断结果需点击“将已有结果加入比较”后，才会进入统一比较列表；两处表单参数各自保存。</p></section>
@@ -122,7 +122,7 @@
     <section id="hub-catalog" class="hub-pane" hidden></section>
     <section id="hub-quality" class="hub-pane" hidden></section>
     <section id="hub-research" class="hub-pane" hidden></section>
-    <section id="collectionDetails" class="hub-secondary" hidden><div class="section-heading"><h3 id="collectionTitle"></h3><div class="button-row"><button id="cancelCollection">取消批次</button><button id="resumeCollection">恢复未完成任务</button><button id="downloadCollectionJSON">下载报告 JSON</button><a id="downloadCollectionCSV" hidden>评测 CSV</a></div></div><p id="collectionProgress"></p><div id="evaluationResults" class="hub-table"></div><div id="collectionChildren" class="hub-table"></div></section>
+    <section id="collectionDetails" class="hub-secondary" hidden><div class="section-heading"><h3 id="collectionTitle"></h3><div class="button-row"><button id="cancelCollection">取消批次</button><button id="resumeCollection">恢复未完成任务</button><button id="downloadCollectionJSON">下载报告 JSON</button><a id="downloadCollectionCSV" hidden>评测 CSV</a></div></div><p id="collectionProgress" role="status"></p><p id="collectionResultSummary" class="collection-result-summary"></p><details class="collection-frozen-protocol"><summary>本批次已冻结的输入与协议</summary><div id="collectionFrozenFields"></div></details><p class="hint">取消只停止本批次独占的未完成任务，保留已完成结果；恢复只重试未完成项，已完成项保持复用。</p><label>筛选本批次输入或错误<input id="collectionResultFilter" type="search" placeholder="输入名称、状态或错误原因"></label><div id="evaluationResults" class="hub-table"></div><div id="collectionChildren" class="hub-table"></div><div class="collection-result-pager"><button id="collectionResultPrevious">上一页</button><span id="collectionResultPage" role="status"></span><button id="collectionResultNext">下一页</button></div></section>
     <p id="platformError" role="alert"></p>
   </div>
 </dialog>
@@ -131,9 +131,9 @@
 <script src="comparison-assets/source-browser.js?v=20261101-platform-integrity-2"></script>
 <script src="comparison-assets/result-tools.js?v=20261101-platform-integrity-2"></script>
 <script src="comparison-assets/geometry-tools.js?v=20261101-platform-integrity-2"></script>
-<script src="comparison-assets/platform.js?v=20261101-platform-integrity-2"></script>
+<script src="comparison-assets/platform.js?v=20261102-batch-workspace-1"></script>
 <script src="comparison-assets/research.js?v=20261101-platform-integrity-2"></script>
 <script src="comparison-assets/enhancements.js?v=20261102-native-data-1"></script>
-<script src="comparison-assets/locale.js?v=20261102-native-data-1"></script>
+<script src="comparison-assets/locale.js?v=20261102-batch-workspace-1"></script>
 <script src="comparison-assets/app.js?v=20261101-platform-integrity-2"></script>
 </body></html>

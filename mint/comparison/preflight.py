@@ -102,6 +102,7 @@ def inspect_request(manager, source, selections, *, view='full', target_fps=0, m
         errors.append('预检期间源文件发生变化，请重新选择')
     return {'ready': not errors, 'errors': errors, 'warnings': list(dict.fromkeys(warnings)),
             'sample_id': request['id'], 'source': str(source), 'source_frames': info['frames'],
+            'input_identity': context['identity'] if context else request['source'],
             'frames': count, 'source_fps': info['fps'], 'fps': fps, 'width': width, 'height': info['height'],
             'view': view, 'first_source_frame': int(indices[0]) if count else None,
             'last_source_frame': int(indices[-1]) if count else None, 'calibration': bool(camera),
@@ -113,33 +114,43 @@ def inspect_request(manager, source, selections, *, view='full', target_fps=0, m
 
 def inspect_collection(manager, *, items, selections, options=None, kind='batch', title=None):
     from mint.runtime import digest
-    if kind not in {'batch', 'evaluation'} or not isinstance(items, list) or not 1 <= len(items) <= 1000:
-        raise ValueError('Choose 1..1000 inputs for batch/evaluation preflight')
-    options = dict(options or {})
-    if options.keys() - {'view', 'target_fps', 'start_frame', 'max_frames', 'camera'}:
-        raise ValueError('Unknown collection input options')
+    from .collections import collection_request, validate_collection_reference
+    items, options = collection_request(kind, items, selections, options)
     specs = {}
     def lookup(name, **custom):
         key = digest({'algorithm': name, **custom})
         if key not in specs:
             specs[key] = backend_spec(name, **custom)
         return specs[key]
-    rows = []
+    rows, references = [], []
     for index, item in enumerate(items):
-        if not isinstance(item, dict):
-            raise ValueError('Collection inputs must be objects')
         try:
             row = inspect_request(manager, item.get('source', ''), selections, dataset=item.get('dataset'),
                                   _backend_lookup=lookup, **options)
             if kind == 'evaluation' and not row['gt'] and not item.get('reference'):
                 row['errors'].append('量化评测需要显式 GT；无 GT 时请使用批量比较和差异分析')
-            if item.get('reference') and not Path(item['reference'].get('path', '')).is_file():
-                row['errors'].append('显式参考标注文件不可用')
+            if item.get('reference'):
+                try:
+                    identity = validate_collection_reference(item['reference'], row['frames'] or None)
+                    row['reference_identity'] = identity
+                    references.append({'index': index, 'identity': identity})
+                except (ValueError, OSError) as error:
+                    row['errors'].append(str(error))
+            row['gt'] = row['gt'] or bool(item.get('reference'))
             row['ready'] = not row['errors']
         except (ValueError, OSError) as error:
             row = {'ready': False, 'source': item.get('source'), 'frames': 0, 'errors': [str(error)], 'warnings': []}
         rows.append({'index': index, **row})
-    return {'ready': all(row['ready'] for row in rows), 'inputs': rows, 'total_inputs': len(rows),
+    ready = all(row['ready'] for row in rows)
+    receipt = digest({'kind': kind, 'items': items, 'selections': selections, 'options': options,
+                      'inputs': [{'sample_id': row.get('sample_id'), 'input_identity': row.get('input_identity'),
+                                  'backends': [{'algorithm': spec['algorithm'], 'version': spec['version'], 'options': spec['options']}
+                                               for spec in row.get('backends', [])]} for row in rows],
+                      'references': references}) if ready else None
+    return {'ready': ready, 'preflight_id': receipt, 'inputs': rows, 'total_inputs': len(rows),
             'total_frames': sum(row['frames'] for row in rows),
             'errors': [f"输入 {r['index'] + 1}：{error}" for r in rows for error in r['errors']],
+            'warnings': [f"输入 {r['index'] + 1}：{warning}" for r in rows for warning in r['warnings']],
+            'reference_inputs': sum(bool(row.get('gt')) for row in rows),
+            'calibrated_inputs': sum(bool(row.get('calibration')) for row in rows),
             'note': '逐输入检查，后台仍逐项重验来源身份；RGB 缓存按配额滚动复用，不截断视频'}

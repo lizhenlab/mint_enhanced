@@ -4,7 +4,7 @@ const datasetForm={active:false,catalog:null,offset:0,serial:0,loading:false};
 const platform={pane:'data',selection:new Map(),catalog:null,datasetOffset:0,taskOffset:0,taskSerial:0,serial:0,timer:null,collection:null,collectionKind:null,report:null,renderJob:null,capability:null};
 const HUB_LABELS={data:'数据接入',tasks:'任务与恢复',batch:'批量比较',evaluation:'数据集评测',tools:'专项工具',catalog:'数据与结果目录',quality:'逐帧质检与人工复核',research:'训练与模型'};
 const HUB_GROUPS={data:'data',catalog:'data',batch:'data',evaluation:'evaluation',quality:'evaluation',research:'research',tasks:'tasks',tools:'tools'};
-const HUB_CONTEXT={data:'选择输入来源，再选择视频、Episode 或已准备的数据版本。',catalog:'检索不可变结果、数据版本、模型和协议。比较记录保存一组对照，任务中心管理实际执行过程。',batch:'同一批输入、统一协议，逐个保存比较结果；可取消或恢复未完成的子任务。',evaluation:'当前比较看算法差异；数据集评测统计误差和覆盖；检查点回归验证模型变化；公开基准使用独立协议。',quality:'逐帧检查、区间复核和二维点修正。二维修正不会自动变成三维或 MANO 真值。',research:'准备数据 → 训练 → 检查点回归 → 模型发布。数据、模型和协议均保留独立版本。',tasks:'查看执行阶段、等待原因、资源与日志。一个比较可能包含多个算法任务。',tools:'专项分析与高级调试；各工具的可用状态和配置要求单独显示。'};
+const HUB_CONTEXT={data:'选择输入来源，再选择视频、Episode 或已准备的数据版本。',catalog:'检索不可变结果、数据版本、模型和协议。比较记录保存一组对照，任务中心管理实际执行过程。',batch:'多个输入按统一设置运行，每个输入独立保存比较。先核对输入与预检结果，再提交后台批次。',evaluation:'当前比较看算法差异；数据集评测统计误差和覆盖；检查点回归验证模型变化；公开基准使用独立协议。',quality:'逐帧检查、区间复核和二维点修正。二维修正不会自动变成三维或 MANO 真值。',research:'准备数据 → 训练 → 检查点回归 → 模型发布。数据、模型和协议均保留独立版本。',tasks:'查看执行阶段、等待原因、资源与日志。一个比较可能包含多个算法任务。',tools:'专项分析与高级调试；各工具的可用状态和配置要求单独显示。'};
 const platformNavigation={scroll:new Map(),restoring:false};
 function platformRoute(tab,replace=false){
   const url=new URL(location.href);if(tab){if(url.searchParams.get('hub')!==tab)url.searchParams.delete('section');if(tab!==platform.collectionKind)url.searchParams.delete('collection');if(tab!=='tools')url.searchParams.delete('tool_job');if(tab!=='research')url.searchParams.delete('study');if(tab!=='research')url.searchParams.delete('research_tab');if(tab!=='data')url.searchParams.delete('source_type');url.searchParams.set('hub',tab);}else{for(const key of ['hub','section','collection','tool_job','study','research_tab','source_type'])url.searchParams.delete(key);}
@@ -19,6 +19,7 @@ function syncPlatformNavigation(tab){
   $('evaluationRoutes').hidden=group!=='evaluation';for(const button of document.querySelectorAll('[data-evaluation-route]')){const active=button.dataset.evaluationRoute===(tab==='quality'?'quality':'dataset');button.classList.toggle('active',active);button.setAttribute('aria-current',active?'page':'false');}$('moduleContext').textContent=HUB_CONTEXT[tab]||'';syncPlatformPrimaryAction(tab);refreshPlatformContext();
 }
 function closePlatformWorkspace({history=true}={}){
+  platform.serial++;platform.collectionOpenSerial=(platform.collectionOpenSerial||0)+1;
   platformNavigation.scroll.set(platform.pane,document.querySelector('.platform-body').scrollTop);
   if($('platformDialog').open)$('platformDialog').close();syncPlatformNavigation(null);if(history&&!platformNavigation.restoring)platformRoute(null);
 }
@@ -80,10 +81,12 @@ function selectedAlgorithmsFrom(container){
 function hubError(error){$('platformError').textContent=error?.message||String(error);}
 function selectionSummary(){
   const values=[...platform.selection.values()],episodes=values.filter(value=>value.dataset).length;
-  $('collectionSelectionSummary').textContent=`批量列表：已选择 ${values.length} 项 · ${episodes} 个 Episode · ${values.length-episodes} 个视频`;refreshPlatformContext();
+  $('collectionSelectionSummary').textContent=`批量列表：已选择 ${values.length} 项 · ${episodes} 个 Episode · ${values.length-episodes} 个视频`;
+  for(const kind of ['batch','evaluation'])if($(kind+'Composer')?.children.length){invalidateCollectionReview(kind);$(kind+'-camera-shared').checked=false;renderCollectionInputs(kind);updateCollectionDraft(kind);}
+  refreshPlatformContext();
 }
 function addInputCheckbox(host,key,value,label,description){
-  const row=el('label',undefined,'collection-entry'),check=el('input');check.type='checkbox';check.checked=platform.selection.has(key);
+  const row=el('label',undefined,'collection-entry'),check=el('input');check.type='checkbox';check.dataset.collectionInput=key;check.checked=platform.selection.has(key);
   check.onchange=()=>{if(check.checked)platform.selection.set(key,value);else platform.selection.delete(key);selectionSummary();};
   const copy=el('span');copy.append(el('strong',label),el('small',description));row.append(check,copy);host.append(row);
 }
@@ -110,34 +113,99 @@ async function loadHubDataset(offset=0){
     $('hubDatasetPrevious').disabled=value.offset===0;$('hubDatasetNext').disabled=value.offset+value.episodes.length>=value.total;
   }catch(error){if(current()){$('hubDatasetSummary').textContent='读取失败，请检查数据集目录和相机后重试。';throw error;}}
 }
+function collectionDraft(kind){platform.collectionForms??={};return platform.collectionForms[kind]??={step:'inputs',page:0,revision:0,mode:'draft',busy:false,preflight:null};}
+function collectionButton(id,label,action,primary=false){const button=el('button',label,primary?'primary':undefined);button.id=id;button.onclick=()=>Promise.resolve().then(action).catch(hubError);return button;}
 function createComposer(kind){
-  const host=$(kind==='batch'?'batchComposer':'evaluationComposer');if(host.children.length)return;
-  const row=el('div',undefined,'composer-summary');row.append(el('p','输入来自“数据与输入”的勾选项；默认处理完整帧范围。','hint'));const choose=el('button','选择视频 / Episode');choose.onclick=()=>switchHub('data');row.append(choose);host.append(row);
-  const fields=el('div',undefined,'composer-fields');
-  for(const [id,label,type,value]of [['view','视频视角','select','full'],['target_fps','目标 FPS（0=源帧率）','number',0],['start_frame','起始帧（Episode 内）','number',0],['max_frames','最多帧数（留空=全部）','number','']]){
+  const host=$(kind==='batch'?'batchComposer':'evaluationComposer');if(host.children.length)return;host.classList.add('collection-workflow');
+  const draft=collectionDraft(kind),setup=$(kind+'Setup'),modes=el('nav',undefined,'collection-mode-nav');modes.setAttribute('aria-label','批次配置与结果');
+  modes.append(collectionButton(kind+'-draft-mode','配置新批次',()=>setCollectionMode(kind,'draft')),collectionButton(kind+'-results-mode','查看已提交批次',()=>setCollectionMode(kind,'results')));setup.before(modes);
+  const nav=el('nav',undefined,'collection-step-nav');nav.setAttribute('aria-label','批次创建步骤');host.append(nav);
+  for(const [key,label,description]of [['inputs','1 · 核对输入清单','每个输入独立保存一组算法比较结果；跨目录勾选会累积在此清单中。'],['settings','2 · 设置统一协议','相同算法与参数应用到全部输入；实际 GPU 并发由调度器决定。'],['review','3 · 预检与提交','先核对逐输入检查结果与警告，再明确提交后台批次。']]){
+    const button=el('button',label);button.id=kind+'-step-nav-'+key;button.setAttribute('aria-controls',kind+'-step-'+key);button.onclick=()=>showCollectionStep(kind,key,{focus:true});nav.append(button);
+    const step=el('section',undefined,'collection-step');step.id=kind+'-step-'+key;const heading=el('div',undefined,'collection-step-heading'),title=el('h3',label);title.id=kind+'-heading-'+key;title.tabIndex=-1;step.setAttribute('aria-labelledby',title.id);heading.append(title,el('p',description));step.append(heading);host.append(step);
+  }
+  const inputs=$(kind+'-step-inputs'),summary=el('p',undefined,'collection-input-summary');summary.id=kind+'-input-summary';summary.setAttribute('role','status');inputs.append(summary);
+  const list=el('div',undefined,'collection-input-list');list.id=kind+'-input-list';inputs.append(list);
+  const pager=el('div',undefined,'collection-input-pager');pager.id=kind+'-input-pager';const page=el('span');page.id=kind+'-input-page';pager.append(collectionButton(kind+'-input-previous','上一页',()=>{draft.page=Math.max(0,draft.page-1);renderCollectionInputs(kind);}),page,collectionButton(kind+'-input-next','下一页',()=>{draft.page++;renderCollectionInputs(kind);}));inputs.append(pager);
+  const choose=source=>{switchHub('data');if(typeof showDataSource==='function')showDataSource(source);};const actions=el('div',undefined,'collection-actions');actions.append(collectionButton(kind+'-add-video','添加服务器视频',()=>choose('video')),collectionButton(kind+'-add-episode','添加 LeRobot Episode',()=>choose('lerobot')),collectionButton(kind+'-clear','清空待提交清单',()=>{platform.selection.clear();syncCollectionCheckboxes();selectionSummary();}),collectionButton(kind+'-to-settings','下一步：统一设置',()=>showCollectionStep(kind,'settings',{focus:true}),true));inputs.append(actions);
+  const settings=$(kind+'-step-settings'),fields=el('div',undefined,'collection-protocol-fields');
+  for(const [id,label,type,value]of [['view','视频视角','select','full'],['target_fps','目标 FPS（0=源帧率）','number',0],['start_frame','起始帧（从 0 起）','number',0],['max_frames','最多帧数（留空=全部）','number','']]){
     const input=type==='select'?selectInput([['full','完整画面'],['left','双目左眼'],['right','双目右眼']],value):el('input');input.id=kind+'-'+id;if(type!=='select'){input.type=type;input.min=id==='max_frames'?1:0;input.step=id==='target_fps'?'any':1;input.required=id!=='max_frames';input.value=value;}fields.append(inputLabel(label,input));
   }
-  const camera=el('textarea');camera.id=kind+'-camera';camera.rows=2;camera.placeholder='可选手工标定 JSON：K、width、height、source';fields.append(inputLabel('手工相机标定（完整原视频网格）',camera));
-  const calibration=el('input');calibration.type='checkbox';calibration.id=kind+'-calibration';fields.append(inputLabel('明确使用数据集标定作为算法输入',calibration));
-  const reference=el('input');reference.type='checkbox';reference.id=kind+'-reference';reference.checked=true;reference.disabled=kind==='evaluation';fields.append(inputLabel('附加数据集 GT 参考',reference));host.append(fields);
-  const algorithms=el('div',undefined,'composer-algorithms');algorithms.id=kind+'-algorithms';
-  host.append(algorithms);cloneComposerAlgorithms(algorithms);
-  const start=el('button',kind==='evaluation'?'开始多算法数据集评测':'开始多视频多算法批量','primary');start.id=kind+'-submit';start.onclick=()=>submitCollection(kind).catch(hubError);host.append(start);
+  settings.append(fields,el('p','默认处理全片。起始帧对普通视频表示源帧号，对 Episode 表示片段内位置；LeRobot 输入使用其已选择的相机流与完整画面。','hint'));
+  const options=el('div',undefined,'collection-option-fields'),reference=selectInput([['available','附加各输入已有的 GT'],['none','仅比较算法结果'],['required','要求每个输入都有 GT']],kind==='evaluation'?'required':'available');reference.id=kind+'-reference';reference.disabled=kind==='evaluation';
+  const calibration=selectInput([['none','不提供已知内参'],['dataset','使用各 Episode 自身标定'],['manual','全部输入共用手工标定']],'none');calibration.id=kind+'-calibration';options.append(inputLabel('参考标注策略',reference),inputLabel('算法输入的内参条件',calibration));settings.append(options);
+  const cameraSettings=el('details',undefined,'collection-manual-camera');cameraSettings.id=kind+'-manual-settings';cameraSettings.append(el('summary','共用手工相机标定'));
+  const camera=el('textarea');camera.id=kind+'-camera';camera.rows=3;camera.spellcheck=false;camera.placeholder='{"K":[[fx,0,cx],[0,fy,cy],[0,0,1]],"width":1920,"height":1080,"source":"标定来源"}';const shared=el('input');shared.type='checkbox';shared.id=kind+'-camera-shared';cameraSettings.append(inputLabel('标定 JSON（对应完整源视频网格）',camera),inputLabel('已核对这份标定适用于本批次全部输入',shared));settings.append(cameraSettings);
+  const note=el('p',undefined,'collection-warning');note.id=kind+'-protocol-note';settings.append(note);
+  const algorithms=el('div',undefined,'composer-algorithms');algorithms.id=kind+'-algorithms';const algorithmSettings=el('details',undefined,'collection-algorithm-settings');algorithmSettings.open=true;algorithmSettings.append(el('summary','选择算法、检查点与运行参数'),algorithms);settings.append(algorithmSettings);cloneComposerAlgorithms(algorithms);
+  const settingsActions=el('div',undefined,'collection-actions');settingsActions.append(collectionButton(kind+'-check','校验批次并查看概览',()=>preflightCollection(kind),true),collectionButton(kind+'-back-inputs','返回输入清单',()=>showCollectionStep(kind,'inputs',{focus:true})));settings.append(settingsActions);
+  const review=$(kind+'-step-review'),message=el('p',undefined,'collection-validation-message');message.id=kind+'-validation-message';message.setAttribute('role','status');const totals=el('div',undefined,'collection-review-summary');totals.id=kind+'-review-summary';const rows=el('div',undefined,'collection-preflight-table');rows.id=kind+'-preflight-rows';review.append(message,totals,rows);
+  const reviewActions=el('div',undefined,'collection-actions');reviewActions.append(collectionButton(kind+'-submit','校验并查看提交概览',()=>submitCollection(kind),true),collectionButton(kind+'-back-settings','返回修改设置',()=>showCollectionStep(kind,'settings',{focus:true})));review.append(reviewActions,el('p','提交后可离开页面。每个输入生成独立比较；同一输入内的算法交给共享 GPU 调度。批量比较本身不生成精度排名，数据集评测需要逐输入参考标注。','hint'));
+  const changed=event=>{if(event?.target===camera||event?.target===calibration)shared.checked=false;invalidateCollectionReview(kind);updateCollectionDraft(kind);};
+  for(const field of fields.querySelectorAll('input,select')){field.oninput=changed;field.onchange=changed;}for(const field of [reference,calibration,shared,camera]){field.oninput=changed;field.onchange=changed;}algorithms.oninput=changed;algorithms.onchange=changed;
+  setup.ontoggle=()=>{if(setup.open&&draft.mode!=='draft')setCollectionMode(kind,'draft');};
+  renderCollectionInputs(kind);showCollectionStep(kind,'inputs');setCollectionMode(kind,draft.mode,{route:false});
+}
+function syncCollectionCheckboxes(){for(const check of document.querySelectorAll('.collection-items input'))if(check.dataset.collectionInput)check.checked=platform.selection.has(check.dataset.collectionInput);}
+function removeCollectionInput(key){platform.selection.delete(key);syncCollectionCheckboxes();selectionSummary();}
+function renderCollectionInputs(kind){
+  const draft=collectionDraft(kind),values=[...platform.selection.entries()],episodes=values.filter(([,value])=>value.dataset).length,gt=values.filter(([,value])=>value.annotation?.ready||value.reference).length;
+  draft.page=Math.min(draft.page,Math.max(0,Math.ceil(values.length/25)-1));$(''+kind+'-input-summary').textContent=`待提交 ${values.length} 个输入 · ${episodes} 个 Episode · ${values.length-episodes} 个视频 · ${gt} 项有可用参考`;
+  const host=$(kind+'-input-list');host.replaceChildren();if(!values.length)host.append(el('p','尚未选择输入。添加视频或 Episode 后，返回此处核对清单。','hint'));
+  else{const table=el('table'),head=el('tr');for(const label of ['序号 / 类型','输入与相机','参考标注','操作'])head.append(el('th',label));table.append(head);
+    values.slice(draft.page*25,(draft.page+1)*25).forEach(([key,value],offset)=>{const row=el('tr'),name=el('td');name.append(el('strong',value.name||value.source),el('small',value.dataset?`${value.dataset.root} · Episode ${value.dataset.episode} · ${value.dataset.video_key||'默认相机流'}`:value.source));row.append(el('td',`${draft.page*25+offset+1} · ${value.dataset?'Episode':'视频'}`),name,el('td',value.annotation?.ready?'已有 GT':value.reference?'显式参考':'无可用 GT'),el('td'));row.lastChild.append(collectionButton(kind+'-remove-'+(draft.page*25+offset),'移除',()=>removeCollectionInput(key)));table.append(row);});host.append(table);}
+  $(kind+'-input-pager').hidden=values.length<=25;$(kind+'-input-page').textContent=`${draft.page+1} / ${Math.max(1,Math.ceil(values.length/25))}`;$(kind+'-input-previous').disabled=draft.page===0;$(kind+'-input-next').disabled=(draft.page+1)*25>=values.length;$(kind+'-to-settings').disabled=!values.length;
+}
+function collectionReferenceMode(kind){const field=$(kind+'-reference');return kind==='evaluation'?'required':['available','none','required'].includes(field.value)?field.value:field.checked?'available':'none';}
+function collectionCalibrationMode(kind){const field=$(kind+'-calibration');return ['none','dataset','manual'].includes(field.value)?field.value:field.checked?'dataset':$(''+kind+'-camera').value.trim()?'manual':'none';}
+function collectionPayload(kind){
+  const chosen=[...platform.selection.values()];if(!chosen.length)throw new Error('请先选择视频或 Episode，并核对输入清单');if(chosen.length>1000)throw new Error('单个批次最多支持 1000 个输入，请分批提交');
+  const raw=Object.fromEntries(['target_fps','start_frame','max_frames'].map(key=>[key,$(kind+'-'+key).value.trim()]));
+  if(!raw.target_fps||!raw.start_frame||!Number.isFinite(Number(raw.target_fps))||Number(raw.target_fps)<0||!Number.isInteger(Number(raw.start_frame))||Number(raw.start_frame)<0||(raw.max_frames&&(!Number.isInteger(Number(raw.max_frames))||Number(raw.max_frames)<1)))throw new Error('请检查帧范围和 FPS：起始帧需为非负整数，最多帧数需为正整数或留空');
+  const options={view:$(kind+'-view').value,target_fps:Number(raw.target_fps),start_frame:Number(raw.start_frame),max_frames:raw.max_frames?Number(raw.max_frames):null},reference=collectionReferenceMode(kind),calibration=collectionCalibrationMode(kind);
+  if(reference==='required'&&chosen.some(value=>!(value.dataset&&value.annotation?.ready)&&!value.reference))throw new Error('当前策略要求每个输入都有 GT；请移除无参考输入，或在批量比较中改为附加可用 GT');
+  if(calibration==='manual'){const text=$(kind+'-camera').value.trim();if(!text)throw new Error('请填写共用手工标定 JSON');try{options.camera=JSON.parse(text);}catch(_){throw new Error('手工标定不是有效 JSON');}if(!options.camera||Array.isArray(options.camera)||typeof options.camera!=='object')throw new Error('手工标定需为包含 K、width、height、source 的对象');if(chosen.length>1&&!$(kind+'-camera-shared').checked)throw new Error('请先核对手工标定适用于全部输入；不同相机应分批或使用各 Episode 自身标定');}
+  const items=chosen.map(value=>({source:value.source,name:value.name,...(value.reference&&reference!=='none'?{reference:structuredClone(value.reference)}:{}),...(value.dataset?{dataset:{...value.dataset,attach_gt:reference!=='none'&&!!value.annotation?.ready,use_calibration:calibration==='dataset'}}:{})}));
+  const selections=selectedAlgorithmsFrom($(kind+'-algorithms'));if(!selections.length||selections.length>7)throw new Error('请选择 1–7 个算法变体，MINT 多检查点分别计数');
+  return {kind,items,selections,options};
 }
 function collectionFormSignature(kind){
-  return JSON.stringify({inputs:[...platform.selection.entries()],fields:['view','target_fps','start_frame','max_frames','camera','calibration','reference'].map(key=>{const field=$(kind+'-'+key);return [key,field.value,field.checked];}),selections:selectedAlgorithmsFrom($(kind+'-algorithms'))});
+  return JSON.stringify({inputs:[...platform.selection.entries()],fields:['view','target_fps','start_frame','max_frames','camera','calibration','reference','camera-shared'].map(key=>{const field=$(kind+'-'+key);return [key,field.value,field.checked];}),selections:selectedAlgorithmsFrom($(kind+'-algorithms'))});
+}
+function invalidateCollectionReview(kind){const draft=collectionDraft(kind);draft.revision++;draft.preflight=null;if($(kind+'-validation-message'))$(kind+'-validation-message').textContent='输入或设置已变化，请重新预检；尚未提交后台任务。';$(kind+'-review-summary').replaceChildren();$(kind+'-preflight-rows').replaceChildren();}
+function updateCollectionDraft(kind){
+  const draft=collectionDraft(kind),calibration=collectionCalibrationMode(kind);$(kind+'-manual-settings').hidden=calibration!=='manual';if(calibration==='manual')$(kind+'-manual-settings').open=true;
+  $(kind+'-protocol-note').textContent='GT 用于参考评测，与算法输入内参分别设置。'+(calibration==='dataset'?'每个 Episode 使用自身标定；普通视频不会获得标定，ACE K-given 仍需逐输入满足内参要求。':calibration==='manual'?'本份标定将应用到全部输入，必须对应各自完整源视频网格。':'不向算法提供已知内参；ACE K-given 不能在此条件下运行。')+' MINT 保持 FoV 预测，ACE K-free 保持内参预测；HaWoR 在提供标定时使用它。';
+  for(const id of ['submit','check'])$(kind+'-'+id).disabled=draft.busy||!platform.selection.size;
+  $(kind+'-submit').textContent=draft.busy?'正在处理…':draft.preflight?.check.ready?'提交已校验批次':'校验并查看提交概览';
+}
+function showCollectionStep(kind,key,{focus=false}={}){const draft=collectionDraft(kind);draft.step=key;draft.stepRevision=(draft.stepRevision||0)+1;for(const name of ['inputs','settings','review']){const active=key===name;$(kind+'-step-'+name).hidden=!active;$(kind+'-step-nav-'+name).classList.toggle('active',active);$(kind+'-step-nav-'+name).setAttribute('aria-current',active?'step':'false');}if(key==='review'&&!draft.preflight)$(kind+'-validation-message').textContent='尚未预检。校验会读取所选输入和算法条件，不会启动推理。';updateCollectionDraft(kind);if(focus)$(kind+'-heading-'+key).focus();}
+function collectionDefinition(host,values){host.replaceChildren();const list=el('dl');for(const [label,value]of values)list.append(el('dt',label),el('dd',String(value)));host.append(list);}
+function renderCollectionPreflight(kind,payload,check){
+  const rows=check.inputs||[],warnings=rows.flatMap(row=>row.warnings||[]),missing=rows.filter(row=>!row.gt).length;
+  $(kind+'-validation-message').dataset.ready=String(check.ready);$(kind+'-validation-message').textContent=check.ready?'预检通过。请核对下方样本范围和警告，再点击提交；当前尚未启动推理。':'预检未通过：'+(check.errors||[]).slice(0,20).join('；');
+  collectionDefinition($(kind+'-review-summary'),[['输入 × 算法变体',`${payload.items.length} × ${payload.selections.length} = ${payload.items.length*payload.selections.length} 个推理任务`],['总选中帧数',check.total_frames??'待确认'],['附加参考',`${rows.length-missing} / ${rows.length} 个输入`],['检查警告',`${warnings.length} 项`],['帧范围',payload.options.max_frames===null?'从所选起始帧处理到片尾':`每个输入最多 ${payload.options.max_frames} 帧`]]);
+  const host=$(kind+'-preflight-rows');host.replaceChildren();const table=el('table'),head=el('tr');for(const name of ['输入','帧 / 视角','内参 / GT','检查结果与警告'])head.append(el('th',name));table.append(head);
+  rows.forEach((row,index)=>{const tr=el('tr');tr.append(el('td',payload.items[index]?.name||payload.items[index]?.source||String(index+1)),el('td',`${row.frames??0} 帧 · ${row.view||'—'}`),el('td',`${row.calibration?'提供内参':'不提供内参'} · ${row.gt?'附加 GT':'无 GT'}`),el('td',[...(row.errors||[]),...(row.warnings||[])].join('；')||(row.ready?'通过':'未通过')));table.append(tr);});host.append(table);
+}
+async function preflightCollection(kind){
+  const draft=collectionDraft(kind);if(draft.busy)return;const payload=collectionPayload(kind),signature=collectionFormSignature(kind),revision=draft.revision,navigation=platform.serial,stepRevision=draft.stepRevision;draft.busy=true;draft.preflight=null;updateCollectionDraft(kind);
+  try{const check=await api('api/comparison/collections/preflight',payload);if(signature!==collectionFormSignature(kind)||revision!==draft.revision)throw new Error('输入或参数已变化，请核对后重新提交预检');draft.preflight={payload:structuredClone(payload),signature,check};renderCollectionPreflight(kind,payload,check);if(navigation===platform.serial&&stepRevision===draft.stepRevision)showCollectionStep(kind,'review',{focus:platform.pane===kind});}
+  finally{draft.busy=false;updateCollectionDraft(kind);}
 }
 async function submitCollection(kind){
-  if($(kind+'-submit').disabled)return;
-  const chosen=[...platform.selection.values()];if(!chosen.length)throw new Error('请先在“数据与输入”选择视频或 Episode');
-  if(kind==='evaluation'&&chosen.some(value=>!value.dataset||!value.annotation?.ready))throw new Error('界面评测需要每个输入都有 LeRobot GT；普通视频可使用 API 提供明确参考标注');
-  const options={view:$(kind+'-view').value,target_fps:Number($(kind+'-target_fps').value),start_frame:Number($(kind+'-start_frame').value),max_frames:$(kind+'-max_frames').value===''?null:Number($(kind+'-max_frames').value)};
-  const manualCamera=$(kind+'-camera').value.trim();if(manualCamera)options.camera=JSON.parse(manualCamera);
-  for(const input of $(kind==='batch'?'batchComposer':'evaluationComposer').querySelectorAll('input[type=number]'))if(!input.checkValidity()){input.reportValidity();throw new Error('请检查帧范围和 FPS');}
-  const items=chosen.map(value=>({source:value.source,name:value.name,...(value.dataset?{dataset:{...value.dataset,attach_gt:kind==='evaluation'||$(kind+'-reference').checked,use_calibration:$(kind+'-calibration').checked}}:{})}));
-  const selections=selectedAlgorithmsFrom($(kind+'-algorithms'));if(!selections.length)throw new Error('请至少选择一个算法');
-  const button=$(kind+'-submit'),signature=collectionFormSignature(kind);button.disabled=true;
-  try{button.textContent=`正在预检 ${items.length} 个输入…`;const check=await api('api/comparison/collections/preflight',{kind,items,selections,options});if(!check.ready)throw new Error(check.errors.slice(0,20).join('；'));if(signature!==collectionFormSignature(kind))throw new Error('输入或参数已变化，请核对后重新提交预检');const value=await api('api/comparison/collections',{kind,items,selections,options});await openCollection(value.id);}finally{button.disabled=false;button.textContent=kind==='evaluation'?'开始多算法数据集评测':'开始多视频多算法批量';}
+  const draft=collectionDraft(kind);if(draft.busy||$(kind+'-submit').disabled)return;
+  if(!draft.preflight||!draft.preflight.check.ready||draft.preflight.signature!==collectionFormSignature(kind))return preflightCollection(kind);
+  const {payload}=draft.preflight,serial=platform.serial,revision=draft.revision,signature=collectionFormSignature(kind),stepRevision=draft.stepRevision;draft.busy=true;updateCollectionDraft(kind);
+  try{const receipt=draft.preflight.check.preflight_id,value=await api('api/comparison/collections',{...structuredClone(payload),...(receipt?{preflight_id:receipt}:{})});if(serial===platform.serial&&platform.pane===kind&&revision===draft.revision&&signature===collectionFormSignature(kind)&&stepRevision===draft.stepRevision)await openCollection(value.id);else{$(kind+'-validation-message').textContent='批次已提交，后台继续运行，可到任务中心查看。';if(typeof notify==='function')notify('批次已提交，当前草稿已保留；后台进度可在任务中心查看。');}}
+  catch(error){invalidateCollectionReview(kind);$(kind+'-validation-message').textContent='提交未确认：'+error.message+'；请重新预检后重试，相同批次会复用既有记录。';throw error;}
+  finally{draft.busy=false;updateCollectionDraft(kind);}
+}
+function setCollectionMode(kind,mode,{route=true}={}){
+  const draft=collectionDraft(kind);if(mode==='results'&&(!platform.collection||platform.collectionKind!==kind))mode='draft';draft.mode=mode;$(kind+'Setup').open=mode==='draft';
+  $('collectionDetails').hidden=mode!=='results'||platform.pane!==kind;$(kind+'-draft-mode').classList.toggle('active',mode==='draft');$(kind+'-results-mode').classList.toggle('active',mode==='results');$(kind+'-results-mode').hidden=!platform.collection||platform.collectionKind!==kind;
+  if(route&&platform.pane===kind){const url=new URL(location.href);if(mode==='results')url.searchParams.set('collection',platform.collection);else url.searchParams.delete('collection');window.history.replaceState(null,'',url.pathname+url.search+url.hash);}refreshPlatformContext();
 }
 async function openPlatform(tab='data'){
   pause();$('platformError').textContent='';if(!$('platformDialog').open)$('platformDialog').show();
@@ -152,7 +220,7 @@ function switchHub(tab){
   for(const key of Object.keys(HUB_LABELS))$('hub-'+key).hidden=key!==tab;
   syncPlatformNavigation(tab);if(!platformNavigation.restoring)platformRoute(tab);requestAnimationFrame(()=>{if(platform.pane===tab)body.scrollTop=platformNavigation.scroll.get(tab)||0;});
   $('collectionDetails').hidden=!platform.collection||platform.collectionKind!==tab;
-  if(['batch','evaluation'].includes(tab))createComposer(tab);
+  if(['batch','evaluation'].includes(tab)){createComposer(tab);setCollectionMode(tab,collectionDraft(tab).mode,{route:false});}
   if(tab==='tools')refreshToolOptions().catch(hubError);
   if(tab==='catalog')refreshArtifactCatalog().catch(hubError);
   if(tab==='quality')refreshQualityContext().catch(hubError);
@@ -186,21 +254,39 @@ async function refreshWorkspaceTasks(){
   if(!value.cached_predictions.length)$('legacyResults').textContent='当前没有诊断页的内存预测；可在 MINT 单算法诊断中加载已有结果，或导入保存的 NPZ。';
 }
 async function openCollection(id){
-  const value=await api('api/comparison/collections/'+id);platform.collection=id;platform.collectionKind=value.kind;platform.report=null;$('evaluationResults').replaceChildren();
-  if(!$('platformDialog').open)$('platformDialog').show();switchHub(value.kind);$(value.kind+'Setup').open=false;const url=new URL(location.href);url.searchParams.set('collection',id);window.history.replaceState(null,'',url.pathname+url.search);await renderCollection(value);$('collectionDetails').scrollIntoView({block:'start'});
+  const serial=platform.collectionOpenSerial=(platform.collectionOpenSerial||0)+1,navigation=platform.serial,value=await api('api/comparison/collections/'+id);
+  if(serial!==platform.collectionOpenSerial||navigation!==platform.serial)return null;
+  platform.collection=id;platform.collectionKind=value.kind;platform.collectionValue=value;platform.collectionPage=0;platform.report=null;platform.collectionReportSerial=(platform.collectionReportSerial||0)+1;$('evaluationResults').replaceChildren();$('collectionResultFilter').value='';
+  if(!$('platformDialog').open)$('platformDialog').show();switchHub(value.kind);setCollectionMode(value.kind,'results');const openedNavigation=platform.serial;
+  await renderCollection(value);if(id===platform.collection&&openedNavigation===platform.serial)$('collectionDetails').scrollIntoView({block:'start'});return value;
 }
-async function refreshCollection(){const id=platform.collection;if(!id)return;const value=await api('api/comparison/collections/'+id);if(id===platform.collection)await renderCollection(value);}
+async function refreshCollection(){const id=platform.collection;if(!id)return;const serial=platform.collectionRefreshSerial=(platform.collectionRefreshSerial||0)+1,value=await api('api/comparison/collections/'+id);if(id===platform.collection&&serial===platform.collectionRefreshSerial)await renderCollection(value);}
+function collectionErrors(item){return [...new Set([item.error,...(Array.isArray(item.errors)?item.errors:[])].filter(Boolean))].join('；');}
+function collectionCounts(value){const counts={queued:0,running:0,completed:0,partial:0,failed:0,cancelled:0,interrupted:0};for(const item of value.items)if(Object.hasOwn(counts,item.status))counts[item.status]++;return value.counts||counts;}
+function updateCollectionActions(value){const busy=!!platform.collectionAction;$('cancelCollection').disabled=busy||TERMINAL.has(value.status)||value.status==='cancelling';$('resumeCollection').disabled=busy||!TERMINAL.has(value.status)||value.status==='completed';$('downloadCollectionJSON').disabled=!value.report_available;}
 async function renderCollection(value){
-  if(value.id!==platform.collection)return;$('collectionDetails').hidden=platform.pane!==value.kind;$('collectionTitle').textContent=value.title;$('collectionProgress').textContent=`${statusLabel(value.status)} · 已处理 ${value.done}/${value.total} · 完整完成 ${value.completed} · ${value.error||''}`;
-  $('cancelCollection').disabled=TERMINAL.has(value.status);$('resumeCollection').disabled=!TERMINAL.has(value.status)||value.status==='completed';$('downloadCollectionJSON').disabled=!value.report_available;
-  const table=el('table'),head=el('tr');for(const label of ['输入','状态','结果'])head.append(el('th',label));table.append(head);
-  value.items.slice(0,200).forEach((item,index)=>{const row=el('tr');row.append(el('td',value.inputs[index].name||value.inputs[index].source),el('td',statusLabel(item.status)+(item.error?' · '+item.error:'')));const cell=el('td');if(item.comparison_id){const button=el('button','打开联动结果');button.onclick=()=>{$('platformDialog').close();openComparison(item.comparison_id).catch(error=>notify(error.message));};cell.append(button);}row.append(cell);table.append(row);});$('collectionChildren').replaceChildren(table);
-  if(value.total>200)$('collectionChildren').append(el('p',`界面显示前 200 项；完整 ${value.total} 项见下载索引。`,'hint'));
+  if(value.id!==platform.collection)return;platform.collectionValue=value;$('collectionDetails').hidden=platform.pane!==value.kind||collectionDraft(value.kind).mode!=='results';$('collectionTitle').textContent='已提交批次 · '+value.title;
+  const counts=collectionCounts(value);$('collectionProgress').textContent=`${statusLabel(value.status)} · 已结束 ${value.done}/${value.total}${value.error?' · '+value.error:''}`;
+  $('collectionResultSummary').textContent=`完整完成 ${counts.completed} · 部分结果 ${counts.partial} · 失败 ${counts.failed} · 已取消 ${counts.cancelled} · 已中断 ${counts.interrupted} · 排队 ${counts.queued} · 运行 ${counts.running}`;updateCollectionActions(value);
+  const options=value.options||{},gt=value.inputs.filter(input=>input.dataset?.attach_gt||input.reference).length;
+  collectionDefinition($('collectionFrozenFields'),[['冻结输入',`${value.total} 个 · ${value.selections.length} 个算法变体 / 输入`],['算法',value.selections.map(selection=>selection.algorithm+(selection.checkpoint?' · '+selection.checkpoint.split('/').pop():'')).join(' / ')],['帧范围',`${options.start_frame||0} 起 · ${options.max_frames??'全部剩余帧'}`],['视角 / 目标 FPS',`${options.view||'full'} / ${options.target_fps||'源帧率'}`],['参考标注',`${gt} / ${value.total} 个输入`],['已知内参',options.camera?'全部输入共用已声明手工标定':value.inputs.some(input=>input.dataset?.use_calibration)?'各 Episode 使用自身标定；普通视频无标定':'未提供已知内参']]);
+  const query=$('collectionResultFilter').value.trim().toLowerCase(),all=value.items.map((item,index)=>({item,index})),filtered=all.filter(({item,index})=>!query||[value.inputs[index].name,value.inputs[index].source,item.status,collectionErrors(item)].join(' ').toLowerCase().includes(query));
+  platform.collectionPage=Math.min(platform.collectionPage||0,Math.max(0,Math.ceil(filtered.length/50)-1));const start=platform.collectionPage*50;
+  const table=el('table'),head=el('tr');for(const label of ['序号 / 输入','状态与错误原因','结果'])head.append(el('th',label));table.append(head);
+  filtered.slice(start,start+50).forEach(({item,index})=>{const row=el('tr'),name=el('td');name.append(el('strong',`${index+1} · ${value.inputs[index].name||value.inputs[index].source}`),el('small',value.inputs[index].dataset?`Episode ${value.inputs[index].dataset.episode} · ${value.inputs[index].dataset.video_key||'默认相机流'}`:value.inputs[index].source));row.append(name,el('td',statusLabel(item.status)+(collectionErrors(item)?' · '+collectionErrors(item):'')));const cell=el('td');if(item.comparison_id){const button=el('button','打开此输入的比较');button.onclick=()=>{$('platformDialog').close();openComparison(item.comparison_id).catch(error=>notify(error.message));};cell.append(button);}row.append(cell);table.append(row);});$('collectionChildren').replaceChildren(table);
+  $('collectionResultPage').textContent=`${filtered.length?start+1:0}–${Math.min(start+50,filtered.length)} / ${filtered.length} 项 · 全批 ${value.total} 项`;$('collectionResultPrevious').disabled=start===0;$('collectionResultNext').disabled=start+50>=filtered.length;refreshPlatformContext();
+  if(!value.report_available){platform.report=null;platform.collectionReportSerial=(platform.collectionReportSerial||0)+1;$('evaluationResults').replaceChildren();}
   if(value.report_available&&(!platform.report||platform.report._collection_id!==value.id)){
-    const report=await api(`api/comparison/collections/${value.id}/report`);if(platform.collection!==value.id)return;platform.report={...report,_collection_id:value.id};renderEvaluationReport(platform.report);
+    const generation=platform.collectionReportSerial,report=await api(`api/comparison/collections/${value.id}/report`);if(platform.collection!==value.id||generation!==platform.collectionReportSerial||!platform.collectionValue?.report_available)return;platform.report={...report,_collection_id:value.id};renderEvaluationReport(platform.report);
   }
   $('downloadCollectionCSV').hidden=value.kind!=='evaluation'||!value.report_available;$('downloadCollectionCSV').href=`api/comparison/collections/${value.id}/report?format=csv`;$('downloadCollectionCSV').download='evaluation-'+value.id.slice(0,8)+'.csv';
 }
+async function collectionAction(action){
+  const id=platform.collection;if(!id||platform.collectionAction)return;platform.collectionAction={id,action};if(action==='resume'){platform.collectionReportSerial=(platform.collectionReportSerial||0)+1;platform.report=null;}if(platform.collectionValue)updateCollectionActions(platform.collectionValue);
+  try{const value=await api(`api/comparison/collections/${id}/${action}`,{});if(id!==platform.collection)return;platform.collectionRefreshSerial=(platform.collectionRefreshSerial||0)+1;if(action==='resume')platform.report=null;await renderCollection(value);}
+  finally{platform.collectionAction=null;if(platform.collectionValue)updateCollectionActions(platform.collectionValue);}
+}
+async function downloadCollectionReport(){const id=platform.collection;if(!id)throw new Error('请先打开已提交批次');const value=await api(`api/comparison/collections/${id}/report`);download('collection-'+id.slice(0,8)+'.json',JSON.stringify(value,null,2));}
 function renderEvaluationReport(report){
   const host=$('evaluationResults');host.replaceChildren();if(!report.rows)return;
   host.append(el('p',`协议 ${report.protocol.name} · 可评分 ${report.scorable_sequences}/${report.total_sequences} 个输入；覆盖率包含失败预测。`,'hint'));
@@ -263,7 +349,9 @@ function initializePlatform(){
   $('useSingleEpisode').onclick=async()=>{try{const selected=[...platform.selection.values()];if(selected.length!==1)throw new Error('单次比较请选择一个视频或 Episode');const item=selected[0];$('platformDialog').close();if(item.dataset){$('datasetRoot').value=item.dataset.root;await loadDatasetForm(0,item.dataset);}else{setDatasetMode(false);$('source').value=item.source;}$('maxFrames').value='';openTaskDialog();}catch(error){hubError(error);}};
   $('prepareBatch').onclick=()=>newCollectionForm('batch');$('prepareEvaluation').onclick=()=>newCollectionForm('evaluation');
   $('refreshWorkspaceTasks').onclick=()=>refreshWorkspaceTasks().catch(hubError);let searchTimer;$('taskSearch').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{platform.taskOffset=0;refreshWorkspaceTasks().catch(hubError);},250);};$('taskStatusFilter').onchange=()=>{platform.taskOffset=0;refreshWorkspaceTasks().catch(hubError);};$('taskPreviousPage').onclick=()=>{platform.taskOffset=Math.max(0,platform.taskOffset-50);refreshWorkspaceTasks().catch(hubError);};$('taskNextPage').onclick=()=>{platform.taskOffset+=50;refreshWorkspaceTasks().catch(hubError);};
-  $('cancelCollection').onclick=()=>api(`api/comparison/collections/${platform.collection}/cancel`,{}).then(refreshCollection).catch(hubError);$('resumeCollection').onclick=()=>{platform.report=null;api(`api/comparison/collections/${platform.collection}/resume`,{}).then(refreshCollection).catch(hubError);};$('downloadCollectionJSON').onclick=async()=>{try{const value=await api(`api/comparison/collections/${platform.collection}/report`);download('collection-'+platform.collection.slice(0,8)+'.json',JSON.stringify(value,null,2));}catch(error){hubError(error);}};
+  $('cancelCollection').onclick=()=>collectionAction('cancel').catch(hubError);$('resumeCollection').onclick=()=>collectionAction('resume').catch(hubError);$('downloadCollectionJSON').onclick=()=>downloadCollectionReport().catch(hubError);
+  $('collectionResultFilter').oninput=()=>{platform.collectionPage=0;if(platform.collectionValue)renderCollection(platform.collectionValue).catch(hubError);};
+  $('collectionResultPrevious').onclick=()=>{platform.collectionPage=Math.max(0,(platform.collectionPage||0)-1);if(platform.collectionValue)renderCollection(platform.collectionValue).catch(hubError);};$('collectionResultNext').onclick=()=>{platform.collectionPage=(platform.collectionPage||0)+1;if(platform.collectionValue)renderCollection(platform.collectionValue).catch(hubError);};
   $('renderKind').onchange=()=>refreshToolOptions().catch(hubError);$('startRenderTool').onclick=()=>startRenderTool().catch(hubError);
   $('closeExportDialog').onclick=()=>$('exportDialog').close();$('exportCurrentPNG').onclick=()=>{$('exportDialog').close();$('snapshot').click();};$('exportFullReport').onclick=()=>$('downloadReport').click();
 }
@@ -317,19 +405,18 @@ async function runDiagnostic(profile){
 }
 for(const button of document.querySelectorAll('[data-diagnostic]'))button.onclick=()=>runDiagnostic(button.dataset.diagnostic);
 
-function newCollectionForm(kind){platform.collection=null;platform.collectionKind=null;platform.report=null;$(kind+'Setup').open=true;switchHub(kind);}
+function newCollectionForm(kind){platform.collectionOpenSerial=(platform.collectionOpenSerial||0)+1;switchHub(kind);setCollectionMode(kind,'draft');showCollectionStep(kind,'inputs',{focus:true});}
 
 
 // Module views preserve their original controls; switching never creates jobs or resets drafts.
-function platformPrimaryAction(tab){return ({data:{label:'选择输入',kind:'data'},catalog:{label:'准备数据',kind:'data'},batch:{label:'配置批量',kind:'batch'},evaluation:{label:'新建评测',kind:'evaluation'},quality:{label:'选择比较',kind:'quality'},research:{label:'新建训练',kind:'train'}})[tab]||null;}
+function platformPrimaryAction(tab){return ({data:{label:'选择输入',kind:'data'},catalog:{label:'准备数据',kind:'data'},batch:{label:'新建批次',kind:'batch'},evaluation:{label:'新建评测',kind:'evaluation'},quality:{label:'选择比较',kind:'quality'},research:{label:'新建训练',kind:'train'}})[tab]||null;}
 function syncPlatformPrimaryAction(tab){const button=$('newComparison'),action=platformPrimaryAction(tab);button.hidden=!!tab&&!action;const label=tab?action?.label:'新建比较';if(label){button.replaceChildren(icon('plus'),document.createTextNode(label));button.setAttribute('aria-label',label);button.title=tab?'配置当前模块，不会立即提交计算任务':'配置算法与输入';}}
 function interceptPlatformPrimaryAction(event){if(!$('platformDialog').open)return false;event.preventDefault();event.stopImmediatePropagation();activatePlatformPrimaryAction();return true;}
 function activatePlatformPrimaryAction(){
   const kind=platformPrimaryAction(platform.pane)?.kind;
   if(kind==='train'){showResearchView('train');$('workflowKind').value='train';updateWorkflowFields();revealPlatformTarget($('workflowKind'));$('workflowName').focus({preventScroll:true});}
   else if(kind==='data'){openPlatform('data');requestAnimationFrame(()=>{$('dataSourceTabs')?.focus();});}
-  else if(kind==='evaluation'){switchHub('evaluation');$('evaluationSetup').open=true;revealPlatformTarget($('evaluationComposer'));}
-  else if(kind==='batch'){$('batchSetup').open=true;revealPlatformTarget($('batchComposer'));}
+  else if(kind==='evaluation'||kind==='batch'){newCollectionForm(kind);revealPlatformTarget($(kind+'Composer'));}
   else if(kind==='quality'){revealPlatformTarget($('qualityComparison'));$('qualityComparison').focus({preventScroll:true});}
 }
 function findHubSection(tab,title){
@@ -343,7 +430,7 @@ function revealPlatformTarget(target,{scroll=true}={}){
   if(scroll)target.scrollIntoView({block:'start',behavior:'auto'});
 }
 function platformContextText(comparison,pane,selectionCount=0){
-  if(['batch','evaluation'].includes(pane))return `批量输入集合：${selectionCount} 项；与当前打开的比较分别管理。`;
+  if(['batch','evaluation'].includes(pane))return `待提交输入清单：${selectionCount} 项；与当前打开的比较分别管理。`;
   if(!['quality','tools','research'].includes(pane))return '';
   if(!comparison)return pane==='research'?'尚未打开比较；训练使用所选数据版本，回归和生产按各自来源选择。':'尚未打开比较；需要已有结果的操作请先选择一组比较。';
   const request=comparison.sample_request||{},path=request.source?.path||'',sample=comparison.sample;
@@ -352,7 +439,8 @@ function platformContextText(comparison,pane,selectionCount=0){
 }
 function refreshPlatformContext(){
   let host=$('platformCurrentContext');if(!host){const parent=$('moduleContext');if(!parent)return;host=el('div',undefined,'platform-current-context');host.id='platformCurrentContext';host.setAttribute('role','status');parent.after(host);}
-  const text=platformContextText(state.comparison,platform.pane,platform.selection.size);host.hidden=!$('platformDialog').open||!text;host.title=state.comparison?.sample_request?.source?.path||'';host.replaceChildren();if(!text)return;host.append(el('span',text));
+  const frozen=['batch','evaluation'].includes(platform.pane)&&collectionDraft(platform.pane).mode==='results'&&platform.collectionValue?.kind===platform.pane?platform.collectionValue:null;
+  const text=frozen?`已提交批次：${frozen.title} · ${frozen.total} 个冻结输入；待提交清单 ${platform.selection.size} 项另行管理。`:platformContextText(state.comparison,platform.pane,platform.selection.size);host.hidden=!$('platformDialog').open||!text;host.title=state.comparison?.sample_request?.source?.path||'';host.replaceChildren();if(!text)return;host.append(el('span',text));
   if(['quality','tools','research'].includes(platform.pane)){const change=el('button',state.comparison?'更换比较':'选择比较','text-button');change.onclick=()=>{closePlatformWorkspace();if(window.innerWidth<=1100){workspaceUI.mobileSidebar=true;applyLayout();}$('historySearch').focus();};host.append(change);}
 }
 function renderTaskResourceSummary(value){

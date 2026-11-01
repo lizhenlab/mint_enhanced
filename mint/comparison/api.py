@@ -466,18 +466,26 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
     @blueprint.post('/api/comparison/collections')
     def create_collection():
         data = body()
-        if set(data) - {'kind', 'items', 'selections', 'options', 'title'}:
+        if set(data) - {'kind', 'items', 'selections', 'options', 'title', 'preflight_id'}:
             raise ValueError('Unknown batch/evaluation fields')
+        receipt = data.pop('preflight_id', None)
+        if receipt is not None and (not isinstance(receipt, str) or len(receipt) != 64 or any(c not in '0123456789abcdef' for c in receipt)):
+            raise ValueError('Invalid batch preflight_id')
         from .preflight import inspect_collection
         check = inspect_collection(manager(), **data)
+        if receipt is not None and receipt != check['preflight_id']:
+            return jsonify(error='输入文件或算法条件已变化，请重新预检', preflight=check), 400
         if not check['ready']:
             return jsonify(error='；'.join(check['errors'][:20]), preflight=check), 400
-        return jsonify(collections().create(**data)), 201
+        return jsonify(collections().create(**data, _preflight=check)), 201
 
     @blueprint.post('/api/comparison/collections/preflight')
     def collection_preflight():
         from .preflight import inspect_collection
-        return jsonify(inspect_collection(manager(), **body()))
+        data = body()
+        if set(data) - {'kind', 'items', 'selections', 'options', 'title'}:
+            raise ValueError('Unknown batch/evaluation fields')
+        return jsonify(inspect_collection(manager(), **data))
 
     @blueprint.get('/api/comparison/collections')
     def collection_history():

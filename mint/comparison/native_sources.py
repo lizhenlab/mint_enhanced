@@ -72,6 +72,27 @@ def arctic_root(root):
     raise ValueError('ARCTIC root requires data/splits_json/protocol_p1.json')
 
 
+def _format_presence(adapter, root):
+    """Cheap directory/metadata checks; this is not a content certification."""
+    if adapter == 'arctic':
+        try:
+            root = arctic_root(root)
+        except ValueError:
+            return False, '缺少 ARCTIC P1 划分文件，需选择已解压的官方数据目录'
+        required = [root / 'data/meta/misc.json', root / 'data/raw_seqs', root / 'data/cropped_images']
+        missing = [p.name for p in required if not p.exists()]
+        return not missing, '缺少基础目录或元数据：' + '、'.join(missing) if missing else ''
+    if adapter == 'egodex':
+        found = any(p.is_dir() and (p.name == 'test' or re.fullmatch(r'part[1-5]', p.name))
+                    for p in root.iterdir())
+        return found, '' if found else '未找到 EgoDex 的 test 或 part1–5 目录'
+    if adapter == 'dexycb':
+        found = (root / 'calibration/intrinsics').is_dir() and any(
+            p.is_dir() and re.search(r'subject-\d+$', p.name) for p in root.iterdir())
+        return found, '' if found else '需包含 DexYCB subject 目录和 calibration/intrinsics'
+    return None, '尚未实现此数据集的官方格式适配器'
+
+
 def dataset_catalog(root='/dataset'):
     root = Path(root).expanduser().resolve()
     source = root / 'DATASET_CATALOG_20261016.json'
@@ -84,12 +105,44 @@ def dataset_catalog(root='/dataset'):
         path = Path(row['path'])
         working = 'archive' not in row.get('role', '') or 'working_tree' in row.get('role', '')
         supported = bool(adapter and working and path.is_dir() and row.get('status') != 'duplicates_removed')
+        format_ready, format_issue = _format_presence(adapter, path) if supported else (None, '')
         result.append({**row, 'adapter': adapter, 'available': path.is_dir(), 'native_import': supported,
                        'splits': SPLITS.get(adapter, []), 'training_export': adapter in {'egodex', 'arctic'},
+                       'format_ready': format_ready, 'format_issue': format_issue,
+                       'verification_level': 'directory_and_format_presence', 'full_content_verified': False,
                        'status_detail': 'Native adapter available' if supported else
                        'Metadata only' if 'metadata_only' in row.get('status', '') else 'Requires a dataset-specific adapter or working-tree path'})
     return {'root': str(root), 'catalog_identity': file_identity(source), 'datasets': result,
-            'adapters': list(ADAPTERS), 'scope': 'Presence/format inventory, not recursive content verification'}
+            'adapters': list(ADAPTERS), 'scope': 'Presence/format inventory, not recursive content verification',
+            'inventory_source': 'saved_inventory' if source.is_file() else 'live_directory_listing',
+            'verification_level': 'directory_and_format_presence', 'full_content_verified': False,
+            'verification_note': '清单只核对目录与基础格式；选中序列后仍需校验帧、标注和相机参数。'}
+
+
+def _reference_presence(dataset, root, sequence):
+    """Check listed sample prerequisites without opening annotations/decoding RGB."""
+    seq = inside(root, sequence)
+    missing = []
+    if dataset == 'arctic':
+        required = [(root / ('data/raw_seqs/' + sequence + '.mano.npy'), 'MANO 标注'),
+                    (root / ('data/raw_seqs/' + sequence + '.egocam.dist.npy'), '相机标注'),
+                    (root / 'data/meta/misc.json', '同步与相机元数据')]
+        images = root / 'data/cropped_images' / sequence / '0'
+        if next(images.glob('*.jpg'), None) is None:
+            missing.append('ego RGB 图像')
+    elif dataset == 'egodex':
+        required = [(seq.with_suffix('.hdf5'), 'HDF5 标注'), (seq.with_suffix('.mp4'), '配对 MP4 视频')]
+    else:
+        required = [(seq.parent / 'meta.yml', '左右手元数据'),
+                    (root / f'calibration/intrinsics/{seq.name}_640x480.yml', '相机内参')]
+        if next(seq.glob('color_*.jpg'), None) is None:
+            missing.append('RGB 图像')
+        if next(seq.glob('labels_*.npz'), None) is None:
+            missing.append('关节点标注')
+    missing.extend(label for path, label in required if not path.is_file())
+    return {'reference_available': not missing,
+            'reference_issue': '缺少' + '、'.join(missing) + '，当前不能准备参考评测样本' if missing else '',
+            'reference_check': 'basic_file_presence', 'reference_coverage': 'unknown_until_preflight'}
 
 
 def sequences(dataset, root, *, group='', split='test', offset=0, limit=50):
@@ -128,7 +181,8 @@ def sequences(dataset, root, *, group='', split='test', offset=0, limit=50):
             rows = [{'sequence': str(cam.relative_to(root)), 'name': f'{seq.name}/{cam.name}'}
                     for seq in sorted(folder.iterdir()) if seq.is_dir()
                     for cam in sorted(seq.iterdir()) if cam.is_dir() and any(cam.glob('color_*.jpg'))]
-    return {'dataset': dataset, 'root': str(root), 'groups': groups, 'sequences': rows[offset:offset + limit],
+    page = [{**row, **_reference_presence(dataset, root, row['sequence'])} for row in rows[offset:offset + limit]]
+    return {'dataset': dataset, 'root': str(root), 'groups': groups, 'sequences': page,
             'total': len(rows), 'offset': offset, 'split': split}
 
 
@@ -381,6 +435,9 @@ def _prepare_native(plan, directory, *, cancelled=lambda: False, progress=lambda
     arrays, K, ids, fps, (h, w), details, hands = {'egodex': _ego, 'dexycb': _dex, 'arctic': _arctic}[plan['dataset']](
         plan, directory, cancelled, progress)
     validate_geometry(arrays)
+    if plan['training'] and (not np.allclose(K[0, 2], w / 2, atol=.01, rtol=0) or
+                             not np.allclose(K[1, 2], h / 2, atol=.01, rtol=0)):
+        raise ValueError('FoV-only camera supervision requires centered pinhole intrinsics; rectify this calibration explicitly first')
     atomic_npz(directory / 'reference.npz', **arrays)
     atomic_npz(directory / 'native-frame-map.npz', native_frame_indices=ids,
                original_timestamps_s=ids / fps, sample_timestamps_s=arrays['timestamps_s'])

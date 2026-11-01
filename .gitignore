@@ -31,6 +31,8 @@ tests/*
 !tests/test_diagnostic_ux.cjs
 !tests/test_platform_lifecycle.py
 !tests/test_native_platform.py
+!tests/test_native_access_integrity.py
+!tests/test_native_data_ux.cjs
 !eval/model_effect/benchmark/tests/
 !eval/model_effect/benchmark/tests/**
 !eval/model_effect/benchmark/dist/aliyun/tests/

@@ -80,7 +80,7 @@
     <section class="control-card inference-card">
       <div class="control-title"><span>03</span> 推理策略与运行</div>
       <div id="gpuSchedulerStatus" class="batch-devices" style="display:none" aria-live="polite" data-i18n-ignore></div>
-      <div class="field" data-i18n-ignore><label for="videoView">视频视角</label><select id="videoView" title="Full keeps the image; left/right select one eye of a side-by-side stereo video. 视频不截断时间。"><option value="full">完整画面</option><option value="left">双目左眼</option><option value="right">双目右眼</option></select></div>
+      <div class="field"><label for="videoView">视频视角</label><select id="videoView" title="Full keeps the image; left/right select one eye of a side-by-side stereo video. 视频不截断时间。"><option value="full">完整画面</option><option value="left">双目左眼</option><option value="right">双目右眼</option></select></div>
 
       <div class="field"><label for="camMode">相机推理</label><select id="camMode"
         title="分窗=训练窗长；最大窗分窗=当前显卡 exact full 安全上限；流式=相机整段因果+KV cache；整段=上限内一次普通前向，超限时会先询问是否改用最大窗分窗">

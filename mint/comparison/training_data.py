@@ -10,6 +10,46 @@ import numpy as np
 from mint.runtime import atomic_json, file_identity
 
 
+def training_label_role(root, info=None):
+    """Recognize camera-only pseudo labels, including older exported versions."""
+    root = Path(root)
+    info = json.loads((root / 'meta/info.json').read_text()) if info is None else info
+    manifest = root / 'source_manifest.json'
+    provenance = json.loads(manifest.read_text()) if manifest.is_file() else {}
+    origin = provenance.get('label_origin', {})
+    pseudo_types = {'human_reviewed_pseudo_camera_labels', 'MINT_native_pseudo_labels'}
+    if (info.get('hand_supervision') == 'pseudo_mano' or
+        info.get('label_role') == 'model_generated_pseudo_labels' or
+        provenance.get('label_role') == 'model_generated_pseudo_labels' or
+        origin.get('label_role') == 'model_generated_pseudo_labels' or origin.get('type') in pseudo_types):
+        return 'model_generated_pseudo_labels'
+    return 'declared_dataset_annotations'
+
+
+def camera_fov_schema_errors(root):
+    """Require regeneration of the known legacy reviewed-camera export bug."""
+    root = Path(root).expanduser().resolve()
+    seen = set()
+    while root not in seen:
+        seen.add(root)
+        info_path, manifest = root / 'meta/info.json', root / 'source_manifest.json'
+        if not info_path.is_file() or not manifest.is_file():
+            return []
+        info, provenance = json.loads(info_path.read_text()), json.loads(manifest.read_text())
+        origin = provenance.get('label_origin', {})
+        order = info.get('cam_fov_order', provenance.get('cam_fov_order'))
+        if origin.get('type') == 'human_reviewed_pseudo_camera_labels' and order != 'height_width':
+            return ['旧版复核相机数据的 FoV 顺序未确认；请从原始复核记录重新导出新版本：[fov_h,fov_w]：' + str(root)]
+        if order is not None and order != 'height_width':
+            return ['训练 cam_fov 必须声明为 height_width；请显式转换数据版本：' + str(root)]
+        if origin.get('type') != 'existing_declared_camera_annotations' or not origin.get('source'):
+            return []
+        # Follow only the converter's recorded source, so an old reviewed
+        # export cannot lose the migration requirement by another conversion.
+        root = Path(origin['source']).expanduser().resolve()
+    return ['相机数据来源出现循环，无法核对 FoV 顺序；请重新导出数据版本']
+
+
 def camera_normalization_schema_errors(root):
     """Check one data file before admitting a normalized training job to GPUs."""
     import pyarrow.parquet as pq
@@ -110,8 +150,14 @@ def _write_dataset(destination, episodes, *, origin, hand_supervision='none'):
         'video_path': 'videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4',
         'features': {'observation.images.ego': {'dtype': 'video', 'shape': shape, 'names': ['height', 'width', 'channels']}}}
     record.update(hand_frame='camera', hand_supervision=hand_supervision)
+    record['cam_fov_order'] = 'height_width'
+    pseudo = (hand_supervision == 'pseudo_mano' or origin.get('label_role') == 'model_generated_pseudo_labels' or
+              origin.get('type') in {'human_reviewed_pseudo_camera_labels', 'MINT_native_pseudo_labels'})
+    label_role = 'model_generated_pseudo_labels' if pseudo else 'declared_dataset_annotations'
+    record['label_role'] = label_role
     provenance = {'schema': 1, 'label_origin': origin, 'videos': videos,
                   'data': file_identity(parquet), 'episodes': file_identity(ep),
+                  'label_role': label_role, 'cam_fov_order': 'height_width',
                   'supervision': 'model-generated MANO and camera pseudo labels' if hand_supervision == 'pseudo_mano' else
                                  'dataset-labelled MANO parameters and camera' if hand_supervision == 'mano' else
                                  'camera pose and FoV only; no synthesized MANO ground truth'}
@@ -121,7 +167,7 @@ def _write_dataset(destination, episodes, *, origin, hand_supervision='none'):
     # Completion marker is last, so a partial directory never looks train-ready.
     atomic_json(destination / 'meta/info.json', record)
     return {'root': str(destination), 'episodes': len(meta), 'frames': start,
-            'provenance': provenance, 'identity': file_identity(destination / 'meta/info.json')}
+            'provenance': provenance, 'label_role': label_role, 'identity': file_identity(destination / 'meta/info.json')}
 
 
 def prepare_existing_camera_dataset(source, destination, *, episode_ids=None, max_frames=None, cancelled=lambda: False):
@@ -129,6 +175,9 @@ def prepare_existing_camera_dataset(source, destination, *, episode_ids=None, ma
     import pyarrow.parquet as pq
     from scipy.spatial.transform import Rotation
     from .datasets import select_episode
+    order_errors = camera_fov_schema_errors(source)
+    if order_errors:
+        raise ValueError('；'.join(order_errors))
     # Use the authoritative v3 episode/video resolver; no guessed video filenames.
     from .datasets import catalog
     inventory = catalog(str(source), limit=100)
@@ -163,7 +212,9 @@ def prepare_existing_camera_dataset(source, destination, *, episode_ids=None, ma
             if not np.allclose(transforms[:, 3], [0, 0, 0, 1], atol=1e-5) or not np.allclose(np.linalg.det(transforms[:, :3, :3]), 1., atol=1e-4) or not np.allclose(
                 transforms[:, :3, :3].transpose(0, 2, 1) @ transforms[:, :3, :3], np.eye(3), atol=1e-4):
                 raise ValueError('Source camera annotations are not proper rigid world-to-camera poses')
-            cols = {'cam_trans': transforms[:, :3, 3], 'cam_quat': Rotation.from_matrix(transforms[:, :3, :3]).as_quat(), 'cam_fov': values('fov')}
+            # Legacy Viewer `fov` is [horizontal, vertical]; the trainer's
+            # `cam_fov` is [height, width]. Preserve the camera when converting.
+            cols = {'cam_trans': transforms[:, :3, 3], 'cam_quat': Rotation.from_matrix(transforms[:, :3, :3]).as_quat(), 'cam_fov': values('fov')[:, ::-1]}
         cols['state_mask'] = np.zeros((n, 2), bool)
         cols['hand_kept'] = np.zeros((n, 2), bool)
         video = episode['video']
@@ -171,6 +222,7 @@ def prepare_existing_camera_dataset(source, destination, *, episode_ids=None, ma
                          'video_offset_s': episode.get('video_start', episode.get('start', 0)) / float(info['fps'])})
         sources.append(identity)
     return _write_dataset(destination, episodes, origin={'type': 'existing_declared_camera_annotations',
+        'label_role': training_label_role(source),
         'source': str(Path(source).resolve()), 'identities': sources, 'episodes': list(ids),
         'max_frames': max_frames, 'purpose': 'Schema conversion; no new camera labels were inferred'})
 
@@ -205,8 +257,10 @@ def export_reviewed_camera_dataset(manager, dataset, destination, *, cancelled=l
         K = arrays['K'][mapping]
         if not np.allclose(K[:, 0, 2], sample['width'] / 2, atol=.01) or not np.allclose(K[:, 1, 2], sample['height'] / 2, atol=.01):
             raise ValueError('FoV-only camera supervision requires centered pinhole intrinsics; rectify this calibration explicitly first')
-        fov = np.stack([2 * np.arctan(sample['width'] / (2 * K[:, 0, 0])),
-                        2 * np.arctan(sample['height'] / (2 * K[:, 1, 1]))], axis=1)
+        # The training pose encoding ends with [fov_h, fov_w], matching
+        # native imports, MINT predictions and the image-hand projection loss.
+        fov = np.stack([2 * np.arctan(sample['height'] / (2 * K[:, 1, 1])),
+                        2 * np.arctan(sample['width'] / (2 * K[:, 0, 0]))], axis=1)
         video = Path(destination).parent / ('reviewed-video-' + dataset['id'][:12] + f'-{number}.mp4')
         frames = np.load(sample['frames_path'], mmap_mode='r', allow_pickle=False)
         def render(path):

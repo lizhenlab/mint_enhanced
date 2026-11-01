@@ -12,12 +12,14 @@ function researchSelect(id,label,choices){const field=selectInput(choices,choice
 function researchSection(host,title,description){const section=el('section',undefined,'panel');section.append(el('h3',title),el('p',description,'hint'));host.append(section);return section;}
 function researchDetails(value){const dialog=$('logDialog');$('logText').textContent=JSON.stringify(value,null,2);dialog.showModal();}
 async function loadRegistryChoices(kind,id,{filter=()=>true,empty='请选择'}={}){
-  const value=await api(`api/comparison/registry/${kind}?limit=200`),select=$(id),old=select.value;select.replaceChildren();const blank=el('option',empty);blank.value='';select.append(blank);
+  const select=$(id),serial=Number(select.dataset.requestSerial||0)+1;select.dataset.requestSerial=String(serial);
+  const value=await api(`api/comparison/registry/${kind}?limit=200`);if(String(serial)!==select.dataset.requestSerial)return null;const old=select.value;select.replaceChildren();const blank=el('option',empty);blank.value='';select.append(blank);
   for(const row of value.records.filter(filter)){const option=el('option',(row.name||row.id.slice(0,12))+' · '+row.id.slice(0,8));option.value=row.id;select.append(option);}if([...select.options].some(o=>o.value===old))select.value=old;return value;
 }
 async function refreshArtifactCatalog(){
+  const serial=researchUI.catalogSerial=(researchUI.catalogSerial||0)+1;
   const kind=$('registryKind').value,query=new URLSearchParams({query:$('registryQuery').value,offset:researchUI.offset,limit:30});
-  const value=await api(`api/comparison/registry/${kind}?${query}`),host=$('artifactRows');host.replaceChildren();
+  const value=await api(`api/comparison/registry/${kind}?${query}`);if(serial!==researchUI.catalogSerial||kind!==$('registryKind').value||query.get('query')!==$('registryQuery').value)return;const host=$('artifactRows');host.replaceChildren();
   const table=el('table'),head=el('tr');for(const text of ['产物 / 来源','类型与状态','操作'])head.append(el('th',text));table.append(head);
   for(const row of value.records){const tr=el('tr'),name=el('td'),actions=el('td');name.append(el('strong',row.name||row.id.slice(0,12)),el('small',row.source?.path||row.path||row.root||row.run_id||row.id));
     tr.append(name,el('td',[row.type||row.kind,row.frames?`${row.frames} 帧`:'',row.availability==='missing_or_changed'?'文件缺失或变化':row.status||row.origin||''].filter(Boolean).join(' · ')));
@@ -80,10 +82,13 @@ function workflowParameters(){
 }
 function updateWorkflowFields(){const kind=$('workflowKind').value;for(const row of document.querySelectorAll('[data-workflow-kinds]'))row.hidden=!row.dataset.workflowKinds.split(' ').includes(kind);invalidateWorkflowReadiness();if(kind==='pipeline')checkWorkflowReadiness().catch(hubError);refreshWorkflowDatasetChoices().catch(hubError);}
 async function inspectWorkflow(id){
-  const selected=researchUI.workflow!==id;researchUI.workflow=id;const value=await api(`api/comparison/workflows/${id}`);if(selected&&typeof showResearchView==='function')showResearchView('train');researchOutput('workflowState',{status:value.status,progress:value.progress,output:value.output,error:value.error});$('workflowLog').disabled=false;$('workflowLog').onclick=async()=>{const log=await api(`api/comparison/workflows/${id}/log`);$('logText').textContent=log.text;$('logDialog').showModal();};
-  window.dispatchEvent(new CustomEvent('mint-workflow-inspected',{detail:value}));renderWorkflowNextSteps(value).catch(hubError);
+  const selected=researchUI.workflow!==id,serial=researchUI.workflowSerial=(researchUI.workflowSerial||0)+1;researchUI.workflow=id;clearTimeout(researchUI.workflowTimer);
+  const current=()=>serial===researchUI.workflowSerial&&id===researchUI.workflow;
+  let value;try{value=await api(`api/comparison/workflows/${id}`);}catch(error){if(current())throw error;return null;}if(!current())return null;
+  if(selected&&typeof showResearchView==='function'&&platform.pane==='research')showResearchView('train');researchOutput('workflowState',{status:value.status,progress:value.progress,output:value.output,error:value.error});$('workflowLog').disabled=false;$('workflowLog').onclick=async()=>{try{const log=await api(`api/comparison/workflows/${id}/log`);if(id!==researchUI.workflow||platform.pane!=='research'||!$('platformDialog').open)return;$('logText').textContent=log.text;$('logDialog').showModal();}catch(error){if(current())hubError(error);}};
+  window.dispatchEvent(new CustomEvent('mint-workflow-inspected',{detail:value}));renderWorkflowNextSteps(value).catch(error=>{if(current())hubError(error);});
   $('workflowCancel').disabled=TERMINAL.has(value.status);$('workflowResume').disabled=!['failed','cancelled','interrupted'].includes(value.status);
-  clearTimeout(researchUI.workflowTimer);if(!TERMINAL.has(value.status)&&$('platformDialog').open)researchUI.workflowTimer=setTimeout(()=>inspectWorkflow(id).catch(hubError),3000);return value;
+  if(!TERMINAL.has(value.status)&&$('platformDialog').open&&platform.pane==='research')researchUI.workflowTimer=setTimeout(()=>{if(current())inspectWorkflow(id).catch(hubError);},3000);return value;
 }
 async function refreshResearchChoices(){
   await Promise.all([refreshWorkflowDatasetChoices(),loadRegistryChoices('model','registeredModel'),loadRegistryChoices('evaluation','modelEvaluation'),loadRegistryChoices('protocol','offlineProtocol')]);

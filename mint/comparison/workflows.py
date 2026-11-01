@@ -117,14 +117,18 @@ class WorkflowManager:
                 p['episodes'] = [0]
             if not isinstance(p['episodes'], list) or not p['episodes'] or len(p['episodes']) > 1000:
                 raise ValueError('Choose explicit episode indices')
+            if any(isinstance(n, bool) or not isinstance(n, int) or n < 0 for n in p['episodes']) or len(set(p['episodes'])) != len(p['episodes']):
+                raise ValueError('Choose distinct nonnegative integer episode indices')
             snapshots['episodes'] = []
             for number in p['episodes']:
                 r, _, key, episode, cap = select_episode({'root': str(root), 'episode': number})
                 if not cap['camera']:
                     errors.append(f'Episode {number} 缺少明确相机轨迹标注')
                 snapshots['episodes'].append(annotation_identity(r, episode, key))
-            if p.get('max_frames') is not None and (isinstance(p['max_frames'], bool) or int(p['max_frames']) < 1):
-                raise ValueError('max_frames must be positive or omitted for the full episode')
+            if p.get('max_frames') is not None:
+                if isinstance(p['max_frames'], bool) or int(p['max_frames']) != p['max_frames'] or int(p['max_frames']) < 1:
+                    raise ValueError('max_frames must be a positive integer or omitted for the full episode')
+                p['max_frames'] = int(p['max_frames'])
         if kind == 'curate_dataset':
             dataset = self.registry.get(p.get('dataset_id'), 'dataset')
             if dataset.get('status') != 'reviewed_manifest':
@@ -181,7 +185,9 @@ class WorkflowManager:
                         errors.append('MANO 训练必须使用实际 MANO 参数标注的数据版本：' + str(root))
                 if (root / 'meta/info.json').is_file():
                     info = json.loads((root / 'meta/info.json').read_text())
-                    if info.get('hand_supervision') == 'pseudo_mano' and not cfg.get('data', {}).get('allow_pseudo_labels', False):
+                    from .training_data import training_label_role, camera_fov_schema_errors
+                    errors.extend(camera_fov_schema_errors(root))
+                    if training_label_role(root, info) == 'model_generated_pseudo_labels' and not cfg.get('data', {}).get('allow_pseudo_labels', False):
                         errors.append('模型伪标签需要显式允许 allow_pseudo_labels；不能当作实际 GT：' + str(root))
                 provenance_path = root / 'source_manifest.json'
                 if provenance_path.is_file():
@@ -216,11 +222,12 @@ class WorkflowManager:
                     errors.append('续训检查点目录不完整')
                 marker = resume / 'checkpoint.json'
                 if marker.is_file():
-                    saved = json.loads(marker.read_text())
-                    if any(file_identity(resume / name) != identity for name, identity in saved['files'].items()):
-                        errors.append('续训检查点文件已变化')
-                    if len(list(resume.glob('random_states*.pkl'))) != int(p.get('gpus', 1)):
-                        errors.append('严格续训需要相同 GPU/world size；改变规模请用权重初始化新实验')
+                    from .training_curves import checkpoint_summary
+                    saved = checkpoint_summary(resume)
+                    if not saved['complete']:
+                        errors.append('续训检查点不完整或文件已变化：' + saved['error'])
+                if len(list(resume.glob('random_states*.pkl'))) != int(p.get('gpus', 1)):
+                    errors.append('严格续训需要相同 GPU/world size；改变规模请用权重初始化新实验')
                 snapshots['resume_checkpoint'] = {v.name: file_identity(v) for v in resume.glob('*') if v.is_file()}
                 p['resume_checkpoint'] = str(resume)
         if kind in {'train', 'pipeline', 'produce_pseudo', 'native_import'}:

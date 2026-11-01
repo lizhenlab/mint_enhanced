@@ -18,10 +18,26 @@ CONNECTIONS = [(0, 1), (1, 2), (2, 3), (3, 4), (0, 5), (5, 6), (6, 7), (7, 8),
 
 
 def positive_number(value, name, *, zero=False):
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f'{name} must be a number, not a boolean')
     value = float(value)
     if not np.isfinite(value) or value < 0 or (value == 0 and not zero):
         raise ValueError(f'{name} must be finite and {"nonnegative" if zero else "positive"}')
     return value
+
+
+def integer_number(value, name, *, minimum=0, maximum=None):
+    """Validate form/API integers before conversion; never truncate a protocol."""
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f'{name} must be an integer, not a boolean')
+    try:
+        number = float(value)
+        integer = int(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(f'{name} must be a finite integer') from None
+    if not np.isfinite(number) or integer != number or integer < minimum or (maximum is not None and integer > maximum):
+        raise ValueError(f'{name} must be an integer from {minimum}' + (f' to {maximum}' if maximum is not None else ''))
+    return integer
 
 
 def source_request(source, *, view='full', target_fps=0, max_frames=None, start_frame=0, camera=None):
@@ -30,20 +46,18 @@ def source_request(source, *, view='full', target_fps=0, max_frames=None, start_
         raise ValueError('Select a readable video file')
     if view not in {'full', 'left', 'right'}:
         raise ValueError('view must be full, left or right')
-    if isinstance(start_frame, bool) or int(start_frame) != float(start_frame) or int(start_frame) < 0:
-        raise ValueError('start_frame must be a nonnegative integer')
+    start_frame = integer_number(start_frame, 'start_frame')
     if max_frames not in (None, ''):
-        if isinstance(max_frames, bool) or int(max_frames) != float(max_frames) or int(max_frames) <= 0:
-            raise ValueError('max_frames must be a positive integer or blank for the entire video')
-        max_frames = int(max_frames)
+        max_frames = integer_number(max_frames, 'max_frames', minimum=1)
     else:
         max_frames = None
     calibration = None
-    if camera:
+    if camera is not None:
         if not isinstance(camera, dict):
             raise ValueError('camera must describe K in the original source pixel grid')
         K = np.asarray(camera.get('K'), dtype=float)
-        width, height = int(camera.get('width', 0)), int(camera.get('height', 0))
+        width = integer_number(camera.get('width', 0), 'camera width', minimum=1)
+        height = integer_number(camera.get('height', 0), 'camera height', minimum=1)
         if K.shape != (3, 3) or not np.isfinite(K).all() or min(K[0, 0], K[1, 1], width, height) <= 0:
             raise ValueError('camera requires finite 3x3 K and positive width/height')
         if not np.allclose(K[2], [0, 0, 1]) or not np.allclose([K[0, 1], K[1, 0]], 0):
@@ -81,7 +95,7 @@ def validate_geometry(arrays):
     if not np.isfinite(joints[valid]).all() or not np.isnan(joints[~valid]).all():
         raise ValueError('Valid geometry must be finite; missing geometry must be NaN')
     indices, times, K = (np.asarray(arrays[k]) for k in ('source_frame_indices', 'timestamps_s', 'K'))
-    if indices.dtype.kind not in 'iu' or indices.shape != (n,) or np.any(indices < 0) or np.any(np.diff(indices) <= 0):
+    if indices.dtype.kind not in 'iu' or indices.shape != (n,) or np.any(indices < 0) or np.any(indices[1:] <= indices[:-1]):
         raise ValueError('Source indices must be strictly increasing integers')
     if times.shape != (n,) or not np.isfinite(times).all() or np.any(np.diff(times) <= 0) or times[0] < 0:
         raise ValueError('timestamps_s must be finite, nonnegative, strictly increasing source times')

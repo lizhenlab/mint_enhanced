@@ -139,6 +139,8 @@ def source_plan(dataset, root, sequence, *, split='test', start_frame=0, max_fra
         raise ValueError('Declare train, val or test')
     if split not in SPLITS[dataset]:
         raise ValueError('No official native partition named ' + split + ' for ' + dataset)
+    if not isinstance(training, bool):
+        raise ValueError('Training conversion must be an explicit boolean')
     if training and split != 'train':
         raise ValueError('Training conversion requires the official train partition')
     if training and dataset == 'dexycb':
@@ -419,7 +421,8 @@ def _prepare_native(plan, directory, *, cancelled=lambda: False, progress=lambda
              'training': training, 'source_content': content, 'supervision': ['camera', 'mano'] if hands is not None else
              ['camera', 'arkit_joints'] if plan['dataset'] == 'egodex' else ['camera_joints'],
              'pixel_contract': 'lossless RGB encoding or exact source MP4; explicit original frame map',
-             'reference_identity': file_identity(directory / 'reference.npz')}
+             'reference_identity': file_identity(directory / 'reference.npz'),
+             'frame_map_identity': file_identity(directory / 'native-frame-map.npz')}
     value['video_identity'] = file_identity(directory / 'video.mp4')
     atomic_json(directory / 'native.json', value)
     return value
@@ -442,6 +445,22 @@ def prepare_native(plan, directory, *, cancelled=lambda: False, progress=lambda 
             for key in ('video_identity', 'reference_identity'):
                 if file_identity(value[key]['path']) != value[key]:
                     raise ValueError('Published native artifact changed')
+            frame_map = directory / 'native-frame-map.npz'
+            if value.get('frame_map_identity'):
+                if file_identity(frame_map) != value['frame_map_identity']:
+                    raise ValueError('Published native frame map changed')
+            else:
+                # Earlier versions did not freeze this file's identity. Validate
+                # their explicit map without rewriting the immutable version.
+                try:
+                    with np.load(frame_map, allow_pickle=False) as mapping:
+                        ids = np.asarray(value['native_frame_indices'])
+                        expected = {'native_frame_indices': ids, 'original_timestamps_s': ids / value['fps'],
+                                    'sample_timestamps_s': np.arange(value['frames']) / value['fps']}
+                        if set(mapping.files) != set(expected) or any(not np.array_equal(mapping[k], v) for k, v in expected.items()):
+                            raise ValueError('Published native frame map changed')
+                except (OSError, KeyError, ValueError) as error:
+                    raise ValueError('Published native frame map changed or is unavailable') from error
             if value.get('training'):
                 trained = value['training']
                 records = [trained['identity'], trained['provenance']['data'], trained['provenance']['episodes'],

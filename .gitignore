@@ -21,6 +21,10 @@ tests/*
 !tests/test_research_ux.cjs
 !tests/test_comparison_layout.cjs
 !tests/test_comparison_interaction.cjs
+!tests/test_platform_runtime_integrity.py
+!tests/test_comparison_data_integrity.py
+!tests/test_workflow_integrity.py
+!tests/test_platform_integrity.cjs
 !tests/test_platform_views.cjs
 !tests/test_diagnostic_layout.cjs
 !tests/test_diagnostic_navigation.cjs

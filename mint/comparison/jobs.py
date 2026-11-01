@@ -530,7 +530,7 @@ class ComparisonManager:
             raise ValueError('Select two completed runs from the same comparison')
         if not all(self.run(run)['result'] for run in (hand_run, camera_run)):
             raise ValueError('Both component results must be complete')
-        identity = {'sample_id': comparison['sample_id'], 'hands': hand_run, 'camera': camera_run, 'schema': 1}
+        identity = {'sample_id': comparison['sample_id'], 'hands': hand_run, 'camera': camera_run, 'schema': 2}
         run_id = digest(identity)
         directory = self.root / 'runs' / run_id
         with file_lock(directory / '.execution.lock'):

@@ -119,6 +119,8 @@ def main():
             dataset = registry.put('dataset', {'name': request['name'], 'root': output['root'],
                 'frames': output['frames'], 'episodes': output['episodes'], 'identity': output['identity'],
                 'provenance': output['provenance'], 'status': 'converted_camera_dataset', 'training_ready': True,
+                'label_role': output['label_role'],
+                'requires_training_opt_in': output['label_role'] == 'model_generated_pseudo_labels',
                 'parent_curation_id': parent, 'entries': registry.get(parent, 'dataset')['entries'] if parent else [],
                 'source_keys': [digest(v) for v in output['provenance']['label_origin'].get('identities', [])] if kind == 'prepare_training' else
                                [v.get('source_key') for v in curated['entries'] if v.get('source_key')],
@@ -131,6 +133,9 @@ def main():
                 WANDB_MODE='disabled', WANDB_DISABLED='true', RUN_SERIES='workflow_' + request['id'][:12])
             if kind == 'diagnostic':
                 command = [request['python'], '-m', 'mint', 'doctor', '--profile', p.get('profile', 'train')]
+            if kind == 'train':
+                from .training_curves import latest_checkpoint
+                automatic_resume = latest_checkpoint(folder / 'training')
             if kind in {'train', 'pipeline'}:
                 devices, leases = acquire_devices(p['gpus'], progress, cancelled)
                 env['CUDA_VISIBLE_DEVICES'] = ','.join(devices)
@@ -153,9 +158,8 @@ def main():
                 for incomplete in (folder / 'training').glob('step_*'):
                     if incomplete.is_dir() and not (incomplete / 'checkpoint.json').is_file():
                         incomplete.rename(incomplete.with_name('.interrupted-' + incomplete.name + f'-attempt-{attempt}'))
-                complete = sorted((folder / 'training').glob('step_*/checkpoint.json'))
-                if complete:
-                    resume = str(complete[-1].parent)
+                if automatic_resume:
+                    resume = automatic_resume
                 launch = [request['python']]
                 if p['gpus'] > 1:
                     launch += ['-m', 'accelerate.commands.launch', '--multi_gpu', '--num_processes', str(p['gpus']),
@@ -193,13 +197,13 @@ def main():
                 raise RuntimeError(f'{kind} exited {child.returncode}; see the owned worker log')
             output = {'kind': kind, 'returncode': child.returncode}
             if kind == 'train':
-                complete = sorted((folder / 'training').glob('step_*/checkpoint.json'))
+                complete = latest_checkpoint(folder / 'training')
                 if not complete:
                     raise ValueError('Training returned without an atomically complete checkpoint')
-                weight = complete[-1].parent / 'model.safetensors'
+                weight = Path(complete) / 'model.safetensors'
                 model = registry.register_model(path=str(weight), name=request['name'], config=str(folder / 'effective-config.yaml'),
                     dataset_id=p.get('dataset_id'), workflow_id=request['id'])
-                output.update(model_id=model['id'], checkpoint=str(complete[-1].parent))
+                output.update(model_id=model['id'], checkpoint=complete)
         if cancelled():
             raise InterruptedError('Workflow cancelled before publication')
         atomic_json(folder / 'output.json', output)

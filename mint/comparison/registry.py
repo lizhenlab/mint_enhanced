@@ -147,6 +147,7 @@ def backend_spec(algorithm, *, checkpoint=None, config=None):
 
 
 def normalize_options(algorithm, options=None):
+    from .contracts import integer_number
     from mint.inference.hand_smoothing import canonical_hand_mode
     if algorithm not in ALGORITHMS:
         raise ValueError('Unknown algorithm')
@@ -160,14 +161,15 @@ def normalize_options(algorithm, options=None):
     policy = options.get('resource_policy', 'shared')
     if policy not in {'shared', 'idle', 'dedicated'}:
         raise ValueError('resource_policy must be shared, idle or dedicated')
-    gpus = int(options.get('max_gpus', 1 if algorithm=='reference' else 8))
+    gpus = integer_number(options.get('max_gpus', 1 if algorithm=='reference' else 8), 'max_gpus', minimum=1, maximum=8)
     if not 1 <= gpus <= 8 or (algorithm=='reference' and gpus!=1):
         raise ValueError('Choose 1..8 GPUs; references use no GPU')
     result = {'mode': mode, 'resource_policy': policy, 'max_gpus': gpus}
     if algorithm == 'mint':
         result['hand_mode'] = canonical_hand_mode(options.get('hand_mode', 'smooth'))
     elif algorithm.startswith('ace'):
-        width, stride = int(options.get('encode_width', 832)), int(options.get('stride', 80))
+        width = integer_number(options.get('encode_width', 832), 'encode_width', minimum=32, maximum=832)
+        stride = integer_number(options.get('stride', 80), 'stride', minimum=1)
         merge = options.get('merge', 'center')
         if width < 32 or width > 832 or width % 32 or stride not in (40, 80) or merge not in {'keep', 'center', 'blend'}:
             raise ValueError('ACE: encode_width is a 32px multiple up to 832, stride 40/80, merge keep/center/blend')
@@ -178,7 +180,7 @@ def normalize_options(algorithm, options=None):
             from .contracts import positive_number
             focal = positive_number(focal, 'focal')
         result['focal'] = focal
-        width = int(options.get('analysis_width', 832))
+        width = integer_number(options.get('analysis_width', 832), 'analysis_width', maximum=1920)
         if width != 0 and not 320 <= width <= 1920:
             raise ValueError('HaWoR analysis_width must be 0 for native resolution, or 320..1920')
         result['analysis_width'] = width

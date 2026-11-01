@@ -8,6 +8,49 @@ import time
 from pathlib import Path
 
 
+def checkpoint_summary(directory):
+    """Describe an atomic full-state checkpoint without trusting its marker."""
+    from mint.runtime import file_identity
+    directory = Path(directory)
+    result = {'path': str(directory), 'step': None, 'complete': False,
+              'model': str(directory / 'model.safetensors')}
+    try:
+        record = json.loads((directory / 'checkpoint.json').read_text())
+        files = record.get('files') if isinstance(record, dict) else None
+        if not isinstance(files, dict) or not files or record.get('schema') != 1:
+            raise ValueError('Incomplete training checkpoint marker')
+        step = record.get('step')
+        if isinstance(step, bool) or not isinstance(step, int) or step < 0:
+            raise ValueError('Checkpoint has no valid optimizer step')
+        result['step'] = step
+        if directory.name.startswith('step_') and directory.name[5:] != f'{step:08d}' and directory.name[5:] != str(step):
+            raise ValueError('Checkpoint directory and optimizer step differ')
+        if any(not isinstance(name, str) or Path(name).name != name for name in files):
+            raise ValueError('Checkpoint contains an invalid file name')
+        if ('model.safetensors' not in files or not any(name.startswith('optimizer') for name in files) or
+            not any(name.startswith('scheduler') for name in files) or
+            not any(name.startswith('random_states') and name.endswith('.pkl') for name in files)):
+            raise ValueError('Checkpoint lacks model, optimizer, scheduler or RNG state')
+        if any(not isinstance(identity, dict) or file_identity(directory / name) != identity for name, identity in files.items()):
+            raise ValueError('Training checkpoint file changed or is missing')
+        result['complete'] = True
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        result['error'] = str(error)
+    return result
+
+
+def latest_checkpoint(directory):
+    """Fail before GPU admission if the most recent published state is damaged."""
+    markers = list(Path(directory).glob('step_*/checkpoint.json'))
+    if not markers:
+        return None
+    marker = max(markers, key=lambda path: int(path.parent.name[5:]) if path.parent.name[5:].isdigit() else -1)
+    summary = checkpoint_summary(marker.parent)
+    if not summary['complete']:
+        raise ValueError('Latest training checkpoint is unavailable: ' + summary['error'])
+    return summary['path']
+
+
 def append_metrics(path, step, metrics, *, epoch=0, attempt='standalone'):
     values = {str(k): float(v) for k, v in metrics.items() if math.isfinite(float(v))}
     row = {'step': int(step), 'epoch': int(epoch), 'attempt': str(attempt), 'at': time.time(), 'metrics': values}
@@ -46,6 +89,12 @@ def read_curves(workflows, key, *, maximum=800):
             for line in stream:
                 try:
                     row = json.loads(line)
+                    if (not isinstance(row, dict) or isinstance(row.get('step'), bool) or
+                        not isinstance(row.get('step'), int) or row['step'] < 0 or
+                        not isinstance(row.get('attempt'), str) or not isinstance(row.get('metrics'), dict)):
+                        continue
+                    row['metrics'] = {key: value for key, value in row['metrics'].items()
+                                      if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)}
                     attempts.add(row['attempt'])
                     points[row['step']] = row
                 except (ValueError, KeyError, TypeError):
@@ -68,11 +117,7 @@ def read_curves(workflows, key, *, maximum=800):
         rows = [rows[i] for i in chosen]
     checkpoints = []
     for marker in sorted((folder / 'training').glob('step_*/checkpoint.json')):
-        record = json.loads(marker.read_text())
-        from mint.runtime import file_identity
-        intact = bool(record.get('files')) and 'model.safetensors' in record['files'] and all(file_identity(marker.parent / name) == identity for name, identity in record['files'].items())
-        checkpoints.append({'path': str(marker.parent), 'step': record.get('step'), 'complete': intact,
-                            'model': str(marker.parent / 'model.safetensors')})
+        checkpoints.append(checkpoint_summary(marker.parent))
     return {'workflow_id': key, 'status': state['status'], 'points': rows, 'available_points': total,
             'attempts': sorted(attempts), 'tail_limited': truncated, 'checkpoints': checkpoints,
             'policy': 'Latest attempt per optimizer step; durable rank-0 scalar metrics; no partial accumulation steps'}

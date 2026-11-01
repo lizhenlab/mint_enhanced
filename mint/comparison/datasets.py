@@ -100,21 +100,42 @@ def annotation_identity(root, episode, video_key):
             'length': int(episode['length']), 'schema': 1}
 
 
-def annotated_intrinsics(episode, positions, fallback):
+def annotated_intrinsics(episode, positions, fallback, *, image_hw=None):
     """Prefer actual pixel intrinsics over the legacy centred-FoV approximation."""
     import pyarrow.parquet as pq
-    if 'intrinsics' not in pq.read_schema(episode['parquet']).names:
+    positions = np.asarray(positions)
+    if positions.ndim != 1 or positions.dtype.kind not in 'ifu' or not np.isfinite(positions).all() or \
+            np.any(positions != np.floor(positions)) or np.any(positions < 0) or np.any(positions >= episode['length']):
+        raise ValueError('Annotation positions must be integer frames inside the selected Episode')
+    names = set(pq.read_schema(episode['parquet']).names)
+    column = 'intrinsics' if 'intrinsics' in names else 'cam_fov' if 'cam_fov' in names else 'fov' if 'fov' in names else None
+    if column is None or column != 'intrinsics' and image_hw is None:
         return np.broadcast_to(fallback, (len(positions), 3, 3)).copy(), 'LeRobot FoV-derived centred pinhole intrinsics'
     kwargs = {} if 'start' in episode else {'filters': [('episode_index', '=', int(episode['episode_index']))]}
-    table = pq.read_table(episode['parquet'], columns=['intrinsics'], **kwargs)
-    values = np.asarray(table.column('intrinsics').combine_chunks().to_pylist(), np.float64).reshape(-1, 3, 3)
+    table = pq.read_table(episode['parquet'], columns=[column], **kwargs)
     rows = np.asarray(positions, np.int64) + int(episode.get('start', 0))
-    K = values[rows].copy()
+    if np.any(rows >= table.num_rows):
+        raise ValueError('Annotation data is shorter than the selected Episode')
+    values = np.asarray(table.column(column).combine_chunks().to_pylist(), np.float64)
+    if column == 'intrinsics':
+        K = values.reshape(-1, 3, 3)[rows].copy()
+    else:
+        fov = values.reshape(-1, 2)[rows]
+        if not np.isfinite(fov).all() or np.any((fov <= 0) | (fov >= np.pi)):
+            raise ValueError('Annotated FoV must contain finite angles between 0 and pi')
+        # Budget camera encoding uses [vertical, horizontal]; the raw legacy
+        # export consumed by K_from_fov uses [horizontal, vertical].
+        if column == 'fov':
+            fov = fov[:, ::-1]
+        h, w = image_hw
+        K = np.broadcast_to(np.eye(3), (len(rows), 3, 3)).copy()
+        K[:, 0, 0], K[:, 1, 1] = w / (2 * np.tan(fov[:, 1] / 2)), h / (2 * np.tan(fov[:, 0] / 2))
+        K[:, 0, 2], K[:, 1, 2] = w / 2., h / 2.
     if not np.isfinite(K).all() or np.any(K[:, (0, 1), (0, 1)] <= 0) or not np.allclose(K[:, 2], [0, 0, 1]):
         raise ValueError('Invalid annotated pixel intrinsics')
     if not np.allclose(K[:, (0, 1), (1, 0)], 0):
         raise ValueError('Annotated camera must use the zero-skew pinhole result contract')
-    return K, 'LeRobot annotated pixel intrinsics'
+    return K, 'LeRobot annotated pixel intrinsics' if column == 'intrinsics' else 'LeRobot per-frame FoV-derived centred pinhole intrinsics'
 
 
 def resolve_dataset_input(spec, *, source=None, view='full', target_fps=0, start_frame=0, max_frames=None, camera=None):
@@ -149,7 +170,9 @@ def resolve_dataset_input(spec, *, source=None, view='full', target_fps=0, start
         from eval.model_effect.visualization.reproj_core.lerobot_io import load_episode_raw
         raw = load_episode_raw(episode, max_frames=relative_start + 1, decode_video=False, video_key=key)
         h, w = raw['hw']
-        calibration, _ = annotated_intrinsics(episode, [int(selected[0]) - begin], raw['K'])
+        calibration, _ = annotated_intrinsics(episode, selected - begin, raw['K'], image_hw=raw['hw'])
+        if not np.allclose(calibration, calibration[0], rtol=1e-6, atol=1e-6):
+            raise ValueError('K-given input requires static intrinsics over the selected frames; choose a constant-calibration range or leave dataset calibration disabled')
         derived = {'K': calibration[0].tolist(), 'width': w, 'height': h,
                    'source': f'LeRobot {root.name} episode {episode["episode_index"]}; explicit K-given protocol'}
         if camera and camera != derived:
@@ -208,7 +231,7 @@ def reference_arrays(sample, context):
     if vertices is not None:
         valid &= np.isfinite(vertices).all(axis=(-1, -2))
     joints = np.asarray(joints, np.float32).copy();joints[~valid] = np.nan
-    K, K_source = annotated_intrinsics(episode, positions, raw['K'])
+    K, K_source = annotated_intrinsics(episode, positions, raw['K'], image_hw=raw['hw'])
     arrays = {'joints_camera_m': joints, 'geometry_valid': valid, 'presence': kept,
               'K': K,
               'T_world_camera': cameras.copy(), 'pose_valid': np.isfinite(cameras).all(axis=(1, 2)),

@@ -132,6 +132,8 @@ def combine_camera(hand_dir, camera_dir, destination, *, metadata):
     # Geometry in the optical camera is preserved exactly. Only the extrinsic source changes.
     return publish_result(destination, arrays, {**hand_meta, **metadata,
         'algorithm': 'camera_combination', 'component_sources': {'hands': hand_meta['run_id'], 'camera': camera_meta['run_id']},
+        'reference_role': 'derived_camera_combination',
+        'component_reference_roles': {'hands': hand_meta.get('reference_role'), 'camera': camera_meta.get('reference_role')},
         'camera_source': f"{camera_meta['label']} / {camera_meta['run_id']}",
         'fusion_scope': 'Extrinsic camera-source experiment; native hand geometry and K unchanged; no learned fusion',
         'extra_camera_frames_unavailable': int((~valid).sum())})

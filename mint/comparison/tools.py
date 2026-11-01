@@ -11,6 +11,8 @@ import threading
 import time
 from pathlib import Path
 
+import numpy as np
+
 from mint.runtime import atomic_json, digest, file_identity
 from mint.inference.cache_budget import file_lock, _token
 from mint.inference.gpu_scheduler import GpuLease, NvidiaSmiProbe
@@ -100,6 +102,19 @@ class RenderTools:
             raise ValueError('MuJoCo mesh rendering requires MANO vertices in this result')
         if space == 'world' and 'T_world_camera' not in arrays:
             raise ValueError('世界渲染需要全部结果帧的有效世界相机；可使用相机系查看此结果')
+        ids = np.asarray(sample['source_frame_indices'][start:end], dtype=np.int64)
+        positions = np.searchsorted(arrays['source_frame_indices'], ids)
+        matched = positions < len(arrays['source_frame_indices'])
+        matched[matched] &= arrays['source_frame_indices'][positions[matched]] == ids[matched]
+        if not matched.all():
+            raise ValueError('工具所选片段含原结果缺失帧，请选择完整覆盖的片段')
+        if space == 'world' and not arrays['pose_valid'][positions].all():
+            raise ValueError('World rendering requires valid camera geometry for each selected frame')
+        visible = np.asarray(arrays['geometry_valid'][positions]).copy()
+        if not include_absent and 'presence' in arrays:
+            visible &= arrays['presence'][positions]
+        if not visible.any():
+            raise ValueError('The selected interval has no visible hand geometry')
         identity = {'run_id': run_id, 'result': file_identity(self.manager.root / 'runs' / run_id / 'result/result.json'),
             'kind': kind, 'space': space, 'start': start, 'end': end, 'width': width,
             'include_absent': bool(include_absent), 'resource_policy': resource_policy,
@@ -165,6 +180,12 @@ class RenderTools:
                     atomic_json(folder / 'status.json', {'id': job['id'], 'status': 'failed', 'error': str(error), 'updated': time.time()})
 
     def _execute(self, job, folder):
+        # The scheduler snapshot may predate another owner completing/cancelling
+        # this request. Recheck after the execution lock, before taking a GPU.
+        current = self.status(job['id'])
+        if current['status'] not in {'queued', 'waiting_gpu'}:
+            return
+        job = current
         child, lease, token = None, None, None
         try:
             env = os.environ.copy()

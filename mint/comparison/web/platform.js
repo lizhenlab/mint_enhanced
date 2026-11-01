@@ -1,6 +1,6 @@
 'use strict';
 
-const datasetForm={active:false,catalog:null,offset:0};
+const datasetForm={active:false,catalog:null,offset:0,serial:0,loading:false};
 const platform={pane:'data',selection:new Map(),catalog:null,datasetOffset:0,taskOffset:0,taskSerial:0,serial:0,timer:null,collection:null,collectionKind:null,report:null,renderJob:null,capability:null};
 const HUB_LABELS={data:'数据接入',tasks:'任务与恢复',batch:'批量比较',evaluation:'数据集评测',tools:'专项工具',catalog:'数据与结果目录',quality:'逐帧质检与人工复核',research:'训练与模型'};
 const HUB_GROUPS={data:'data',catalog:'data',batch:'data',evaluation:'evaluation',quality:'evaluation',research:'research',tasks:'tasks',tools:'tools'};
@@ -29,11 +29,13 @@ function focusHubSection(tab,title){
 
 function datasetSelection(){
   if(!datasetForm.active)return null;
-  if(!datasetForm.catalog||!$('datasetEpisode').value)throw new Error('请先读取数据集并选择 Episode');
+  if(datasetForm.loading)throw new Error('Episode 元数据正在读取，请稍后再提交');
+  if(!datasetForm.catalog||$('datasetRoot').value.trim()!==datasetForm.catalog.root||$('datasetCamera').value!==datasetForm.catalog.camera||!datasetForm.catalog.episodes.some(row=>String(row.episode_index)===$('datasetEpisode').value))throw new Error('请先读取当前数据集并选择 Episode');
   return {root:datasetForm.catalog.root,video_key:$('datasetCamera').value,episode:Number($('datasetEpisode').value),attach_gt:$('datasetAttachGT').checked,use_calibration:$('datasetCalibration').checked};
 }
 function decorateInputBody(body){const dataset=datasetSelection();return dataset?{...body,dataset}:body;}
 function setDatasetMode(active){
+  if(!active){datasetForm.serial++;datasetForm.loading=false;}
   datasetForm.active=active;$('datasetFields').hidden=!active;$('sourceDirectory').hidden=active;
   $('chooseVideoInput').classList.toggle('active',!active);$('chooseDatasetInput').classList.toggle('active',active);
   $('view').disabled=active;if(active)$('view').value='full';$('startFrameLabel').textContent=active?'Episode 内起始帧':'起始源帧';
@@ -46,21 +48,26 @@ function chooseDatasetEpisode(){
   $('datasetSummary').textContent=`${datasetForm.catalog.total} 个 Episode · 当前 ${row.length} 帧 · ${datasetForm.catalog.fps} FPS · ${row.annotation.ready?(row.annotation.mesh?'GT 含 MANO 网格':'GT 含 21 点'):'GT 不可用：'+row.annotation.reason}`;
 }
 async function loadDatasetForm(offset=0,selection=null){
-  $('datasetSummary').textContent='正在读取 Episode 元数据…';
-  const root=selection?.root||$('datasetRoot').value.trim(),camera=selection?.video_key||$('datasetCamera').value;
+  const serial=++datasetForm.serial,root=selection?.root||$('datasetRoot').value.trim(),camera=selection?.video_key||$('datasetCamera').value,cameraBefore=$('datasetCamera').value;
+  setDatasetMode(true);datasetForm.catalog=null;datasetForm.loading=true;$('datasetEpisode').replaceChildren();
+  $('datasetSummary').textContent='正在读取 Episode 元数据…';$('datasetPreviousPage').disabled=true;$('datasetNextPage').disabled=true;
+  const current=()=>serial===datasetForm.serial&&datasetForm.active&&$('datasetRoot').value.trim()===root&&$('datasetCamera').value===cameraBefore;
   const query=new URLSearchParams({root,offset,limit:100});if(camera)query.set('camera',camera);if(selection)query.set('episode',selection.episode);
-  const value=await api('api/comparison/dataset?'+query);datasetForm.catalog=value;datasetForm.offset=value.offset;
-  $('datasetRoot').value=value.root;$('datasetCamera').replaceChildren();for(const name of value.cameras){const option=el('option',name);option.value=name;$('datasetCamera').append(option);}$('datasetCamera').value=value.camera;
-  $('datasetEpisode').replaceChildren();for(const row of value.episodes){const option=el('option',`Episode ${row.episode_index} · ${row.length} 帧`);option.value=row.episode_index;$('datasetEpisode').append(option);}
-  if(selection&&value.episodes.some(row=>row.episode_index===selection.episode))$('datasetEpisode').value=selection.episode;
-  $('datasetPreviousPage').disabled=value.offset===0;$('datasetNextPage').disabled=value.offset+value.episodes.length>=value.total;
-  chooseDatasetEpisode();setDatasetMode(true);return value;
+  try{
+    const value=await api('api/comparison/dataset?'+query);if(!current())return null;datasetForm.catalog=value;datasetForm.offset=value.offset;
+    $('datasetRoot').value=value.root;$('datasetCamera').replaceChildren();for(const name of value.cameras){const option=el('option',name);option.value=name;$('datasetCamera').append(option);}$('datasetCamera').value=value.camera;
+    for(const row of value.episodes){const option=el('option',`Episode ${row.episode_index} · ${row.length} 帧`);option.value=row.episode_index;$('datasetEpisode').append(option);}
+    if(selection&&value.episodes.some(row=>row.episode_index===selection.episode))$('datasetEpisode').value=selection.episode;
+    $('datasetPreviousPage').disabled=value.offset===0;$('datasetNextPage').disabled=value.offset+value.episodes.length>=value.total;
+    if(value.episodes.length)chooseDatasetEpisode();else $('datasetSummary').textContent='当前数据集或相机没有可选 Episode，请检查目录和相机。';return value;
+  }catch(error){if(current())throw error;return null;}
+  finally{if(serial===datasetForm.serial)datasetForm.loading=false;}
 }
 function restoreDatasetForm(comparison){
   const context=comparison?.dataset_context;
   setDatasetMode(!!context);if(!context){datasetForm.catalog=null;return;}
   $('datasetRoot').value=context.selection.root;$('datasetAttachGT').checked=!!context.selection.attach_gt;$('datasetCalibration').checked=!!context.selection.use_calibration;
-  loadDatasetForm(0,context.selection).then(()=>{$('startFrame').value=context.relative_start;$('maxFrames').value=context.requested_max_frames??'';$('camera').value=comparison.sample_request.camera&&!context.selection.use_calibration?JSON.stringify(comparison.sample_request.camera):'';}).catch(error=>{$('datasetSummary').textContent=error.message;});
+  loadDatasetForm(0,context.selection).then(value=>{if(!value||datasetForm.catalog!==value)return;$('startFrame').value=context.relative_start;$('maxFrames').value=context.requested_max_frames??'';$('camera').value=comparison.sample_request.camera&&!context.selection.use_calibration?JSON.stringify(comparison.sample_request.camera):'';}).catch(error=>{$('datasetSummary').textContent=error.message;});
 }
 function selectedAlgorithmsFrom(container){
   return [...container.querySelectorAll('.algorithm')].filter(box=>box.querySelector('input[type=checkbox]').checked).flatMap(box=>{
@@ -81,27 +88,34 @@ function addInputCheckbox(host,key,value,label,description){
   const copy=el('span');copy.append(el('strong',label),el('small',description));row.append(check,copy);host.append(row);
 }
 async function scanCollectionVideos(){
-  $('scanSummary').textContent='正在扫描目录…';const query=new URLSearchParams({path:$('collectionDirectory').value.trim(),recursive:$('scanRecursive').checked?'1':'0',limit:1000});
-  const value=await api('api/comparison/scan?'+query);$('collectionVideos').replaceChildren();
-  platform.scanned=value.videos;for(const row of value.videos)addInputCheckbox($('collectionVideos'),'video:'+row.source,{source:row.source,name:row.name},row.name,sourceFileSize(row.size_bytes));
-  $('scanSummary').textContent=`${value.videos.length} 个视频${value.truncated?' · 已到单次扫描上限，请进入子目录分批选择':''}`;
+  const serial=platform.scanSerial=(platform.scanSerial||0)+1,path=$('collectionDirectory').value.trim(),recursive=$('scanRecursive').checked;
+  $('scanSummary').textContent='正在扫描目录…';platform.scanned=[];$('collectionVideos').replaceChildren();
+  const query=new URLSearchParams({path,recursive:recursive?'1':'0',limit:1000}),current=()=>serial===platform.scanSerial&&path===$('collectionDirectory').value.trim()&&recursive===$('scanRecursive').checked;
+  try{const value=await api('api/comparison/scan?'+query);if(!current())return;
+    platform.scanned=value.videos;for(const row of value.videos)addInputCheckbox($('collectionVideos'),'video:'+row.source,{source:row.source,name:row.name},row.name,sourceFileSize(row.size_bytes));
+    $('scanSummary').textContent=`${value.videos.length} 个视频${value.truncated?' · 已到单次扫描上限，请进入子目录分批选择':''}`;
+  }catch(error){if(current()){$('scanSummary').textContent='扫描失败，请检查目录后重试。';throw error;}}
 }
 async function loadHubDataset(offset=0){
-  $('hubDatasetSummary').textContent='正在读取元数据…';const query=new URLSearchParams({root:$('hubDatasetRoot').value.trim(),offset,limit:100});if($('hubDatasetCamera').value)query.set('camera',$('hubDatasetCamera').value);
-  const value=await api('api/comparison/dataset?'+query);platform.catalog=value;platform.datasetOffset=value.offset;
-  $('hubDatasetRoot').value=value.root;$('hubDatasetCamera').replaceChildren();for(const name of value.cameras){const option=el('option',name);option.value=name;$('hubDatasetCamera').append(option);}$('hubDatasetCamera').value=value.camera;
-  $('hubEpisodes').replaceChildren();for(const row of value.episodes){const dataset={root:value.root,video_key:value.camera,episode:row.episode_index,attach_gt:row.annotation.ready,use_calibration:false},key=`episode:${value.root}:${value.camera}:${row.episode_index}`;
-    addInputCheckbox($('hubEpisodes'),key,{source:row.video,dataset,name:`${value.root.split('/').pop()} · Episode ${row.episode_index}`,annotation:row.annotation},`Episode ${row.episode_index} · ${row.length} 帧`,row.annotation.ready?(row.annotation.mesh?'GT · MANO + 相机':'GT · 21 点 + 相机'):'可推理 · GT 不完整');
-  }
-  $('hubDatasetSummary').textContent=`${value.total} 个 Episode · 显示 ${value.offset+1}–${value.offset+value.episodes.length} · ${value.fps} FPS`;
-  $('hubDatasetPrevious').disabled=value.offset===0;$('hubDatasetNext').disabled=value.offset+value.episodes.length>=value.total;
+  const serial=platform.datasetSerial=(platform.datasetSerial||0)+1,root=$('hubDatasetRoot').value.trim(),camera=$('hubDatasetCamera').value;
+  platform.catalog=null;$('hubEpisodes').replaceChildren();$('hubDatasetPrevious').disabled=true;$('hubDatasetNext').disabled=true;$('hubDatasetSummary').textContent='正在读取元数据…';
+  const query=new URLSearchParams({root,offset,limit:100});if(camera)query.set('camera',camera);
+  const current=()=>serial===platform.datasetSerial&&root===$('hubDatasetRoot').value.trim()&&camera===$('hubDatasetCamera').value;
+  try{const value=await api('api/comparison/dataset?'+query);if(!current())return;platform.catalog=value;platform.datasetOffset=value.offset;
+    $('hubDatasetRoot').value=value.root;$('hubDatasetCamera').replaceChildren();for(const name of value.cameras){const option=el('option',name);option.value=name;$('hubDatasetCamera').append(option);}$('hubDatasetCamera').value=value.camera;
+    for(const row of value.episodes){const dataset={root:value.root,video_key:value.camera,episode:row.episode_index,attach_gt:row.annotation.ready,use_calibration:false},key=`episode:${value.root}:${value.camera}:${row.episode_index}`;
+      addInputCheckbox($('hubEpisodes'),key,{source:row.video,dataset,name:`${value.root.split('/').pop()} · Episode ${row.episode_index}`,annotation:row.annotation},`Episode ${row.episode_index} · ${row.length} 帧`,row.annotation.ready?(row.annotation.mesh?'GT · MANO + 相机':'GT · 21 点 + 相机'):'可推理 · GT 不完整');
+    }
+    $('hubDatasetSummary').textContent=`${value.total} 个 Episode · 显示 ${value.episodes.length?value.offset+1:0}–${value.offset+value.episodes.length} · ${value.fps} FPS`;
+    $('hubDatasetPrevious').disabled=value.offset===0;$('hubDatasetNext').disabled=value.offset+value.episodes.length>=value.total;
+  }catch(error){if(current()){$('hubDatasetSummary').textContent='读取失败，请检查数据集目录和相机后重试。';throw error;}}
 }
 function createComposer(kind){
   const host=$(kind==='batch'?'batchComposer':'evaluationComposer');if(host.children.length)return;
   const row=el('div',undefined,'composer-summary');row.append(el('p','输入来自“数据与输入”的勾选项；默认处理完整帧范围。','hint'));const choose=el('button','选择视频 / Episode');choose.onclick=()=>switchHub('data');row.append(choose);host.append(row);
   const fields=el('div',undefined,'composer-fields');
   for(const [id,label,type,value]of [['view','视频视角','select','full'],['target_fps','目标 FPS（0=源帧率）','number',0],['start_frame','起始帧（Episode 内）','number',0],['max_frames','最多帧数（留空=全部）','number','']]){
-    const input=type==='select'?selectInput([['full','完整画面'],['left','双目左眼'],['right','双目右眼']],value):el('input');input.id=kind+'-'+id;if(type!=='select'){input.type=type;input.min=id==='max_frames'?1:0;input.step=id==='target_fps'?'any':1;input.value=value;}fields.append(inputLabel(label,input));
+    const input=type==='select'?selectInput([['full','完整画面'],['left','双目左眼'],['right','双目右眼']],value):el('input');input.id=kind+'-'+id;if(type!=='select'){input.type=type;input.min=id==='max_frames'?1:0;input.step=id==='target_fps'?'any':1;input.required=id!=='max_frames';input.value=value;}fields.append(inputLabel(label,input));
   }
   const camera=el('textarea');camera.id=kind+'-camera';camera.rows=2;camera.placeholder='可选手工标定 JSON：K、width、height、source';fields.append(inputLabel('手工相机标定（完整原视频网格）',camera));
   const calibration=el('input');calibration.type='checkbox';calibration.id=kind+'-calibration';fields.append(inputLabel('明确使用数据集标定作为算法输入',calibration));
@@ -110,7 +124,11 @@ function createComposer(kind){
   host.append(algorithms);cloneComposerAlgorithms(algorithms);
   const start=el('button',kind==='evaluation'?'开始多算法数据集评测':'开始多视频多算法批量','primary');start.id=kind+'-submit';start.onclick=()=>submitCollection(kind).catch(hubError);host.append(start);
 }
+function collectionFormSignature(kind){
+  return JSON.stringify({inputs:[...platform.selection.entries()],fields:['view','target_fps','start_frame','max_frames','camera','calibration','reference'].map(key=>{const field=$(kind+'-'+key);return [key,field.value,field.checked];}),selections:selectedAlgorithmsFrom($(kind+'-algorithms'))});
+}
 async function submitCollection(kind){
+  if($(kind+'-submit').disabled)return;
   const chosen=[...platform.selection.values()];if(!chosen.length)throw new Error('请先在“数据与输入”选择视频或 Episode');
   if(kind==='evaluation'&&chosen.some(value=>!value.dataset||!value.annotation?.ready))throw new Error('界面评测需要每个输入都有 LeRobot GT；普通视频可使用 API 提供明确参考标注');
   const options={view:$(kind+'-view').value,target_fps:Number($(kind+'-target_fps').value),start_frame:Number($(kind+'-start_frame').value),max_frames:$(kind+'-max_frames').value===''?null:Number($(kind+'-max_frames').value)};
@@ -118,8 +136,8 @@ async function submitCollection(kind){
   for(const input of $(kind==='batch'?'batchComposer':'evaluationComposer').querySelectorAll('input[type=number]'))if(!input.checkValidity()){input.reportValidity();throw new Error('请检查帧范围和 FPS');}
   const items=chosen.map(value=>({source:value.source,name:value.name,...(value.dataset?{dataset:{...value.dataset,attach_gt:kind==='evaluation'||$(kind+'-reference').checked,use_calibration:$(kind+'-calibration').checked}}:{})}));
   const selections=selectedAlgorithmsFrom($(kind+'-algorithms'));if(!selections.length)throw new Error('请至少选择一个算法');
-  const button=$(kind+'-submit');button.disabled=true;
-  try{button.textContent=`正在预检 ${items.length} 个输入…`;const check=await api('api/comparison/collections/preflight',{kind,items,selections,options});if(!check.ready)throw new Error(check.errors.slice(0,20).join('；'));const value=await api('api/comparison/collections',{kind,items,selections,options});await openCollection(value.id);}finally{button.disabled=false;button.textContent=kind==='evaluation'?'开始多算法数据集评测':'开始多视频多算法批量';}
+  const button=$(kind+'-submit'),signature=collectionFormSignature(kind);button.disabled=true;
+  try{button.textContent=`正在预检 ${items.length} 个输入…`;const check=await api('api/comparison/collections/preflight',{kind,items,selections,options});if(!check.ready)throw new Error(check.errors.slice(0,20).join('；'));if(signature!==collectionFormSignature(kind))throw new Error('输入或参数已变化，请核对后重新提交预检');const value=await api('api/comparison/collections',{kind,items,selections,options});await openCollection(value.id);}finally{button.disabled=false;button.textContent=kind==='evaluation'?'开始多算法数据集评测':'开始多视频多算法批量';}
 }
 async function openPlatform(tab='data'){
   pause();$('platformError').textContent='';if(!$('platformDialog').open)$('platformDialog').show();
@@ -200,14 +218,19 @@ async function refreshToolOptions(){
   const bench=cap.benchmark;if(bench){const supported=(bench.datasets||[]).filter(row=>row.implemented).map(row=>row.name),missing=(bench.datasets||[]).filter(row=>!row.implemented).map(row=>row.name),missingHeads=(bench.heads||[]).filter(row=>!row.implemented).map(row=>row.name);const card=el('div',undefined,'tool-readiness-card benchmark-readiness');card.append(el('strong','公开基准 · 适配器与当前模型能力分别检查'),el('p','已有数据集适配器：'+(supported.join('、')||'无')+'。','hint'),el('p','待实现适配器：'+(missing.join('、')||'无')+'；待实现指标：'+(missingHeads.join('、')||'无')+'。','hint'),el('p','当前 MINT 配置输出：'+(bench.model_capability||[]).join('、')+'。适配器已实现仍需匹配数据标注和模型输出；当前模型未启用的深度等指标不可直接评测。','hint'));host.append(card);}
   for(const link of document.querySelectorAll('#hub-tools .tool-links a')){const tool=new URL(link.href,location.href).searchParams.get('tool'),ready=tool?.startsWith('analysis-')?cap.data_analysis:cap.legacy;link.dataset.ready=String(!!ready);link.setAttribute('aria-disabled',String(!ready));link.title=ready?'打开工具；不会自动提交计算':'后端未连接，请先检查环境';link.onclick=ready?null:event=>{event.preventDefault();hubError(new Error('该工具后端未连接，请先检查环境。'));};}
 
-  $('startRenderTool').disabled=!$('renderRun').value||!cap.render[$('renderKind').value].ready;
+  $('startRenderTool').disabled=$('startRenderTool').dataset.busy==='true'||!$('renderRun').value||!cap.render?.[$('renderKind').value]?.ready;
   $('renderStart').max=state.comparison?.sample?.frames||1;$('renderEnd').max=state.comparison?.sample?.frames||1;
 }
 async function startRenderTool(){
+  const button=$('startRenderTool');if(button.dataset.busy==='true')return;
   const run=$('renderRun').value;if(!run)throw new Error('请先打开一份已有几何结果');
-  for(const id of ['renderStart','renderEnd'])if(!$(id).checkValidity()){$(id).reportValidity();throw new Error('请检查工具帧范围');}
-  const value=await api(`api/comparison/runs/${run}/tools`,{kind:$('renderKind').value,space:$('renderSpace').value,start:Number($('renderStart').value)-1,end:$('renderEnd').value===''?null:Number($('renderEnd').value),width:Number($('renderWidth').value),include_absent:$('showAbsent').checked,resource_policy:$('renderPolicy').value});
-  platform.renderJob=value.id;await refreshRenderTool();
+  const start=Number($('renderStart').value),end=$('renderEnd').value===''?null:Number($('renderEnd').value);
+  if(!$('renderStart').value.trim()||!Number.isInteger(start)||start<1||(end!==null&&(!Number.isInteger(end)||end<start)))throw new Error('起始帧从 1 开始，结束帧不能早于起始帧');
+  for(const id of ['renderStart','renderEnd','renderWidth'])if(!$(id).checkValidity()){$(id).reportValidity();throw new Error('请检查工具帧范围与画面宽度');}
+  const options={kind:$('renderKind').value,space:$('renderSpace').value,start:start-1,end,width:Number($('renderWidth').value),include_absent:$('showAbsent').checked,resource_policy:$('renderPolicy').value};
+  button.dataset.busy='true';button.disabled=true;
+  try{const value=await api(`api/comparison/runs/${run}/tools`,options);platform.renderJob=value.id;await refreshRenderTool();}
+  finally{button.dataset.busy='false';button.disabled=!$('renderRun').value||!platform.capability?.render?.[$('renderKind').value]?.ready;}
 }
 async function resumeRenderTool(id){const value=await api('api/comparison/tools/'+id);const options={};for(const key of ['kind','space','start','end','width','include_absent','resource_policy'])options[key]=value[key];const resumed=await api(`api/comparison/runs/${value.run_id}/tools`,options);platform.renderJob=resumed.id;}
 async function refreshRenderTool(){

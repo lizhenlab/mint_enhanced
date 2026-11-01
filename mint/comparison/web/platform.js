@@ -299,7 +299,7 @@ function renderEvaluationReport(report){
   const details=el('details',undefined,'evaluation-metric-details');details.append(el('summary','更多指标与计数说明'),tableFor(extended,'hub-table'),el('p','相机与手部的对齐方式分别计算；本平台协议不等同于公开 Benchmark 复现。评测失败包括无法评分的输入。完整报告保留逐输入原因与全部指标。','hint'));host.append(details);
 }
 const toolsUI={view:'catalog',capabilitySerial:0,optionsSerial:0,statusSerial:0,jobSelection:0,comparisonKey:null,options:null,optionsError:'',activeJob:null};
-function toolComparisonKey(){const value=state.comparison;return JSON.stringify([value?.id,value?.sample_id,(value?.runs||[]).filter(run=>run.result).map(run=>run.id)]);}
+function toolComparisonKey(){const value=state.comparison;return JSON.stringify([value?.id,value?.sample_id,(value?.runs||[]).filter(run=>run.result).map(run=>[run.id,run.status,Object.entries(run.result.arrays||{}).map(([name,record])=>[name,record.file])])]);}
 function initialToolsView(query){const chosen=query.get('tools_tab');return ['catalog','render','environment'].includes(chosen)?chosen:query.get('tool_job')?'render':'catalog';}
 function showToolsView(view,{route=true,kind=null}={}){
   if(!['catalog','render','environment'].includes(view))view='catalog';toolsUI.view=view;

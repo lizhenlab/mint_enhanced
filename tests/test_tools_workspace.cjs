@@ -175,3 +175,13 @@ test('late comparison hydration refreshes the open tools source once and leaves 
   const app=fs.readFileSync(path.join(__dirname,'../mint/comparison/web/app.js'),'utf8'),start=app.indexOf('async function refresh(id,token)'),end=app.indexOf('function openRunDetails',start),refresh=app.slice(start,end),assignment=refresh.indexOf('state.comparison=value'),sync=refresh.indexOf('syncToolsComparison(');
   assert.ok(assignment>=0&&sync>assignment,'comparison hydration must notify tools after assigning the current comparison');assert.match(refresh,/typeof\s+syncToolsComparison\s*===\s*['"]function['"]/);
 });
+
+test('republished arrays or completion on the same run refresh eligibility without discarding the selected range',async()=>{
+  const x=fixture(),source=comparison('mutable');source.runs[0].status='partial';source.runs[0].result.arrays.vertices_camera_m.file={path:'/cache/vertices.npy',size:128,inode:7,mtime_ns:1,ctime_ns:1};ready(x,source);
+  x.context.partialOptions=eligibility('mutable-run',{result_frames:3,available_ranges:[[0,3]],world_ranges:[]});x.run("toolsUI.options=partialOptions;toolsUI.optionsKey=toolComparisonKey();toolsUI.publishedKey=toolComparisonKey();toolsUI.view='render'");
+  x.get('renderStart').value='2';x.get('renderEnd').value='8';x.run('syncRenderSettings()');assert.equal(x.get('startRenderTool').disabled,true);const firstKey=x.run('toolsUI.optionsKey'),calls=[];
+  x.context.api=async url=>{calls.push(url);if(url==='api/comparison/capabilities')return {render:{mujoco:{ready:true},retarget:{ready:true}},legacy:true,data_analysis:true};assert.equal(url,'api/comparison/runs/mutable-run/tools/options');return eligibility('mutable-run');};
+  source.runs[0].status='completed';x.run('syncToolsComparison()');await new Promise(resolve=>setImmediate(resolve));assert.equal(calls.length,2);assert.notEqual(x.run('toolsUI.optionsKey'),firstKey);assert.equal(x.get('startRenderTool').disabled,false);
+  const secondKey=x.run('toolsUI.optionsKey');source.runs[0].result.arrays.vertices_camera_m.file.mtime_ns=2;x.run('syncToolsComparison()');await new Promise(resolve=>setImmediate(resolve));assert.equal(calls.length,4);assert.notEqual(x.run('toolsUI.optionsKey'),secondKey);
+  assert.equal(x.get('renderRun').value,'mutable-run');assert.equal(x.get('renderStart').value,'2');assert.equal(x.get('renderEnd').value,'8');x.run('syncToolsComparison()');assert.equal(calls.length,4,'unchanged published files do not trigger another read');assert.equal(x.errors.length,0);
+});

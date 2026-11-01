@@ -81,11 +81,12 @@ function workflowParameters(){
   return {config:$('workflowConfig').value,allow_pseudo_labels:$('workflowPseudoOptIn').checked,dataset_id:$('workflowDataset').value||undefined,init_from:$('workflowInit').value||undefined,resume_checkpoint:$('workflowResumePath').value||undefined,gpus:Number($('workflowGpus').value),...($('workflowSteps').value?{max_steps:Number($('workflowSteps').value)}:{})};
 }
 function updateWorkflowFields(){const kind=$('workflowKind').value;for(const row of document.querySelectorAll('[data-workflow-kinds]'))row.hidden=!row.dataset.workflowKinds.split(' ').includes(kind);invalidateWorkflowReadiness();if(kind==='pipeline')checkWorkflowReadiness().catch(hubError);refreshWorkflowDatasetChoices().catch(hubError);}
-async function inspectWorkflow(id){
-  const selected=researchUI.workflow!==id,serial=researchUI.workflowSerial=(researchUI.workflowSerial||0)+1;researchUI.workflow=id;clearTimeout(researchUI.workflowTimer);
+async function inspectWorkflow(id,{navigate=false}={}){
+  if(navigate&&typeof showResearchView==='function'&&platform.pane==='research'&&$('platformDialog').open)showResearchView('train');
+  const serial=researchUI.workflowSerial=(researchUI.workflowSerial||0)+1;researchUI.workflow=id;clearTimeout(researchUI.workflowTimer);
   const current=()=>serial===researchUI.workflowSerial&&id===researchUI.workflow;
   let value;try{value=await api(`api/comparison/workflows/${id}`);}catch(error){if(current())throw error;return null;}if(!current())return null;
-  if(selected&&typeof showResearchView==='function'&&platform.pane==='research')showResearchView('train');researchOutput('workflowState',{status:value.status,progress:value.progress,output:value.output,error:value.error});$('workflowLog').disabled=false;$('workflowLog').onclick=async()=>{try{const log=await api(`api/comparison/workflows/${id}/log`);if(id!==researchUI.workflow||platform.pane!=='research'||!$('platformDialog').open)return;$('logText').textContent=log.text;$('logDialog').showModal();}catch(error){if(current())hubError(error);}};
+  researchOutput('workflowState',{status:value.status,progress:value.progress,output:value.output,error:value.error});$('workflowLog').disabled=false;$('workflowLog').onclick=async()=>{try{const log=await api(`api/comparison/workflows/${id}/log`);if(id!==researchUI.workflow||platform.pane!=='research'||!$('platformDialog').open)return;$('logText').textContent=log.text;$('logDialog').showModal();}catch(error){if(current())hubError(error);}};
   window.dispatchEvent(new CustomEvent('mint-workflow-inspected',{detail:value}));renderWorkflowNextSteps(value).catch(error=>{if(current())hubError(error);});
   $('workflowCancel').disabled=TERMINAL.has(value.status);$('workflowResume').disabled=!['failed','cancelled','interrupted'].includes(value.status);
   if(!TERMINAL.has(value.status)&&$('platformDialog').open&&platform.pane==='research')researchUI.workflowTimer=setTimeout(()=>{if(current())inspectWorkflow(id).catch(hubError);},3000);return value;

@@ -110,3 +110,32 @@ test('render submission rejects blank or reversed ranges and owns one request at
   const pending=x.run('startRenderTool()');await x.run('startRenderTool()');assert.equal(calls.length,1);request.resolve({id:'render-job'});await pending;
   assert.equal(calls[0].body.start,0);assert.equal(calls[0].body.end,81);assert.equal(x.get('startRenderTool').disabled,false);
 });
+
+test('workflow deep links and late observations preserve the explicitly selected research view',async()=>{
+  const x=fixture(),request=deferred();x.run("platform.pane='research';nextUI.researchView='curves'");x.get('platformDialog').open=true;
+  const navigations=[];x.context.showResearchView=view=>{navigations.push(view);x.run(`nextUI.researchView=${JSON.stringify(view)}`);};
+  x.context.renderWorkflowNextSteps=async()=>{};x.context.api=()=>request.promise;
+  const pending=x.run("inspectWorkflow('training-deeplink')");
+  assert.equal(x.run('nextUI.researchView'),'curves');x.run("nextUI.researchView='models'");
+  request.resolve({id:'training-deeplink',status:'completed',progress:{},request:{kind:'train'}});await pending;
+  assert.deepEqual(navigations,[]);assert.equal(x.run('nextUI.researchView'),'models');
+});
+
+test('explicit workflow opening navigates before loading and cannot hijack a later tab click',async()=>{
+  const x=fixture(),request=deferred();x.run("platform.pane='research';nextUI.researchView='models'");x.get('platformDialog').open=true;
+  x.context.showResearchView=view=>x.run(`nextUI.researchView=${JSON.stringify(view)}`);x.context.renderWorkflowNextSteps=async()=>{};x.context.api=()=>request.promise;
+  const pending=x.run("inspectWorkflow('selected-from-tasks',{navigate:true})");assert.equal(x.run('nextUI.researchView'),'train');
+  x.run("nextUI.researchView='curves'");request.resolve({id:'selected-from-tasks',status:'completed',progress:{}});await pending;
+  assert.equal(x.run('nextUI.researchView'),'curves');
+});
+
+test('the curve picker retains the named deep-linked training outside the current task page',()=>{
+  const x=fixture();x.context.statusLabel=status=>status;x.run("nextUI.curve='older-training';nextUI.researchTasks=[{id:'render',kind:'render',source:'train',label:'Unrelated'}]");
+  x.context.workflow={id:'older-training',status:'completed',request:{kind:'train',name:'ARCTIC MANO 10 steps'}};
+  x.run('syncTrainingWorkflowPicker(workflow)');
+  assert.equal(x.get('curveWorkflowPicker').value,'older-training');
+  assert.match(x.get('curveWorkflowPicker').options.find(option=>option.value==='older-training').textContent,/ARCTIC MANO 10 steps/);
+  x.run("nextUI.researchTasks=[{id:'recent-training',kind:'workflow',source:'train',label:'Recent',status:'running'}];syncTrainingWorkflowPicker()");
+  assert.equal(x.get('curveWorkflowPicker').value,'older-training');
+  assert.deepEqual(x.get('curveWorkflowPicker').options.map(option=>option.value),['','recent-training','older-training']);
+});

@@ -518,7 +518,14 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
 
     @blueprint.post('/api/comparison/runs/<run_id>/tools')
     def start_render_tool(run_id):
-        return jsonify(tools().start(run_id, **body())), 202
+        data = body()
+        if set(data) - {'kind', 'space', 'start', 'end', 'width', 'include_absent', 'resource_policy'}:
+            raise ValueError('Unknown rendering settings')
+        return jsonify(tools().start(run_id, **data)), 202
+
+    @blueprint.get('/api/comparison/runs/<run_id>/tools/options')
+    def render_tool_options(run_id):
+        return jsonify(tools().options(run_id))
 
     @blueprint.get('/api/comparison/tools/<job_id>')
     def render_status(job_id):

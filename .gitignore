@@ -124,3 +124,6 @@ docs/dataset-card/
 !tests/test_evaluation_quality_integrity.py
 !tests/test_quality_annotation_guards.cjs
 !tests/test_evaluation_quality_workspace.cjs
+
+!tests/test_tools_integrity.py
+!tests/test_tools_workspace.cjs

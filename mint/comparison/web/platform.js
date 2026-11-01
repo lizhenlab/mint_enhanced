@@ -4,10 +4,10 @@ const datasetForm={active:false,catalog:null,offset:0,serial:0,loading:false};
 const platform={pane:'data',selection:new Map(),catalog:null,datasetOffset:0,taskOffset:0,taskSerial:0,serial:0,timer:null,collection:null,collectionKind:null,report:null,renderJob:null,capability:null};
 const HUB_LABELS={data:'数据接入',tasks:'任务与恢复',batch:'批量比较',evaluation:'数据集评测',tools:'专项工具',catalog:'数据与结果目录',quality:'逐帧质检与人工复核',research:'训练与模型'};
 const HUB_GROUPS={data:'data',catalog:'data',batch:'data',evaluation:'evaluation',quality:'evaluation',research:'research',tasks:'tasks',tools:'tools'};
-const HUB_CONTEXT={data:'选择输入来源，再选择视频、Episode 或已准备的数据版本。',catalog:'检索不可变结果、数据版本、模型和协议。比较记录保存一组对照，任务中心管理实际执行过程。',batch:'多个输入按统一设置运行，每个输入独立保存比较。先核对输入与预检结果，再提交后台批次。',evaluation:'有 GT 的样本用于量化误差；已有预测可在逐帧质检中定位问题。',quality:'逐帧检查、区间复核和二维点修正。二维修正不会自动变成三维或 MANO 真值。',research:'准备数据 → 训练 → 检查点回归 → 模型发布。数据、模型和协议均保留独立版本。',tasks:'查看执行阶段、等待原因、资源与日志。一个比较可能包含多个算法任务。',tools:'专项分析与高级调试；各工具的可用状态和配置要求单独显示。'};
+const HUB_CONTEXT={data:'选择输入来源，再选择视频、Episode 或已准备的数据版本。',catalog:'检索不可变结果、数据版本、模型和协议。比较记录保存一组对照，任务中心管理实际执行过程。',batch:'多个输入按统一设置运行，每个输入独立保存比较。先核对输入与预检结果，再提交后台批次。',evaluation:'有 GT 的样本用于量化误差；已有预测可在逐帧质检中定位问题。',quality:'逐帧检查、区间复核和二维点修正。二维修正不会自动变成三维或 MANO 真值。',research:'准备数据 → 训练 → 检查点回归 → 模型发布。数据、模型和协议均保留独立版本。',tasks:'查看执行阶段、等待原因、资源与日志。一个比较可能包含多个算法任务。',tools:'选择工具用途；展示视频使用已有几何，分析与诊断工具各自选择输入。'};
 const platformNavigation={scroll:new Map(),restoring:false};
 function platformRoute(tab,replace=false){
-  const url=new URL(location.href);if(tab){if(url.searchParams.get('hub')!==tab)url.searchParams.delete('section');if(tab!==platform.collectionKind)url.searchParams.delete('collection');if(tab!=='tools')url.searchParams.delete('tool_job');if(tab!=='research')url.searchParams.delete('study');if(tab!=='research')url.searchParams.delete('research_tab');if(tab!=='data')url.searchParams.delete('source_type');url.searchParams.set('hub',tab);}else{for(const key of ['hub','section','collection','tool_job','study','research_tab','source_type'])url.searchParams.delete(key);}
+  const url=new URL(location.href);if(tab){if(url.searchParams.get('hub')!==tab)url.searchParams.delete('section');if(tab!==platform.collectionKind)url.searchParams.delete('collection');if(tab!=='tools'){url.searchParams.delete('tool_job');url.searchParams.delete('tools_tab');}if(tab!=='research')url.searchParams.delete('study');if(tab!=='research')url.searchParams.delete('research_tab');if(tab!=='data')url.searchParams.delete('source_type');url.searchParams.set('hub',tab);}else{for(const key of ['hub','section','collection','tool_job','tools_tab','study','research_tab','source_type'])url.searchParams.delete(key);}
   if(url.href!==location.href)window.history[replace?'replaceState':'pushState']({mintHub:tab||'compare'},'',url.pathname+url.search+url.hash);
 }
 function syncPlatformNavigation(tab){
@@ -245,7 +245,7 @@ async function refreshWorkspaceTasks(){
   for(const task of value.tasks){const row=el('tr'),name=el('td');name.append(el('strong',task.label),el('small',task.source||task.kind));const progress=task.progress||{},phase=progress.stage||progress.phase;row.append(name,el('td',statusLabel(task.status)+(phase?' · '+(STAGES[phase]||phase):'')),el('td',progress.total?`${progress.done||0}/${progress.total}${progress.unit==='frames'?' 帧':progress.unit==='optimizer_steps'?' 步':''}`:'—'));const actions=el('td');
     if(task.waiting_reason)name.append(el('small',task.waiting_reason,'waiting-reason'));if(task.eta)name.append(el('small',`当前阶段预计剩余 ${Math.ceil(task.eta.seconds)} 秒 · 估算`));
     const history=researchButton('阶段记录',async()=>researchDetails(await api(`api/comparison/tasks/${task.kind}/${task.id}`)));actions.append(history);
-    const open=el('button','打开');open.onclick=()=>{if(task.kind==='batch'||task.kind==='evaluation')openCollection(task.id).catch(hubError);else if(task.kind==='render'){platform.renderJob=task.id;switchHub('tools');}else if(task.kind==='workflow'){switchHub('research');inspectWorkflow(task.id,{navigate:true}).catch(hubError);}else if(task.kind==='study'){nextUI.study=task.id;openPlatform('research').then(()=>showResearchView('regression')).catch(hubError);}else if(task.comparison_id){$('platformDialog').close();openComparison(task.comparison_id).then(()=>inspectResult(task.id)).catch(error=>notify(error.message));}else if(task.url)location.href=task.url;};open.disabled=!(['batch','evaluation','render','workflow','study'].includes(task.kind)||task.comparison_id||task.url);actions.append(open);
+    const open=el('button','打开');open.onclick=()=>{if(task.kind==='batch'||task.kind==='evaluation')openCollection(task.id).catch(hubError);else if(task.kind==='render'){inspectRenderJob(task.id).catch(hubError);}else if(task.kind==='workflow'){switchHub('research');inspectWorkflow(task.id,{navigate:true}).catch(hubError);}else if(task.kind==='study'){nextUI.study=task.id;openPlatform('research').then(()=>showResearchView('regression')).catch(hubError);}else if(task.comparison_id){$('platformDialog').close();openComparison(task.comparison_id).then(()=>inspectResult(task.id)).catch(error=>notify(error.message));}else if(task.url)location.href=task.url;};open.disabled=!(['batch','evaluation','render','workflow','study'].includes(task.kind)||task.comparison_id||task.url);actions.append(open);
     const terminal=TERMINAL.has(task.status)||task.status==='evicted';if(['inference','batch','evaluation','render','export','workflow','study'].includes(task.kind)&&task.status!=='completed'){
       const action=el('button',terminal?'恢复':'取消');action.onclick=async()=>{try{if(task.kind==='inference')await api(`api/comparison/runs/${task.id}/${terminal?'resume':'cancel'}`,{});else if(task.kind==='render'){if(terminal){platform.renderJob=task.id;await resumeRenderTool(task.id);}else await api(`api/comparison/tools/${task.id}/cancel`,{});}else if(task.kind==='export')await api(`api/comparison/exports/${task.id}/${terminal?'resume':'cancel'}`,{});else if(task.kind==='study')await api(`api/comparison/studies/${task.id}/${terminal?'resume':'cancel'}`,{});else if(task.kind==='workflow')await api(`api/comparison/workflows/${task.id}/${terminal?'resume':'cancel'}`,{});else await api(`api/comparison/collections/${task.id}/${terminal?'resume':'cancel'}`,{});await refreshWorkspaceTasks();}catch(error){hubError(error);}};actions.append(action);
     }
@@ -298,38 +298,113 @@ function renderEvaluationReport(report){
   host.append(tableFor(basic,'evaluation-summary-table'),el('p','覆盖率以参考手部几何为分母，包含失败预测；部分结果也可能贡献已评分帧。未提供的指标显示“—”。','hint'));
   const details=el('details',undefined,'evaluation-metric-details');details.append(el('summary','更多指标与计数说明'),tableFor(extended,'hub-table'),el('p','相机与手部的对齐方式分别计算；本平台协议不等同于公开 Benchmark 复现。评测失败包括无法评分的输入。完整报告保留逐输入原因与全部指标。','hint'));host.append(details);
 }
+const toolsUI={view:'catalog',capabilitySerial:0,optionsSerial:0,statusSerial:0,jobSelection:0,comparisonKey:null,options:null,optionsError:'',activeJob:null};
+function toolComparisonKey(){const value=state.comparison;return JSON.stringify([value?.id,value?.sample_id,(value?.runs||[]).filter(run=>run.result).map(run=>run.id)]);}
+function initialToolsView(query){const chosen=query.get('tools_tab');return ['catalog','render','environment'].includes(chosen)?chosen:query.get('tool_job')?'render':'catalog';}
+function showToolsView(view,{route=true,kind=null}={}){
+  if(!['catalog','render','environment'].includes(view))view='catalog';toolsUI.view=view;
+  for(const panel of $('hub-tools').querySelectorAll('[data-tools-view]'))panel.hidden=panel.dataset.toolsView!==view;
+  for(const button of $('hub-tools').querySelectorAll('[data-tools-tab]')){const active=button.dataset.toolsTab===view;button.classList.toggle('active',active);button.setAttribute('aria-current',active?'page':'false');}
+  if(kind)$('renderKind').value=kind;
+  if(route&&platform.pane==='tools'){const url=new URL(location.href);url.searchParams.set('tools_tab',view);if(platform.renderJob)url.searchParams.set('tool_job',platform.renderJob);window.history.replaceState(null,'',url.pathname+url.search+url.hash);}
+  refreshPlatformContext();syncRenderSettings();if(view==='render'){if(toolsUI.options?.run_id!==$('renderRun').value)loadRenderOptions().catch(hubError);if(toolsUI.activeJob?.status==='completed')$('renderToolVideo').hidden=false;}else $('renderToolVideo').pause();
+}
+function syncToolRuns(){
+  const comparison=state.comparison,key=JSON.stringify([comparison?.id,comparison?.sample_id]),changed=key!==toolsUI.comparisonKey,old=changed?'':$('renderRun').value,runs=(comparison?.runs||[]).filter(run=>run.result);
+  toolsUI.comparisonKey=key;const select=$('renderRun');select.replaceChildren();const blank=el('option',runs.length?'请选择已有结果':'暂无已有几何结果');blank.value='';select.append(blank);
+  for(const run of runs){const option=el('option',(run.result.reference_role==='user_declared_ground_truth'?'GT · ':'')+run.label+' · '+run.id.slice(0,6));option.value=run.id;select.append(option);}
+  select.value=runs.some(run=>run.id===old)?old:runs.find(run=>run.result.reference_role!=='user_declared_ground_truth')?.id||runs[0]?.id||'';
+  if(changed||(old&&!runs.some(run=>run.id===old))){toolsUI.optionsSerial++;toolsUI.options=null;toolsUI.optionsError='';$('renderStart').value='1';$('renderEnd').value='';}
+  $('toolsResultContext').textContent=comparison?`配置来源：${comparison.title||comparison.id} · ${comparison.sample?.frames??'—'} 个样本帧`:'先选择一组含已有几何结果的比较。目录中的独立工具不需要此选择。';
+  $('chooseToolComparison').textContent=comparison?'更换比较':'选择比较';syncRenderSettings();
+}
+function syncToolsComparison(){
+  if(platform.pane!=='tools'||!$('platformDialog').open||toolsUI.publishedKey===toolComparisonKey())return;
+  refreshToolOptions().catch(hubError);
+}
 async function refreshToolOptions(){
-  platform.capability=await api('api/comparison/capabilities');
-  const old=$('renderRun').value;$('renderRun').replaceChildren();for(const run of state.comparison?.runs||[])if(run.result){const option=el('option',run.label+' · '+run.id.slice(0,6));option.value=run.id;$('renderRun').append(option);}if([...$('renderRun').options].some(option=>option.value===old))$('renderRun').value=old;
-  const cap=platform.capability,host=$('toolReadiness');host.replaceChildren();host.classList.add('tool-readiness-grid');
-  const add=(label,ready,reason)=>{const card=el('div',undefined,'tool-readiness-card'),badge=el('span',ready?'可用':'需配置 / 待实现','readiness-badge');badge.dataset.ready=String(!!ready);card.append(el('strong',label),badge,el('p',reason||'按需显式提交，不会自动运行。','hint'));host.append(card);};
-  for(const [kind,label]of [['mujoco','MuJoCo 几何展示'],['retarget','Wuji Hand 运动学重定向']])add(label,cap.render?.[kind]?.ready,cap.render?.[kind]?.ready?'使用当前已有几何；重定向不代表接触或动力学验证。':cap.render?.[kind]?.reason);
-  add('数据专项分析',cap.data_analysis,cap.data_analysis?'视频质量、FOV 和多样性分析已连接。':'数据分析后端未连接。');add('MINT 单算法诊断',cap.legacy,cap.legacy?'MINT 诊断后端已连接；诊断结果可显式加入统一比较。':'MINT 诊断后端未连接。');
-  add('Aliyun 云端评测',cap.cloud?.ready,cap.cloud?.ready?'配置已填写；仍需在公开基准工具中预检并显式提交。':cap.cloud?.reason||'请配置工作区、资源、镜像与存储。');
-  const bench=cap.benchmark;if(bench){const supported=(bench.datasets||[]).filter(row=>row.implemented).map(row=>row.name),missing=(bench.datasets||[]).filter(row=>!row.implemented).map(row=>row.name),missingHeads=(bench.heads||[]).filter(row=>!row.implemented).map(row=>row.name);const card=el('div',undefined,'tool-readiness-card benchmark-readiness');card.append(el('strong','公开基准 · 适配器与当前模型能力分别检查'),el('p','已有数据集适配器：'+(supported.join('、')||'无')+'。','hint'),el('p','待实现适配器：'+(missing.join('、')||'无')+'；待实现指标：'+(missingHeads.join('、')||'无')+'。','hint'),el('p','当前 MINT 配置输出：'+(bench.model_capability||[]).join('、')+'。适配器已实现仍需匹配数据标注和模型输出；当前模型未启用的深度等指标不可直接评测。','hint'));host.append(card);}
-  for(const link of document.querySelectorAll('#hub-tools .tool-links a')){const tool=new URL(link.href,location.href).searchParams.get('tool'),ready=tool?.startsWith('analysis-')?cap.data_analysis:cap.legacy;link.dataset.ready=String(!!ready);link.setAttribute('aria-disabled',String(!ready));link.title=ready?'打开工具；不会自动提交计算':'后端未连接，请先检查环境';link.onclick=ready?null:event=>{event.preventDefault();hubError(new Error('该工具后端未连接，请先检查环境。'));};}
-
-  $('startRenderTool').disabled=$('startRenderTool').dataset.busy==='true'||!$('renderRun').value||!cap.render?.[$('renderKind').value]?.ready;
-  $('renderStart').max=state.comparison?.sample?.frames||1;$('renderEnd').max=state.comparison?.sample?.frames||1;
+  syncToolRuns();const key=toolComparisonKey(),serial=++toolsUI.capabilitySerial;toolsUI.publishedKey=key;
+  let capability;try{capability=await api('api/comparison/capabilities');}catch(error){if(serial!==toolsUI.capabilitySerial||key!==toolComparisonKey()||platform.pane!=='tools')return null;throw error;}if(serial!==toolsUI.capabilitySerial||key!==toolComparisonKey()||platform.pane!=='tools')return null;
+  platform.capability=capability;renderToolReadiness(capability);syncRenderSettings();if(toolsUI.view==='render')await loadRenderOptions();return capability;
 }
+function renderToolReadiness(cap){
+  const host=$('toolReadiness');host.replaceChildren();host.classList.add('tool-readiness-grid');
+  const add=(label,ready,reason)=>{const card=el('div',undefined,'tool-readiness-card'),badge=el('span',ready?'环境已就绪':'需配置','readiness-badge');badge.dataset.ready=String(!!ready);card.append(el('strong',label),badge,el('p',reason,'hint'));host.append(card);};
+  for(const [kind,label]of [['mujoco','MuJoCo 三维展示'],['retarget','Wuji Hand 重定向']])add(label,cap.render?.[kind]?.ready,cap.render?.[kind]?.ready?'环境已就绪；生成前还需检查所选几何、坐标和帧范围。':cap.render?.[kind]?.reason||'渲染依赖尚未就绪');
+  add('数据分析入口',cap.data_analysis,cap.data_analysis?'后端已连接；打开后选择独立输入。':'数据分析后端未连接。');add('MINT 诊断与验证入口',cap.legacy,cap.legacy?'后端已连接；具体模型和数据需在工具中预检。':'诊断后端未连接。');
+  add('Aliyun 云端评测',cap.cloud?.ready,cap.cloud?.ready?'配置已填写，仍需在公开基准工具中预检并明确提交。':cap.cloud?.reason||'尚未配置云端环境。');
+  if(cap.benchmark){const bench=cap.benchmark,details=el('details',undefined,'tool-readiness-card');details.append(el('summary','公开基准：适配器与模型能力'),el('p','已有适配器：'+((bench.datasets||[]).filter(row=>row.implemented).map(row=>row.name).join('、')||'无'),'hint'),el('p','待实现适配器：'+((bench.datasets||[]).filter(row=>!row.implemented).map(row=>row.name).join('、')||'无'),'hint'),el('p','待实现指标：'+((bench.heads||[]).filter(row=>!row.implemented).map(row=>row.name).join('、')||'无'),'hint'),el('p','当前模型能力：'+((bench.model_capability||[]).join('、')||'未声明')+'。适配器存在不代表模型已支持全部指标。','hint'));host.append(details);}
+  for(const badge of $('hub-tools').querySelectorAll('[data-tool-status]')){const type=badge.dataset.toolStatus,entry=badge.closest('a,button'),render=['mujoco','retarget'].includes(type),ready=render?!!cap.render?.[type]?.ready:type==='analysis'?!!cap.data_analysis:!!cap.legacy;
+    badge.dataset.ready=String(ready);badge.textContent=ready?(render?'环境已就绪':'入口已连接'):(render?'需配置':'未连接');
+    if(entry?.tagName==='A'){entry.setAttribute('aria-disabled',String(!ready));entry.title=ready?'打开后选择输入与参数；不会自动运行':'后端未连接，请先检查环境';entry.onclick=ready?null:event=>{event.preventDefault();hubError(new Error('该工具后端未连接，请先检查环境。'));};}
+    // A missing rendering environment may still be inspected in its configuration view.
+  }
+}
+function loadRenderOptions(){
+  const run=$('renderRun').value,key=toolComparisonKey();
+  if(toolsUI.options?.run_id===run&&toolsUI.optionsKey===key){syncRenderSettings();return Promise.resolve(toolsUI.options);}
+  if(toolsUI.optionsPending?.run===run&&toolsUI.optionsPending.key===key)return toolsUI.optionsPending.promise;
+  const serial=++toolsUI.optionsSerial;toolsUI.options=null;toolsUI.optionsError='';syncRenderSettings();if(!run)return Promise.resolve(null);
+  const promise=(async()=>{try{const value=await api(`api/comparison/runs/${run}/tools/options`);if(serial!==toolsUI.optionsSerial||key!==toolComparisonKey()||run!==$('renderRun').value)return null;if(value.run_id!==run)throw new Error('结果适用性与所选结果不一致，请重新读取');toolsUI.options=value;toolsUI.optionsKey=key;$('renderStart').max=value.sample_frames;$('renderEnd').max=value.sample_frames;syncRenderSettings();return value;}
+    catch(error){if(serial!==toolsUI.optionsSerial||key!==toolComparisonKey()||run!==$('renderRun').value)return null;toolsUI.optionsError=error.message;syncRenderSettings();throw error;}
+    finally{if(toolsUI.optionsPending?.serial===serial)toolsUI.optionsPending=null;}})();
+  toolsUI.optionsPending={run,key,serial,promise};return promise;
+}
+function renderSettingsSignature(){return JSON.stringify([toolComparisonKey(),...['renderRun','renderKind','renderSpace','renderStart','renderEnd','renderWidth','renderPolicy'].map(id=>$(id).value),$('renderAbsent').checked]);}
+function renderRangeCovered(ranges,start,end){return (ranges||[]).some(range=>range[0]<=start&&range[1]>=end);}
+function renderSettingsError(){
+  if(!$('renderRun').value)return '请选择一组比较和已有几何结果。';const options=toolsUI.options;if(!options||options.run_id!==$('renderRun').value)return toolsUI.optionsError||'正在检查所选结果的网格、坐标和帧范围…';
+  const capability=platform.capability?.render?.[$('renderKind').value];if(!capability?.ready)return capability?.reason||'正在检查工具环境，请稍后或到“环境检查”刷新。';
+  const text=$('renderStart').value.trim(),endText=$('renderEnd').value.trim(),start=Number(text)-1,end=endText?Number(endText):options.sample_frames,width=Number($('renderWidth').value);
+  if(!text||!Number.isInteger(start)||start<0||!Number.isInteger(end)||end<=start||end>options.sample_frames)return `请选择 1–${options.sample_frames} 内的样本帧区间，结束帧包含在内。`;
+  if(!Number.isInteger(width)||width<320||width>1280||width%2)return '宽度需为 320–1280 的偶数。';
+  if(!['shared','idle'].includes($('renderPolicy').value)||!['mujoco','retarget'].includes($('renderKind').value)||!['camera','world'].includes($('renderSpace').value))return '请选择有效的工具、坐标和资源策略。';
+  if($('renderKind').value==='mujoco'&&!options.mesh_available)return '此结果只有关节点，没有 MANO 网格；可选择 Wuji Hand 重定向或换用网格结果。';
+  if(!renderRangeCovered(options.available_ranges,start,end))return '所选区间包含缺失输出帧，请在高级设置中选择完整覆盖的片段。';
+  if($('renderSpace').value==='world'&&!renderRangeCovered(options.world_ranges,start,end))return '所选区间没有完整有效的原生世界相机轨迹，请选择相机系或有效片段。';return '';
+}
+function syncRenderSettings(){
+  const options=toolsUI.options,error=renderSettingsError(),run=$('renderRun').value;$('startRenderTool').disabled=$('startRenderTool').dataset.busy==='true'||!!error;
+  $('renderSettingsWarning').textContent=error;$('renderSettingsWarning').hidden=!error;
+  $('renderSourceNote').textContent=options?`${options.result_frames}/${options.sample_frames} 个样本帧有输出 · ${options.mesh_available?'有 MANO 网格':'仅关节点'} · ${options.world_available?'有原生世界相机':'无原生世界相机'}`:run?'正在核对已有结果…':'需要已有几何；此操作不会启动手部推理。';
+  for(const option of $('renderSpace').options)if(option.value==='world')option.disabled=!!options&&!options.world_available;
+  const end=$('renderEnd').value||'片尾';$('renderSettingsSummary').textContent=`样本帧 ${$('renderStart').value||'—'}–${end} · ${$('renderWidth').value} px · ${$('renderPolicy').value==='idle'?'仅空闲 GPU':'负载感知共享'}${$('renderAbsent').checked?' · 含低存在性预测':''}`;
+  const ranges=$('renderSpace').value==='world'?options?.world_ranges:options?.available_ranges,start=Number($('renderStart').value)-1,boundEnd=$('renderEnd').value?Number($('renderEnd').value):options?.sample_frames;$('renderUseAvailableRange').hidden=!ranges?.length||renderRangeCovered(ranges,start,boundEnd);
+  if(toolsUI.activeJob)renderToolJobSource(toolsUI.activeJob);
+}
+function useAvailableRenderRange(){const ranges=$('renderSpace').value==='world'?toolsUI.options?.world_ranges:toolsUI.options?.available_ranges;if(!ranges?.length)return;const best=ranges.reduce((a,b)=>b[1]-b[0]>a[1]-a[0]?b:a);$('renderStart').value=String(best[0]+1);$('renderEnd').value=String(best[1]);syncRenderSettings();}
+function clearRenderPlayback(){const video=$('renderToolVideo');video.pause();video.hidden=true;video.removeAttribute('src');video.dataset.job='';}
+function selectRenderJob(id){platform.renderJob=id;toolsUI.jobSelection++;toolsUI.statusSerial++;toolsUI.activeJob=null;clearRenderPlayback();$('renderToolStatus').replaceChildren(el('p',id?'正在读取生成任务…':'尚未选择生成任务。','tools-empty'));}
+async function inspectRenderJob(id){selectRenderJob(id);switchHub('tools');showToolsView('render');await refreshRenderTool();}
 async function startRenderTool(){
-  const button=$('startRenderTool');if(button.dataset.busy==='true')return;
-  const run=$('renderRun').value;if(!run)throw new Error('请先打开一份已有几何结果');
-  const start=Number($('renderStart').value),end=$('renderEnd').value===''?null:Number($('renderEnd').value);
-  if(!$('renderStart').value.trim()||!Number.isInteger(start)||start<1||(end!==null&&(!Number.isInteger(end)||end<start)))throw new Error('起始帧从 1 开始，结束帧不能早于起始帧');
-  for(const id of ['renderStart','renderEnd','renderWidth'])if(!$(id).checkValidity()){$(id).reportValidity();throw new Error('请检查工具帧范围与画面宽度');}
-  const options={kind:$('renderKind').value,space:$('renderSpace').value,start:start-1,end,width:Number($('renderWidth').value),include_absent:$('showAbsent').checked,resource_policy:$('renderPolicy').value};
-  button.dataset.busy='true';button.disabled=true;
-  try{const value=await api(`api/comparison/runs/${run}/tools`,options);platform.renderJob=value.id;await refreshRenderTool();}
-  finally{button.dataset.busy='false';button.disabled=!$('renderRun').value||!platform.capability?.render?.[$('renderKind').value]?.ready;}
+  const button=$('startRenderTool');if(button.dataset.busy==='true')return;const error=renderSettingsError();if(error)throw new Error(error);
+  const run=$('renderRun').value,signature=renderSettingsSignature(),selection=toolsUI.jobSelection,options={kind:$('renderKind').value,space:$('renderSpace').value,start:Number($('renderStart').value)-1,end:$('renderEnd').value===''?null:Number($('renderEnd').value),width:Number($('renderWidth').value),include_absent:$('renderAbsent').checked,resource_policy:$('renderPolicy').value};
+  button.dataset.busy='true';syncRenderSettings();
+  try{const value=await api(`api/comparison/runs/${run}/tools`,options);if(selection!==toolsUI.jobSelection||signature!==renderSettingsSignature()){notify('展示任务已提交；当前选择已保留，可从任务中心查看。',false);return value;}selectRenderJob(value.id);showToolsView('render');await refreshRenderTool();return value;}
+  finally{button.dataset.busy='false';syncRenderSettings();}
 }
-async function resumeRenderTool(id){const value=await api('api/comparison/tools/'+id);const options={};for(const key of ['kind','space','start','end','width','include_absent','resource_policy'])options[key]=value[key];const resumed=await api(`api/comparison/runs/${value.run_id}/tools`,options);platform.renderJob=resumed.id;}
+async function resumeRenderTool(id){
+  const selection=toolsUI.jobSelection,value=await api('api/comparison/tools/'+id),options={};for(const key of ['kind','space','start','end','width','include_absent','resource_policy'])options[key]=value[key];
+  const resumed=await api(`api/comparison/runs/${value.run_id}/tools`,options);if(selection===toolsUI.jobSelection){selectRenderJob(resumed.id);if(platform.pane==='tools'){showToolsView('render');await refreshRenderTool();}}return resumed;
+}
+function renderToolJobSource(job){const note=$('renderJobSourceNote');if(note)note.textContent=job.run_id!==$('renderRun').value?'这是另一份结果的生成任务；上方草稿与本任务分别管理。':'此任务使用固定参数；修改上方草稿不会改变已提交任务。';}
 async function refreshRenderTool(){
-  const id=platform.renderJob;if(!id)return;const job=await api('api/comparison/tools/'+id);if(id!==platform.renderJob)return;
-  const host=$('renderToolStatus');host.replaceChildren(el('p',`${statusLabel(job.status)} · ${job.kind} · ${job.space}${job.progress?.total?' · '+job.progress.done+'/'+job.progress.total:''}`));
-  if(job.error)host.append(el('p',job.error,'task-error'));
-  if(['queued','waiting_gpu','running'].includes(job.status)){const button=el('button','取消渲染');button.onclick=()=>api(`api/comparison/tools/${id}/cancel`,{}).then(refreshRenderTool).catch(hubError);host.append(button);}
-  if(job.status==='completed'){const link=el('a','下载视频');link.href=job.url;link.download='';const mapping=el('a','帧对应与坐标说明');mapping.href=`api/comparison/tools/${id}/mapping`;host.append(link,mapping);if($('renderToolVideo').dataset.job!==id){$('renderToolVideo').src=job.url;$('renderToolVideo').dataset.job=id;}$('renderToolVideo').hidden=false;}else{$('renderToolVideo').pause();$('renderToolVideo').hidden=true;}
+  const id=platform.renderJob;if(!id)return null;const serial=++toolsUI.statusSerial,selection=toolsUI.jobSelection;let job;try{job=await api('api/comparison/tools/'+id);}catch(error){if(id!==platform.renderJob||selection!==toolsUI.jobSelection||serial!==toolsUI.statusSerial)return null;throw error;}if(id!==platform.renderJob||selection!==toolsUI.jobSelection||serial!==toolsUI.statusSerial)return null;
+  toolsUI.activeJob=job;const host=$('renderToolStatus');host.classList.remove('tools-empty');host.replaceChildren();const source=el('div',undefined,'tools-job-summary');source.append(el('strong',`任务来源：${job.label||job.run_id}`),el('p',`${job.run_id.slice(0,10)} · ${job.kind==='mujoco'?'MuJoCo 三维展示':'Wuji Hand 重定向'} · ${job.space==='world'?'原生世界系':'相机系'} · 样本帧 ${job.start+1}–${job.end} · ${job.width} px`));const note=el('p',undefined,'hint');note.id='renderJobSourceNote';source.append(note);host.append(source);renderToolJobSource(job);
+  host.append(el('p',`${statusLabel(job.status)}${job.progress?.total?' · '+job.progress.done+'/'+job.progress.total+' 帧':''}`));if(job.status==='waiting_gpu')host.append(el('p','等待符合所选资源策略的 GPU 余量；不会等待其他推理任务完成后再重新推理。','hint'));if(job.error)host.append(el('p',job.error,'task-error'));
+  const actions=el('div',undefined,'tools-job-actions');
+  if(['queued','waiting_gpu','running'].includes(job.status)){const button=el('button','取消此任务');button.onclick=async()=>{button.disabled=true;try{await api(`api/comparison/tools/${id}/cancel`,{});if(id===platform.renderJob)await refreshRenderTool();}catch(error){hubError(error);}finally{button.disabled=false;}};actions.append(button);}
+  if(['failed','cancelled','interrupted','evicted'].includes(job.status)){const button=el('button','按原参数重新生成');button.onclick=()=>resumeRenderTool(id).catch(hubError);actions.append(button);}
+  if(job.status==='completed'){const link=el('a','下载展示视频');link.href=job.url;link.download='';const mapping=el('a','下载帧映射与坐标说明');mapping.href=`api/comparison/tools/${id}/mapping`;actions.append(link,mapping);if($('renderToolVideo').dataset.job!==id){clearRenderPlayback();$('renderToolVideo').src=job.url;$('renderToolVideo').dataset.job=id;}$('renderToolVideo').hidden=toolsUI.view!=='render';}else clearRenderPlayback();host.append(actions);return job;
+}
+function initializeToolsWorkspace(){
+  toolsUI.view=initialToolsView(new URLSearchParams(location.search));for(const button of $('hub-tools').querySelectorAll('[data-tools-tab]'))button.onclick=()=>showToolsView(button.dataset.toolsTab);
+  for(const button of $('hub-tools').querySelectorAll('[data-render-entry]'))button.onclick=()=>showToolsView('render',{kind:button.dataset.renderEntry});
+  $('chooseToolComparison').onclick=()=>{closePlatformWorkspace();if(window.innerWidth<=1100){workspaceUI.mobileSidebar=true;applyLayout();}$('historySearch').focus();};$('toolsOpenTasks').onclick=()=>switchHub('tasks');
+  $('refreshToolsEnvironment').onclick=()=>refreshToolOptions().catch(hubError);$('renderRun').onchange=()=>loadRenderOptions().catch(hubError);
+  for(const id of ['renderKind','renderSpace','renderStart','renderEnd','renderWidth','renderPolicy','renderAbsent']){$(id).onchange=syncRenderSettings;if(['renderStart','renderEnd'].includes(id))$(id).oninput=syncRenderSettings;}
+  $('renderUseAvailableRange').onclick=useAvailableRenderRange;$('startRenderTool').onclick=()=>startRenderTool().catch(hubError);
+  window.addEventListener('mint-platform-open',event=>{if(event.detail==='tools'){const query=new URLSearchParams(location.search);showToolsView(query.has('tools_tab')?initialToolsView(query):toolsUI.view,{route:false});}});
 }
 function inspectResult(id){if(!state.cards.has(id))return;resultView.expanded=id;$('inspectRun').value=id;applyResultVisibility();if($('comparisonOptions'))$('comparisonOptions').open=true;$('frameInspector').open=true;pause();ensureFrame(state.frame).then(()=>render(true));}
 function initializePlatform(){
@@ -357,7 +432,7 @@ function initializePlatform(){
   $('cancelCollection').onclick=()=>collectionAction('cancel').catch(hubError);$('resumeCollection').onclick=()=>collectionAction('resume').catch(hubError);$('downloadCollectionJSON').onclick=()=>downloadCollectionReport().catch(hubError);
   $('collectionResultFilter').oninput=()=>{platform.collectionPage=0;if(platform.collectionValue)renderCollection(platform.collectionValue).catch(hubError);};
   $('collectionResultPrevious').onclick=()=>{platform.collectionPage=Math.max(0,(platform.collectionPage||0)-1);if(platform.collectionValue)renderCollection(platform.collectionValue).catch(hubError);};$('collectionResultNext').onclick=()=>{platform.collectionPage=(platform.collectionPage||0)+1;if(platform.collectionValue)renderCollection(platform.collectionValue).catch(hubError);};
-  $('renderKind').onchange=()=>refreshToolOptions().catch(hubError);$('startRenderTool').onclick=()=>startRenderTool().catch(hubError);
+  initializeToolsWorkspace();
   $('closeExportDialog').onclick=()=>$('exportDialog').close();$('exportCurrentPNG').onclick=()=>{$('exportDialog').close();$('snapshot').click();};$('exportFullReport').onclick=()=>$('downloadReport').click();
 }
 
@@ -445,7 +520,7 @@ function platformContextText(comparison,pane,selectionCount=0){
 function refreshPlatformContext(){
   let host=$('platformCurrentContext');if(!host){const parent=$('moduleContext');if(!parent)return;host=el('div',undefined,'platform-current-context');host.id='platformCurrentContext';host.setAttribute('role','status');parent.after(host);}
   const frozen=['batch','evaluation'].includes(platform.pane)&&collectionDraft(platform.pane).mode==='results'&&platform.collectionValue?.kind===platform.pane?platform.collectionValue:null;
-  const text=frozen?`已提交批次：${frozen.title} · ${frozen.total} 个冻结输入；待提交清单 ${platform.selection.size} 项另行管理。`:platformContextText(state.comparison,platform.pane,platform.selection.size);host.hidden=!$('platformDialog').open||!text||platform.pane==='quality'||(platform.pane==='evaluation'&&!frozen);host.title=state.comparison?.sample_request?.source?.path||'';host.replaceChildren();if(!text)return;host.append(el('span',text));
+  const text=frozen?`已提交批次：${frozen.title} · ${frozen.total} 个冻结输入；待提交清单 ${platform.selection.size} 项另行管理。`:platformContextText(state.comparison,platform.pane,platform.selection.size);host.hidden=!$('platformDialog').open||!text||platform.pane==='quality'||platform.pane==='tools'||(platform.pane==='evaluation'&&!frozen);host.title=state.comparison?.sample_request?.source?.path||'';host.replaceChildren();if(!text)return;host.append(el('span',text));
   if(['quality','tools','research'].includes(platform.pane)){const change=el('button',state.comparison?'更换比较':'选择比较','text-button');change.onclick=()=>{closePlatformWorkspace();if(window.innerWidth<=1100){workspaceUI.mobileSidebar=true;applyLayout();}$('historySearch').focus();};host.append(change);}
 }
 function renderTaskResourceSummary(value){

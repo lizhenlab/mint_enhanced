@@ -5,7 +5,7 @@
   <meta name="color-scheme" content="dark"><title>MINT · 多算法工作台</title>
   <link rel="stylesheet" href="comparison-assets/style.css?v=20261101-platform-integrity-2">
   <link rel="stylesheet" href="comparison-assets/comparison-layout.css?v=20261101-platform-integrity-2">
-  <link rel="stylesheet" href="comparison-assets/platform-layout.css?v=20261102-evaluation-quality-1">
+  <link rel="stylesheet" href="comparison-assets/platform-layout.css?v=20261102-tools-workspace-1">
 </head>
 <body>
 <svg class="icon-definitions" aria-hidden="true"><defs>
@@ -114,11 +114,28 @@
     <section id="hub-tasks" class="hub-pane" hidden><p class="explanation">这里管理实际执行的任务及资源；一个比较可以包含多个算法任务。历史画面对照在“比较”，不可变产物和版本在“数据 → 数据与结果目录”。</p><div id="resourceSummary" class="resource-summary"></div><div class="hub-filters"><input id="taskSearch" type="search" placeholder="搜索算法、视频、任务或来源"><select id="taskStatusFilter"><option value="all">全部状态</option><option value="active">运行中与排队</option><option value="completed">已完成</option><option value="attention">需要关注</option></select><button id="refreshWorkspaceTasks">刷新</button></div><div id="workspaceTasks" class="hub-table"></div><div class="button-row"><button id="taskPreviousPage">上一页</button><span id="taskPageInfo"></span><button id="taskNextPage">下一页</button></div><details class="hub-secondary"><summary>诊断页已缓存预测 · 导入数值结果</summary><p class="hint">直接保存并导入已存在的预测，不重复网络推理。仅列出 MINT 单算法诊断页当前已缓存的结果。</p><div id="legacyResults"></div></details></section>
     <section id="hub-batch" class="hub-pane" hidden><p class="explanation">多个输入使用同一套算法设置，每个输入保存一份独立比较。例如 10 个视频 × 4 个算法，会创建 10 组比较、40 个推理任务。</p><details id="batchSetup" class="collection-composer" open><summary>新批次草稿 · 输入清单与统一协议</summary><div id="batchComposer"></div></details></section>
     <section id="hub-evaluation" class="hub-pane" hidden><p class="explanation">用参考标注（GT）衡量算法的误差与覆盖率。先选样本，再选算法，预检后提交。</p><details id="evaluationSetup" class="collection-composer" open><summary>创建新评测 · 输入与算法参数</summary><div id="evaluationComposer"></div></details></section>
-    <section id="hub-tools" class="hub-pane" hidden><div class="tool-groups">
-      <section class="panel tool-group"><h3>算法诊断</h3><p class="hint">日常 MINT 推理直接在“比较”中新建；这里用于查看逐帧损失、调整研究参数和定位模型问题。</p><div class="tool-links"><a href="/diagnostics">MINT 单算法诊断 →</a></div><p class="hint">诊断结果需点击“将已有结果加入比较”后，才会进入统一比较列表；两处表单参数各自保存。</p></section>
-      <section class="panel tool-group"><h3>数据分析</h3><p class="hint">检查输入质量和数据分布，帮助判断推理问题是否来自数据。</p><div class="tool-links"><a href="/diagnostics?tool=analysis-video">视频质量</a><a href="/diagnostics?tool=analysis-intrinsics">相机内参 / FOV</a><a href="/diagnostics?tool=analysis-diversity">数据集多样性</a></div></section>
-      <section class="panel tool-group"><h3>模型验证</h3><p class="hint">公开基准采用独立的数据与指标协议；当前视频指标在“比较”，固定集回归在“评测与质检”。</p><div class="tool-links"><a href="/diagnostics?tool=benchmark">公开基准 / 检查点</a><a href="/diagnostics?tool=code">配置与代码差异</a></div></section>
-      </div><details class="tool-environment"><summary>工具可用状态与环境检查</summary><div class="readiness-actions"><button data-diagnostic="inference">检查推理环境</button><button data-diagnostic="data">检查数据生产环境</button><button data-diagnostic="train">检查训练准备</button><span id="diagnosticStatus" role="status"></span></div><div id="diagnosticResults" class="hub-table"></div><div id="toolReadiness" class="hint"></div></details><div class="hub-grid"><section class="panel"><h3>仿真与机械手重定向</h3><p class="hint">按需使用已有几何；相机系展示不会生成世界相机轨迹。重定向用于运动学查看。</p><label>结果<select id="renderRun"></select></label><div class="twocol"><label>工具<select id="renderKind"><option value="mujoco">MuJoCo 网格场景</option><option value="retarget">Wuji Hand 重定向</option></select></label><label>坐标<select id="renderSpace"><option value="camera">相机系</option><option value="world">原生世界系</option></select></label></div><div class="twocol"><label>起始样本帧（包含）<input id="renderStart" type="number" min="1" value="1"></label><label>结束样本帧（包含）<input id="renderEnd" type="number" min="1" placeholder="留空为片尾"></label><label>宽度<select id="renderWidth"><option>640</option><option>960</option><option>1280</option></select></label><label>资源策略<select id="renderPolicy"><option value="shared">负载感知共享</option><option value="idle">仅空闲 GPU</option></select></label></div><button id="startRenderTool" class="primary">生成仿真 / 重定向视频</button></section><section class="panel"><h3>生成状态与播放</h3><div id="renderToolStatus">选择已有结果后生成。</div><video id="renderToolVideo" controls playsinline preload="metadata" hidden></video></section></div></section>
+    <section id="hub-tools" class="hub-pane tools-workspace" hidden>
+      <nav class="tools-view-tabs" aria-label="工具工作区"><button data-tools-tab="catalog">工具目录</button><button data-tools-tab="render">生成展示视频</button><button data-tools-tab="environment">环境检查</button></nav>
+      <section data-tools-view="catalog" id="toolsCatalogPanel">
+        <p class="hint">按用途打开工具，进入后选择输入和参数；不会自动继承比较页设置或启动计算。</p>
+        <div class="tools-catalog-grid">
+          <section class="panel tools-catalog-card"><h3>检查输入</h3><p class="hint">输入：服务器视频或数据集。输出：质量与分布分析。</p><div class="tool-links"><a class="tool-entry" href="/diagnostics?tool=analysis-video">视频质量<span class="tool-entry-note">查看画质与视频基础统计</span><span class="tool-entry-state" data-tool-status="analysis">检查连接…</span></a><a class="tool-entry" href="/diagnostics?tool=analysis-intrinsics">相机内参 / FOV<span class="tool-entry-note">检查可用内参与视场角</span><span class="tool-entry-state" data-tool-status="analysis">检查连接…</span></a><a class="tool-entry" href="/diagnostics?tool=analysis-diversity">数据集多样性<span class="tool-entry-note">查看数据分布与轨迹差异</span><span class="tool-entry-state" data-tool-status="analysis">检查连接…</span></a></div></section>
+          <section class="panel tools-catalog-card"><h3>诊断与验证</h3><p class="hint">输入：MINT 输入、检查点或配置。输出：专项诊断报告。</p><div class="tool-links"><a class="tool-entry" href="/diagnostics">MINT 单算法诊断<span class="tool-entry-note">逐帧损失、研究参数与已有结果导入</span><span class="tool-entry-state" data-tool-status="legacy">检查连接…</span></a><a class="tool-entry" href="/diagnostics?tool=benchmark">公开基准 / 检查点<span class="tool-entry-note">按独立数据与指标协议验证模型</span><span class="tool-entry-state" data-tool-status="legacy">检查连接…</span></a><a class="tool-entry" href="/diagnostics?tool=code">配置与代码差异<span class="tool-entry-note">检查模型配置与实现差异</span><span class="tool-entry-state" data-tool-status="legacy">检查连接…</span></a></div></section>
+          <section class="panel tools-catalog-card"><h3>展示已有结果</h3><p class="hint">输入：已保存的手部几何。输出：可播放、下载的视频。</p><button class="tool-entry" data-render-entry="mujoco">MuJoCo 三维展示<span class="tool-entry-note">查看已有 MANO 网格，需要网格结果</span><span class="tool-entry-state" data-tool-status="mujoco">检查环境…</span></button><button class="tool-entry" data-render-entry="retarget">Wuji Hand 重定向<span class="tool-entry-note">把已有 21 点映射为机械手运动</span><span class="tool-entry-state" data-tool-status="retarget">检查环境…</span></button><p class="hint">用于几何展示和运动学查看，不提供接触或动力学验证。</p></section>
+        </div>
+      </section>
+      <section data-tools-view="render" id="toolsRenderPanel" hidden>
+        <div class="tools-result-context"><p id="toolsResultContext"></p><button id="chooseToolComparison">选择比较</button><button id="toolsOpenTasks">查看生成任务</button></div>
+        <div class="tools-render-grid">
+          <section class="panel"><h3>配置展示视频</h3><label>已有结果<select id="renderRun"></select></label><p id="renderSourceNote" class="hint"></p><div class="twocol"><label>工具<select id="renderKind"><option value="mujoco">MuJoCo 三维网格</option><option value="retarget">Wuji Hand 重定向</option></select></label><label>坐标<select id="renderSpace"><option value="camera">相机系</option><option value="world">原生世界系</option></select></label></div><p id="renderSettingsSummary" class="hint"></p>
+            <details class="tools-render-advanced"><summary>高级：帧范围、画面与资源</summary><div class="twocol"><label>起始样本帧（包含）<input id="renderStart" type="number" min="1" value="1"></label><label>结束样本帧（包含）<input id="renderEnd" type="number" min="1" placeholder="留空为片尾"></label><label>宽度<select id="renderWidth"><option>640</option><option>960</option><option>1280</option></select></label><label>资源策略<select id="renderPolicy"><option value="shared">负载感知共享</option><option value="idle">仅空闲 GPU</option></select></label></div><label><input id="renderAbsent" type="checkbox">显示存在性偏低但几何有效的预测</label></details>
+            <p id="renderSettingsWarning" class="tools-settings-warning" role="status"></p><button id="renderUseAvailableRange" hidden>使用最长可用片段</button><button id="startRenderTool" class="primary" disabled>生成展示视频</button><p class="hint">默认处理整段；仅使用已有几何，生成视频会创建独立后台任务。</p>
+          </section>
+          <section class="panel"><h3>生成任务与播放</h3><div id="renderToolStatus" class="tools-empty" role="status">尚未选择生成任务。配置并生成后，在这里查看进度；历史任务可从任务中心打开。</div><video id="renderToolVideo" controls playsinline preload="metadata" hidden></video></section>
+        </div>
+      </section>
+      <section data-tools-view="environment" id="toolsEnvironmentPanel" hidden><p class="hint">检查环境、资产和后端连接，不启动推理或训练。环境就绪后，仍需满足具体输入和算法条件。</p><div class="readiness-actions"><button id="refreshToolsEnvironment">刷新工具状态</button><button data-diagnostic="inference">检查推理环境</button><button data-diagnostic="data">检查数据生产环境</button><button data-diagnostic="train">检查训练准备</button><span id="diagnosticStatus" role="status"></span></div><div id="toolReadiness" class="hint"></div><details class="tools-render-advanced"><summary>详细检查结果</summary><div id="diagnosticResults" class="hub-table"></div></details></section>
+    </section>
     <section id="hub-catalog" class="hub-pane" hidden></section>
     <section id="hub-quality" class="hub-pane" hidden></section>
     <section id="hub-research" class="hub-pane" hidden></section>
@@ -131,9 +148,9 @@
 <script src="comparison-assets/source-browser.js?v=20261101-platform-integrity-2"></script>
 <script src="comparison-assets/result-tools.js?v=20261101-platform-integrity-2"></script>
 <script src="comparison-assets/geometry-tools.js?v=20261101-platform-integrity-2"></script>
-<script src="comparison-assets/platform.js?v=20261102-evaluation-quality-1"></script>
+<script src="comparison-assets/platform.js?v=20261102-tools-workspace-1"></script>
 <script src="comparison-assets/research.js?v=20261102-evaluation-quality-1"></script>
 <script src="comparison-assets/enhancements.js?v=20261102-evaluation-quality-1"></script>
-<script src="comparison-assets/locale.js?v=20261102-evaluation-quality-1"></script>
-<script src="comparison-assets/app.js?v=20261101-platform-integrity-2"></script>
+<script src="comparison-assets/locale.js?v=20261102-tools-workspace-1"></script>
+<script src="comparison-assets/app.js?v=20261102-tools-workspace-1"></script>
 </body></html>

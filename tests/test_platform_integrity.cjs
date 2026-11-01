@@ -103,10 +103,11 @@ test('batch preflight refuses parameter edits and cannot double-submit while in 
 });
 
 test('render submission rejects blank or reversed ranges and owns one request at a time',async()=>{
-  const x=fixture(),request=deferred(),calls=[];x.get('renderRun').value='run';x.get('renderWidth').value='832';x.get('renderEnd').value='';x.context.refreshRenderTool=async()=>{};
-  x.context.api=(url,body)=>{calls.push({url,body});return request.promise;};await assert.rejects(x.run('startRenderTool()'),/起始帧从 1/);
+  const x=fixture(),request=deferred(),calls=[];x.get('renderRun').value='run';x.get('renderWidth').value='832';x.get('renderEnd').value='';x.get('renderKind').value='mujoco';x.get('renderSpace').value='camera';x.get('renderPolicy').value='shared';x.context.refreshRenderTool=async()=>{};x.context.clearRenderPlayback=()=>{};x.context.showToolsView=()=>{};
+  x.run("toolsUI.options={run_id:'run',sample_frames:81,result_frames:81,mesh_available:true,world_available:false,available_ranges:[[0,81]],world_ranges:[]};platform.capability={render:{mujoco:{ready:true}}}");
+  x.context.api=(url,body)=>{calls.push({url,body});return request.promise;};await assert.rejects(x.run('startRenderTool()'),/样本帧区间/);
   x.get('renderStart').value='4';x.get('renderEnd').value='2';await assert.rejects(x.run('startRenderTool()'),/结束帧/);assert.equal(calls.length,0);
-  x.get('renderStart').value='1';x.get('renderEnd').value='81';x.get('renderKind').value='mujoco';x.run("platform.capability={render:{mujoco:{ready:true}}}");
+  x.get('renderStart').value='1';x.get('renderEnd').value='81';
   const pending=x.run('startRenderTool()');await x.run('startRenderTool()');assert.equal(calls.length,1);request.resolve({id:'render-job'});await pending;
   assert.equal(calls[0].body.start,0);assert.equal(calls[0].body.end,81);assert.equal(x.get('startRenderTool').disabled,false);
 });

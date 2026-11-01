@@ -25,6 +25,14 @@
     '搜索任务、视频或算法':'Search tasks, videos or algorithms','搜索算法、视频、任务或来源':'Search algorithm, video, task or source','关闭工作台模块':'Close workspace module','返回结果':'Back to results',
   };
   Object.assign(phrases,{
+  "来源与版本详情": "Source & version details",
+  "原始目录": "Original directory",
+  "训练格式": "Training format",
+  "已准备 · 官方 Train": "Prepared · official Train split",
+  "未导出训练格式": "Training format not exported",
+  "官方 MANO 标注": "Official MANO annotations",
+  "ARKit 跟踪参考": "ARKit tracking reference",
+  "官方相机系关节点标注": "Official camera-frame joint annotations",
   "读取 / 刷新数据集清单": "Read / refresh dataset inventory",
   "高级：目录与支持范围": "Advanced: directories & supported formats",
   "清单目录用于读取库存；所选数据集目录用于读取当前序列。修改目录后请刷新。": "The inventory directory lists datasets; the selected dataset directory supplies the sequence. Refresh after editing a directory.",

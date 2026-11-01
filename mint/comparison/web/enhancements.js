@@ -47,6 +47,7 @@ function nativePanel(){
   const compare=$('nativeStep-compare'),versions=el('div',undefined,'native-fields');versions.append(nativeWide(researchSelect('nativeVersion','本次比较使用的标准样本',[])),nativeButton('nativeRefreshVersions','刷新样本列表',refreshNativeVersions));compare.append(versions);
   const warning=nextText('nativeVersionWarning');warning.className='native-version-warning';warning.setAttribute('role','status');warning.hidden=true;compare.append(warning);
   const summary=nextText('nativeSampleSummary','div');summary.className='native-sample-summary';summary.setAttribute('aria-live','polite');compare.append(summary);
+  const provenance=el('details',undefined,'native-catalog-details');provenance.id='nativeVersionDetails';provenance.append(el('summary','来源与版本详情'));const evidence=nextText('nativeVersionProvenance','div');evidence.className='native-sample-summary';provenance.append(evidence);compare.append(provenance);
   compare.append(researchSelect('nativeCalibration','算法输入的内参条件',[['unknown','不提供已知内参'],['known','提供数据集内参给支持的算法']]));
   const protocol=nextText('nativeProtocolNote','div');protocol.className='native-protocol-note';protocol.setAttribute('role','status');compare.append(protocol,nextAlgorithms('nativeAlgorithms'));
   const compareActions=el('div',undefined,'native-actions');compareActions.append(nativeButton('nativeCompare','开始比较并附加参考标注',compareNative,true),nativeButton('nativeBackPrepare','返回准备样本',()=>showNativeStep('prepare',{focus:true})));compare.append(compareActions);
@@ -113,7 +114,8 @@ function updateNativeProtocol(){
 }
 function updateNativeSample(){
   const row=nativeSelectedVersion(),warning=$('nativeVersionWarning');warning.textContent=nextUI.nativeVersionWarning||'';warning.hidden=!warning.textContent;
-  if(row?.native){const n=row.native,plan=n.plan,ids=n.native_frame_indices||[];nativeSummary($('nativeSampleSummary'),[['本次实际运行',row.name||row.id],['数据集 / 划分',`${plan.dataset} / ${plan.split}`],['序列',plan.sequence,true],['帧数 / 原始帧号',`${n.frames} 帧 · ${ids.length?ids[0]+'–'+ids.at(-1):'见版本映射'}`],['参考类型',n.details.label_role],['标准视频',n.source,true],['样本版本',row.id,true]]);}
+  $('nativeVersionDetails').hidden=!row?.native;
+  if(row?.native){const n=row.native,plan=n.plan,ids=n.native_frame_indices||[],role={official_MANO_annotation:'官方 MANO 标注',ARKit_tracking_reference:'ARKit 跟踪参考',official_camera_joint_annotation:'官方相机系关节点标注'}[n.details.label_role]||n.details.label_role;nativeSummary($('nativeSampleSummary'),[['本次实际运行',row.name||row.id],['数据集 / 划分',`${plan.dataset} / ${plan.split}`],['序列',plan.sequence,true],['帧数 / 原始帧号',`${n.frames} 帧 · ${ids.length?ids[0]+'–'+ids.at(-1):'见版本映射'}`],['参考类型',role]]);nativeSummary($('nativeVersionProvenance'),[['原始目录',plan.root,true],['标准视频',n.source,true],['样本版本',row.id,true],['训练格式',row.training_ready?'已准备 · 官方 Train':'未导出训练格式']]);}
   else $('nativeSampleSummary').textContent='尚未选择比较样本。可复用已有样本，或先完成步骤 1、2；比较将只运行此处明确选中的版本。';
   updateNativeProtocol();updateNativeTrainingAction();
 }

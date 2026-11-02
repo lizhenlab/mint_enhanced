@@ -37,6 +37,7 @@ tests/*
 !tests/test_batch_workspace.cjs
 !tests/test_default_example.py
 !tests/test_default_example.cjs
+!tests/test_frame_loading.cjs
 !eval/model_effect/benchmark/tests/
 !eval/model_effect/benchmark/tests/**
 !eval/model_effect/benchmark/dist/aliyun/tests/

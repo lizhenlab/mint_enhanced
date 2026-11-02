@@ -2,6 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const summarySource=fs.readFileSync(require.resolve('../mint/comparison/web/parameter-summary.js'),'utf8');
 const appSource=fs.readFileSync(require.resolve('../mint/comparison/web/app.js'),'utf8');
+const loadingSource=fs.readFileSync(require.resolve('../mint/comparison/web/frame-loading.js'),'utf8');
 const {wristSummaryRows}=require('../mint/comparison/web/parameter-summary.js');
 function deferred(){let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return {promise,resolve,reject};}
 function hand(wrist){return Array.from({length:21},()=>wrist.slice());}
@@ -17,13 +18,13 @@ function fixture(){
   const state={comparison:{id:'comparison-a',common_world_origin_source_frame:8,sample:{frames:64,timestamps_s:Array.from({length:64},(_,i)=>i*.1+i*i*.001)}},
     pollToken:1,frame:16,cards:new Map([[card.run.id,card]]),cache:new Map(),loading:new Map()};
   const requests=[];
-  const context=vm.createContext({state,FRAME_READ_COUNT:16,URLSearchParams,$:id=>nodes[id],
+  const context=vm.createContext({state,FRAME_READ_COUNT:16,URLSearchParams,AbortController,Date,setTimeout:(fn,ms)=>{const timer=setTimeout(fn,ms);timer.unref();return timer;},clearTimeout,requestAnimationFrame:fn=>setImmediate(fn),render(){},$ :id=>nodes[id],
     resultFrameKey:(run,start,origin)=>JSON.stringify([run.id,run.result.revision,start,origin??null]),resultRevision:run=>run.result.revision,
-    parameterPanelReadCards:()=>[card],parameterPanelJointSelection:()=>({runId:card.run.id,slot:0,joint:0}),
+    frameReadCards:()=>[card],parameterPanelIsOpen:()=>!nodes.parameterPanel.hidden,parameterPanelReadCards:()=>[card],parameterPanelJointSelection:()=>({runId:card.run.id,slot:0,joint:0}),
     api:url=>{const request=deferred();requests.push({url,...request});return request.promise;},notify:message=>notices.push(message),
     handColor:slot=>slot?'right-color':'left-color',el:(tag,text)=>({tag,text}),
     visible:(payload,index,slot)=>payload.geometry_valid?.[index]?.[slot]&&(nodes.showAbsent.checked||payload.presence===null||payload.presence?.[index]?.[slot])});
-  vm.runInContext(summarySource,context);
+  vm.runInContext(loadingSource,context);vm.runInContext(summarySource,context);
   vm.runInContext(appSource.slice(appSource.indexOf('function currentResultRead('),appSource.indexOf('async function ensureFrame(')),context);
   const canvas={save:()=>calls.push(['save']),restore:()=>calls.push(['restore']),beginPath:()=>calls.push(['begin']),
     arc:(...args)=>calls.push(['arc',...args]),fill:()=>calls.push(['fill']),stroke:()=>calls.push(['stroke']),fillText:(...args)=>calls.push(['text',...args])};
@@ -120,15 +121,15 @@ test('retired block responses cannot populate caches after navigation, origin, r
   f.state.loading.set(key,replacement);f.state.pollToken++;f.requests[0].reject(new Error('retired read'));await pending;
   assert.equal(f.state.loading.get(key),replacement,'an old request cannot delete a newer pending entry');assert.equal(f.notices.length,0);
   const active=fixture(),failed=active.context.ensureParameterPreviousFrame(16);active.requests[0].reject(new Error('offline'));await failed;
-  assert.equal(active.notices.length,1);assert.equal(active.state.loading.size,0);
-  const retry=active.context.ensureParameterPreviousFrame(16);assert.equal(active.requests.length,2);active.requests[1].resolve(block());await retry;assert.equal(active.state.cache.size,1);
+  assert.equal(active.notices.length,0);assert.match(active.context.frameReadFailure(active.card,15).message,/offline/);assert.equal(active.state.loading.size,0);
+  active.context.retryFrameRead(active.card,15);const retry=active.context.ensureParameterPreviousFrame(16);assert.equal(active.requests.length,2);active.requests[1].resolve(block());await retry;assert.equal(active.state.cache.size,1);
 });
 
 test('comparison changes during mesh loading cannot trigger an old-frame read in the next workspace',async()=>{
   for(const nextComparison of [null,{id:'comparison-b',common_world_origin_source_frame:0,sample:{timestamps_s:[0]}}]){
     const f=fixture(),mesh=deferred();f.context.frameReadCards=()=>[];f.context.ensureMeshFrame=()=>mesh.promise;
     vm.runInContext(appSource.slice(appSource.indexOf('async function ensureFrame('),appSource.indexOf('function dataFor(')),f.context);
-    const pending=f.context.ensureFrame(16);await Promise.resolve();f.state.pollToken++;f.state.comparison=nextComparison;mesh.resolve();
-    await pending;assert.equal(f.requests.length,0,'the old frame must not request geometry from a new comparison');
+    const pending=f.context.ensureFrame(16);await pending;const before=f.requests.length;f.state.pollToken++;f.context.resetFrameLoading();f.state.comparison=nextComparison;mesh.resolve();await Promise.resolve();
+    assert.equal(f.requests.length,before,'optional mesh completion must not request old-frame geometry from a new comparison');
   }
 });

@@ -10,19 +10,20 @@ function fixture(){
  const sandbox={console,state,workspaceUI:{tab:'view',taskDialogSession:1},platform:{serial:1},URLSearchParams,structuredClone,Number,FRAME_READ_COUNT:16,TERMINAL:new Set(['completed','partial','failed','cancelled','interrupted']),STAGES:{},$ : get,
   document:{createElement:tag=>({tag,dataset:{},children:[],append(...v){this.children.push(...v);},click(){calls.push(['download',this.href]);}})},
   api:async(url,data)=>{calls.push([url,data]);throw Error('Unexpected request '+url);},notify:(message,error)=>notices.push([message,error]),showNotice:(...v)=>notices.push(v),
-  setTimeout:fn=>{fn();return 1;},clearTimeout(){},window:{innerWidth:1280},
+  setTimeout:(fn,ms)=>{const timer=setTimeout(fn,ms);timer.unref();return timer;},clearTimeout,AbortController,requestAnimationFrame:fn=>setImmediate(fn),window:{innerWidth:1280},
   decorateInputBody:v=>v,selectedAlgorithmsFrom:()=>[{algorithm:'mint',options:{}}],validateTaskInput(){},preflightComparison:async()=>({ready:true}),
   frameReadCards:()=>[...state.cards.values()],visibleResultCards:()=>[...state.cards.values()],renderMetrics:v=>rendered.push(v),geometryMode:()=>get('geometryStyle').value||'skeleton',
   loadHistory:async()=>calls.push(['history']),refresh:async(id,token)=>calls.push(['refresh',id,token]),poll:(id,token)=>calls.push(['poll',id,token]),updateCard(){},syncPlaybackReadiness(){},
  };
  const context=vm.createContext(sandbox),run=source=>vm.runInContext(source,context);
  run(fs.readFileSync(require.resolve(root+'result-tools.js'),'utf8'));
+ run(fs.readFileSync(require.resolve(root+'frame-loading.js'),'utf8'));
  run(app.slice(app.indexOf('function inputLabel('),app.indexOf("$('start').onclick")));
  run(app.slice(app.indexOf('function importDraftPayload(){'),app.indexOf("$('import').onclick")));
  run(app.slice(app.indexOf('async function exportSelectedVideo(){'),app.indexOf("$('snapshot').onclick")));
  run(fs.readFileSync(require.resolve(root+'geometry-tools.js'),'utf8'));
  const actualRefresh=run('refresh');
- Object.assign(context,{renderMetrics:v=>rendered.push(v),updateCard(){},ensureMeshFrame:async()=>{},loadHistory:async()=>calls.push(['history']),refresh:async(id,token)=>calls.push(['refresh',id,token]),poll:(id,token)=>calls.push(['poll',id,token])});
+ Object.assign(context,{render(){},renderMetrics:v=>rendered.push(v),updateCard(){},ensureMeshFrame:async()=>{},loadHistory:async()=>calls.push(['history']),refresh:async(id,token)=>calls.push(['refresh',id,token]),poll:(id,token)=>calls.push(['poll',id,token])});
  get('taskDialog').open=true;for(const [id,value]of Object.entries({source:'/data/a.mp4',view:'full',targetFps:'0',startFrame:'0',maxFrames:'',camera:'',executionPriority:'interactive',executionCache:'exact',importAlgorithm:'mint',importFormat:'normalized_npz',importPath:'/data/result.npz',importMap:'[0]',importSource:'source',importGrid:'',exportGeometry:'skeleton',exportScope:'visible'}))get(id).value=value;
  return {context,state,get,run,calls,notices,rendered,actualRefresh};
 }
@@ -34,7 +35,7 @@ test('result identity is stable across metadata key order and changes when a pub
  b.result.arrays.joints_camera_m.file.mtime_ns++;assert.notEqual(resultRevision(a),resultRevision(b));b.result.arrays.joints_camera_m.file.mtime_ns--;b.status='completed';assert.notEqual(resultRevision(a),resultRevision(b));
 });
 test('an old frame response cannot populate or replace the same run after new arrays are published',async()=>{
- const f=fixture(),card=setRun(f),old=deferred(),latest=deferred();let count=0;f.context.api=()=>++count===1?old.promise:latest.promise;
+ const f=fixture(),card=setRun(f),old=deferred(),latest=deferred();f.state.comparison.sample.frames=16;let count=0;f.context.api=()=>++count===1?old.promise:latest.promise;
  const before=f.run('ensureFrame(0)');replaceRun(f,card,runResult('run',2,'completed'));const after=f.run('ensureFrame(0)');latest.resolve({tag:'new'});await after;old.resolve({tag:'old'});await before;
  assert.equal(f.state.cache.size,1);assert.equal(f.run('dataFor(state.cards.get("run")).payload.tag'),'new');assert.equal(count,2);
 });

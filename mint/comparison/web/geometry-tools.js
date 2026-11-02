@@ -1,29 +1,36 @@
 'use strict';
 
-const meshView={cache:new Map(),loading:new Map(),topology:null,topologyRequest:null};
+const meshView={cache:new Map(),loading:new Map(),controllers:new Map(),errors:new Map(),topology:null,topologyRequest:null,topologyFailure:null,topologyNotice:null};
 const HAND_COLORS=['#6ad5f0','#ffdf80'];
 function handColor(slot){return HAND_COLORS[slot];}
 function geometryMode(){return $('geometryStyle')?.value||'skeleton';}
 function meshKey(run,frame){const start=Math.floor(frame/4)*4;return resultFrameKey(run,start,state.comparison.common_world_origin_source_frame);}
-function resetGeometryCache(){meshView.cache.clear();meshView.loading.clear();}
+function resetGeometryCache(){for(const job of meshView.controllers.values())job.controller.abort();meshView.controllers.clear();meshView.errors.clear();meshView.cache.clear();meshView.loading.clear();}
 async function ensureMeshFrame(frame){
   if(geometryMode()==='skeleton'||!state.comparison?.sample)return;
   const token=state.pollToken,comparison=state.comparison,origin=comparison.common_world_origin_source_frame??null;
+  const start=Math.floor(frame/4)*4;
+  for(const [key,job]of meshView.controllers)if(job.start!==start||job.comparison!==comparison.id){job.controller.abort();if(meshView.controllers.get(key)===job)meshView.controllers.delete(key);}
   if(!meshView.topology){
-    if(!meshView.topologyRequest)meshView.topologyRequest=api('api/comparison/topology').then(value=>meshView.topology=value).catch(error=>{meshView.topologyRequest=null;throw error;});
-    try{await meshView.topologyRequest;}catch(error){if(token===state.pollToken)notify('网格拓扑不可用：'+error.message);return;}
+    if(meshView.topologyFailure&&Date.now()<meshView.topologyFailure)return;
+    if(!meshView.topologyRequest)meshView.topologyRequest=frameReadAPI('api/comparison/topology').then(value=>{meshView.topology=value;meshView.topologyFailure=null;return value;}).catch(error=>{meshView.topologyRequest=null;meshView.topologyFailure=Date.now()+5000;throw error;});
+    const pending=meshView.topologyRequest;
+    try{await pending;}catch(error){if(token===state.pollToken&&meshView.topologyNotice!==pending){meshView.topologyNotice=pending;notify('网格拓扑不可用：'+error.message);}return;}
   }
-  if(token!==state.pollToken||comparison.id!==state.comparison?.id)return;
+  if(frame!==state.frame||token!==state.pollToken||comparison.id!==state.comparison?.id)return;
   await Promise.all(visibleResultCards().filter(card=>card.run.result?.arrays.vertices_camera_m).map(async card=>{
     const revision=resultRevision(card.run),current=()=>currentResultRead(card,revision,token,comparison.id,origin),key=meshKey(card.run,frame);if(meshView.cache.has(key))return;
+    if(meshView.errors.get(key)>Date.now())return;
     if(!meshView.loading.has(key)){
       const query=new URLSearchParams({start:Math.floor(frame/4)*4,count:4,vertices:1});
       if(origin!==null&&card.run.result.arrays.T_world_camera)query.set('origin',origin);
-      const promise=api(`api/comparison/runs/${card.run.id}/frames?${query}`).then(value=>{
-        if(!current())return;meshView.cache.set(key,value);if(meshView.cache.size>24)meshView.cache.delete(meshView.cache.keys().next().value);
-      }).finally(()=>{if(meshView.loading.get(key)===promise)meshView.loading.delete(key);});meshView.loading.set(key,promise);
+      const job={controller:new AbortController(),start,comparison:comparison.id};meshView.controllers.set(key,job);
+      const promise=frameReadAPI(`api/comparison/runs/${card.run.id}/frames?${query}`,{controller:job.controller}).then(value=>{
+        if(!current()||start!==Math.floor(state.frame/4)*4)return;meshView.cache.delete(key);meshView.cache.set(key,value);meshView.errors.delete(key);
+        const protectedKeys=new Set(visibleResultCards().map(card=>meshKey(card.run,state.frame)));while(meshView.cache.size>24){const old=[...meshView.cache.keys()].find(value=>!protectedKeys.has(value));if(old===undefined)break;meshView.cache.delete(old);}requestFrameRender();
+      }).finally(()=>{if(meshView.loading.get(key)===promise)meshView.loading.delete(key);if(meshView.controllers.get(key)===job)meshView.controllers.delete(key);});meshView.loading.set(key,promise);
     }
-    try{await meshView.loading.get(key);}catch(error){if(current())notify(error.message);}
+    try{await meshView.loading.get(key);}catch(error){if(current()&&error.name!=='AbortError'&&!(meshView.errors.get(key)>Date.now())){meshView.errors.set(key,Date.now()+5000);while(meshView.errors.size>24)meshView.errors.delete(meshView.errors.keys().next().value);notify('网格读取失败：'+error.message);}}
   }));
 }
 function meshFor(card){

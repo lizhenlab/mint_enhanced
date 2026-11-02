@@ -1,6 +1,6 @@
 'use strict';
 const $=id=>document.getElementById(id);
-const api=async(path,data)=>{const response=await fetch(path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data)});const value=await response.json();if(!response.ok)throw new Error(value.error||`${response.status} ${response.statusText}`);return value;};
+const api=async(path,data,options={})=>{const response=await fetch(path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data),...(options.signal?{signal:options.signal}:{})});const value=await response.json();if(!response.ok)throw new Error(value.error||`${response.status} ${response.statusText}`);return value;};
 const state={specs:[],comparison:null,cards:new Map(),cache:new Map(),frame:0,playing:false,rate:1,orbit:{yaw:-.3,pitch:-.2,zoom:1},lastRendered:-1,frameBuffer:null,loading:new Map(),pollToken:0,metricsKey:''};
 const FRAME_READ_COUNT=16;
 const COLORS=['#a5ee7c','#6ad5f0','#ffbd72','#d6a0ff','#f78cab','#8ee0c9'];
@@ -66,7 +66,7 @@ async function openComparison(id,{replace=false,history=true,keepPlatform=false}
   const draftSession=workspaceUI.taskDialogSession,restoreDraft=()=>workspaceUI.taskDialogSession===draftSession&&!$('taskDialog').open;
   if(!keepPlatform&&$('platformDialog').open)$('platformDialog').close();
   $('refreshMetrics').disabled=false;
-  pause();state.pollToken++;if(typeof resetParameterPanel==='function')resetParameterPanel();resetGeometryCache();state.cache.clear();state.loading.clear();state.cards.clear();state.comparison=null;state.metricsKey='';state.metricsRows=null;state.metricsRowsKey=null;state.metricRequest=null;state.frame=0;state.lastRendered=-1;state.frameBuffer=null;
+  pause();state.pollToken++;resetFrameLoading();if(typeof resetParameterPanel==='function')resetParameterPanel();resetGeometryCache();state.cache.clear();state.loading.clear();state.cards.clear();state.comparison=null;state.metricsKey='';state.metricsRows=null;state.metricsRowsKey=null;state.metricRequest=null;state.frame=0;state.lastRendered=-1;state.frameBuffer=null;
   $('workspace').setAttribute('aria-busy','true');$('sessionTitle').textContent='正在读取比较任务…';$('sessionStatus').textContent='';$('sampleInfo').textContent='';
   for(const control of ['editComparison','downloadReport','exportVideo','play','prev','next','timeline','frameJump','snapshot'])$(control).disabled=true;
   $('runs').replaceChildren();$('welcome').hidden=true;$('workspace').hidden=false;setWorkspaceTab('view');const token=state.pollToken;
@@ -147,29 +147,30 @@ function currentResultRead(card,revision,token,comparisonId,origin){return token
 async function ensureFrame(frame){
   const comparison=state.comparison;if(!comparison?.sample)return;
   const token=state.pollToken,start=Math.floor(frame/FRAME_READ_COUNT)*FRAME_READ_COUNT,origin=comparison.common_world_origin_source_frame??null;
-  await Promise.all(frameReadCards().filter(card=>card.run.result).map(async card=>{
-    const revision=resultRevision(card.run),current=()=>currentResultRead(card,revision,token,comparison.id,origin),key=resultFrameKey(card.run,start,origin);
-    if(!state.cache.has(key)){
-      if(!state.loading.has(key)){
-        const query=new URLSearchParams({start,count:FRAME_READ_COUNT});if(origin!==null&&'T_world_camera'in card.run.result.arrays)query.set('origin',origin);
-        const promise=api(`api/comparison/runs/${card.run.id}/frames?${query}`).then(value=>{
-          if(!current())return;state.cache.set(key,value);if(state.cache.size>72)state.cache.delete(state.cache.keys().next().value);
-        }).finally(()=>{if(state.loading.get(key)===promise)state.loading.delete(key);});state.loading.set(key,promise);
-      }
-      try{await state.loading.get(key);}catch(error){if(current())notify(error.message);return;}
-    }
+  scheduleVisibleFrames(frame);const cards=frameReadCards().filter(card=>card.run.result);
+  const basic=Promise.all(cards.map(card=>loadFrameBlock(card,start)));
+  // Optional detail readers are independent; a slow mesh or trajectory cannot
+  // prevent already available joint values from reaching the screen.
+  ensureFrameDetails(frame,cards,comparison,token,origin).catch(error=>{if(token===state.pollToken&&error.name!=='AbortError')notify(error.message);});
+  await basic;
+  if(frame===state.frame&&token===state.pollToken&&comparison.id===state.comparison?.id){ensureMeshFrame(frame).catch(error=>{if(token===state.pollToken&&error.name!=='AbortError')notify(error.message);});if(typeof ensureParameterPreviousFrame==='function')ensureParameterPreviousFrame(frame).catch(error=>{if(token===state.pollToken&&error.name!=='AbortError')notify(error.message);});}
+}
+async function ensureFrameDetails(frame,cards,comparison,token,origin){
+  if(frame!==state.frame||token!==state.pollToken)return;
+  await Promise.all(cards.map(async card=>{
+    const revision=resultRevision(card.run),current=()=>currentResultRead(card,revision,token,comparison.id,origin);
     if(!current())return;
     const trajectoryKey=resultFrameKey(card.run,'trajectory',origin);
     if(($('showTrails').checked||$('frameInspector').open||(typeof parameterPanelIsOpen==='function'&&parameterPanelIsOpen()))&&card.trajectoryKey!==trajectoryKey){
       const query=origin!==null&&'T_world_camera'in card.run.result.arrays?`?origin=${origin}`:'';
       if(card.trajectoryRequest?.key!==trajectoryKey){
-        const promise=api(`api/comparison/runs/${card.run.id}/trajectory${query}`).then(value=>{if(current()&&card.trajectoryRequest?.key===trajectoryKey){card.trajectory=value;card.trajectoryKey=trajectoryKey;}});card.trajectoryRequest={key:trajectoryKey,promise};
+        if(card.trajectoryFailure?.key===trajectoryKey&&Date.now()<card.trajectoryFailure.retryAt)return;
+        const promise=frameReadAPI(`api/comparison/runs/${card.run.id}/trajectory${query}`).then(value=>{if(current()&&card.trajectoryRequest?.key===trajectoryKey){card.trajectory=value;card.trajectoryKey=trajectoryKey;card.trajectoryFailure=null;requestFrameRender();}});card.trajectoryRequest={key:trajectoryKey,promise};
       }
       const pending=card.trajectoryRequest;
-      try{await pending.promise;}catch(error){if(card.trajectoryRequest===pending)card.trajectoryRequest=null;if(current())notify(error.message);}
+      try{await pending.promise;}catch(error){if(card.trajectoryRequest===pending){card.trajectoryRequest=null;card.trajectoryFailure={key:trajectoryKey,retryAt:Date.now()+5000};}if(current()&&error.name!=='AbortError')notify('轨迹读取失败：'+error.message);}
     }
   }));
-  if(token===state.pollToken&&comparison.id===state.comparison?.id){await ensureMeshFrame(frame);if(token===state.pollToken&&comparison.id===state.comparison?.id&&typeof ensureParameterPreviousFrame==='function')await ensureParameterPreviousFrame(frame);}
 }
 function dataFor(card){if(!card?.run||!state.comparison)return null;const start=Math.floor(state.frame/FRAME_READ_COUNT)*FRAME_READ_COUNT,key=resultFrameKey(card.run,start,state.comparison.common_world_origin_source_frame);const payload=state.cache.get(key);return payload?{payload,index:state.frame-start}:null;}
 function resizeCanvas(canvas,width,height){if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}return canvas.getContext('2d');}
@@ -200,10 +201,10 @@ function draw3D(card,data,bounds){const ratio=window.devicePixelRatio||1,w=Math.
   for(let slot=0;slot<2;slot++){if(!visible(p,i,slot)||!joints?.[slot])continue;const points=joints[slot];ctx.strokeStyle=handColor(slot);ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=2*ratio;for(const [a,b]of p.connections){if(points[a]?.some(x=>x===null)||points[b]?.some(x=>x===null))continue;ctx.beginPath();ctx.moveTo(...proj(points[a]));ctx.lineTo(...proj(points[b]));ctx.stroke();}for(const point of points){if(!point||point.some(x=>x===null))continue;ctx.beginPath();ctx.arc(...proj(point),2.2*ratio,0,Math.PI*2);ctx.fill();}}
   if(typeof drawParameterJoint==='function')drawParameterJoint(card,data,ctx,proj,{world,ratio});
 }
-function render(force=false){updateResultLayoutHint();syncPlaybackReadiness();if(!state.comparison?.sample){if(typeof updateParameterPanel==='function')updateParameterPanel();return;}if(!force&&state.lastRendered===state.frame)return;state.lastRendered=state.frame;const sample=state.comparison.sample;$('timeline').value=state.frame;if(document.activeElement!==$('frameJump'))$('frameJump').value=state.frame+1;$('timeLabel').textContent=`第 ${state.frame+1}/${sample.frames} 帧 · 源索引 ${sample.source_frame_indices[state.frame]}（0 起） · ${fmt(sample.timestamps_s[state.frame],3)}s`;
+function render(force=false){updateResultLayoutHint();syncPlaybackReadiness();if(!state.comparison?.sample){if(typeof updateParameterPanel==='function')updateParameterPanel();return;}scheduleVisibleFrames(state.frame);if(!force&&state.lastRendered===state.frame)return;state.lastRendered=state.frame;const sample=state.comparison.sample;$('timeline').value=state.frame;if(document.activeElement!==$('frameJump'))$('frameJump').value=state.frame+1;$('timeLabel').textContent=`第 ${state.frame+1}/${sample.frames} 帧 · 源索引 ${sample.source_frame_indices[state.frame]}（0 起） · ${fmt(sample.timestamps_s[state.frame],3)}s`;
   const all=[];for(const card of visibleResultCards()){const d=dataFor(card),points=($('space').value==='world'?d?.payload.joints_world_m:d?.payload.joints_camera_m)?.[d?.index];if(points)for(const [slot,hand] of points.entries()){if(!visible(d.payload,d.index,slot))continue;for(const point of hand||[])if(point?.every(Number.isFinite))all.push(point);}if($('space').value==='world'&&$('showTrails').checked&&card.trajectory?.camera_world_m)for(const point of card.trajectory.camera_world_m)if(point?.every(Number.isFinite))all.push(point);}
   const min=[0,0,0],max=[0,0,0];if(all.length)for(let axis=0;axis<3;axis++){min[axis]=Math.min(...all.map(p=>p[axis]));max[axis]=Math.max(...all.map(p=>p[axis]));}const bounds={center:min.map((v,i)=>(v+max[i])/2),span:Math.max(.3,...min.map((v,i)=>max[i]-v))};
-  for(const card of visibleResultCards()){const data=dataFor(card);if(workspaceUI.mode!=='3d')drawOverlay(card,data);if(workspaceUI.mode!=='2d')draw3D(card,data,bounds);if(!data){delete card.numbers.dataset.parameterSummary;card.numbers.replaceChildren(el('span',card.run.result?'当前帧数据加载中…':'等待几何结果'));}else if(typeof renderWristSummary==='function')renderWristSummary(card,data);}
+  for(const card of visibleResultCards()){const data=dataFor(card);if(workspaceUI.mode!=='3d')drawOverlay(card,data);if(workspaceUI.mode!=='2d')draw3D(card,data,bounds);if(!data){delete card.numbers.dataset.parameterSummary;const failure=frameReadFailure(card),key=JSON.stringify([state.frame,!!card.run.result,failure?.message]);if(card.numbers.dataset.frameReadState!==key){card.numbers.dataset.frameReadState=key;const label=el('span',failure?'当前帧读取失败：'+failure.message:card.run.result?'当前帧数据加载中…':'等待几何结果');card.numbers.replaceChildren(label);if(failure){const retry=el('button','重试');retry.type='button';retry.onclick=()=>retryFrameRead(card);card.numbers.append(retry);}}}else{delete card.numbers.dataset.frameReadState;if(typeof renderWristSummary==='function')renderWristSummary(card,data);}}
 
   updateFrameInspector();if(typeof updateParameterPanel==='function')updateParameterPanel();
 }
@@ -293,7 +294,7 @@ async function exportSelectedVideo(){
   finally{if(state.exportAttempt===attempt){state.exportAttempt=null;state.exporting=false;if(typeof syncPlaybackReadiness==='function')syncPlaybackReadiness();$('exportVideo').disabled=!state.comparison?.sample||!state.comparison.runs.some(run=>run.result);}}
 }
 $('snapshot').onclick=async()=>{
-  if(!state.comparison?.sample)return;pause();const token=state.pollToken,selectedFrame=state.frame;await ensureFrame(selectedFrame);if(token!==state.pollToken||selectedFrame!==state.frame)return;
+  if(!state.comparison?.sample)return;pause();const token=state.pollToken,selectedFrame=state.frame;await ensureFrame(selectedFrame);if(token!==state.pollToken||selectedFrame!==state.frame)return;await ensureMeshFrame(selectedFrame);if(token!==state.pollToken||selectedFrame!==state.frame)return;
   if(workspaceUI.mode!=='3d'&&masterVideo()?.seeking){notify('当前画面正在定位，请稍后再保存。',false);return;}captureVideo(masterVideo(),false);render(true);
   const frame=state.frame,cards=visibleResultCards(),w=640,mode=workspaceUI.mode,h=mode==='split'?760:500,canvas=el('canvas');canvas.width=w*cards.length;canvas.height=h;const ctx=canvas.getContext('2d');ctx.fillStyle='#07100f';ctx.fillRect(0,0,canvas.width,canvas.height);
   cards.forEach((card,i)=>{ctx.fillStyle=card.color;ctx.font='20px sans-serif';ctx.fillText(card.run.label,i*w+15,28);

@@ -36,13 +36,7 @@ async function ensureParameterPreviousFrame(frame){
   if(typeof parameterPanelReadCards!=='function'||!$('parameterPanel')||$('parameterPanel').hidden||frame<1||frame%FRAME_READ_COUNT!==0)return;
   const comparison=state.comparison;if(!comparison?.sample||frame!==state.frame||frame>=comparison.sample.frames)return;const token=state.pollToken,origin=comparison.common_world_origin_source_frame??null,start=frame-FRAME_READ_COUNT;
   await Promise.all(parameterPanelReadCards().filter(card=>card.run.result).map(async card=>{
-    const key=resultFrameKey(card.run,start,origin),revision=resultRevision(card.run),current=()=>currentResultRead(card,revision,token,comparison.id,origin);
-    if(state.cache.has(key))return;
-    if(!state.loading.has(key)){
-      const query=new URLSearchParams({start,count:FRAME_READ_COUNT});if(origin!==null&&card.run.result.arrays.T_world_camera)query.set('origin',origin);
-      const pending=api(`api/comparison/runs/${card.run.id}/frames?${query}`).then(value=>{if(current()){state.cache.set(key,value);if(state.cache.size>72)state.cache.delete(state.cache.keys().next().value);}}).finally(()=>{if(state.loading.get(key)===pending)state.loading.delete(key);});state.loading.set(key,pending);
-    }
-    try{await state.loading.get(key);}catch(error){if(current())notify('相邻帧读取失败：'+error.message);}
+    await loadFrameBlock(card,start);
   }));
 }
 function drawParameterJoint(card,data,ctx,project,{world=false,ratio=1}={}){

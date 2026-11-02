@@ -124,6 +124,8 @@ function openTaskDialog(importMode=false){
   updateTaskProtocolSummary();
   clearInterval(workspaceUI.protocolTimer);workspaceUI.protocolTimer=setInterval(()=>{if(!$('taskDialog').open){clearInterval(workspaceUI.protocolTimer);return;}updateTaskProtocolSummary();},1000);
   if(!datasetForm.active)prepareSourceBrowser();if(importMode){$('importSection').scrollIntoView({block:'nearest'});$('importPath').focus();}else $(datasetForm.active?'datasetEpisode':'sourceSearch').focus({preventScroll:true});
+  if($('defaultExampleCard'))$('defaultExampleCard').hidden=importMode;
+  if(typeof syncDefaultExample==='function')syncDefaultExample();
 }
 function updateTaskProtocolSummary(){
   const host=$('taskProtocolSummary');if(!host)return;

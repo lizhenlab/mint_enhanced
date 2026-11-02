@@ -40,13 +40,14 @@ function comparisonNavigation(){return [state.pollToken,state.comparison?.id??nu
 function comparisonNavigationCurrent(context){return JSON.stringify(comparisonNavigation())===JSON.stringify(context);}
 function comparisonDraftCurrent(signature,navigation,payload=comparisonDraftPayload){try{return $('taskDialog').open&&comparisonNavigationCurrent(navigation)&&signature===JSON.stringify(payload());}catch(_){return false;}}
 async function submit(){
-  if(state.submitting)return;let signature,navigation,posted=false;
+  if(state.submitting)return;let signature,navigation,posted=false,submission;
   try{
-    $('formError').textContent='';validateTaskInput();const payload=comparisonDraftPayload();if(!payload.selections.length)throw new Error('至少选择一个算法');signature=comparisonDraftSignature(payload);navigation=comparisonNavigation();state.submitting=true;$('start').disabled=true;
+    if(typeof defaultExampleUI!=='undefined'&&defaultExampleUI.loading)throw new Error('默认示例正在读取，请稍后开始比较。');
+    $('formError').textContent='';validateTaskInput();const payload=comparisonDraftPayload();if(!payload.selections.length)throw new Error('至少选择一个算法');submission=typeof defaultExampleSubmission==='function'?defaultExampleSubmission(payload):null;const routeSignature=JSON.stringify(submission),routeCurrent=()=>routeSignature===JSON.stringify(typeof defaultExampleSubmission==='function'?defaultExampleSubmission(comparisonDraftPayload()):null);signature=comparisonDraftSignature(payload);navigation=comparisonNavigation();state.submitting=true;$('start').disabled=true;
     const preflight=await preflightComparison(payload);if(!comparisonNavigationCurrent(navigation)||!$('taskDialog').open)return;
-    if(!comparisonDraftCurrent(signature,navigation))throw new Error('输入或算法参数已变化，请重新预检');if(!preflight?.ready)throw new Error(preflight?.errors?.join('；')||'当前输入尚未通过预检');
-    posted=true;const result=await api('api/comparisons',payload);
-    if(!comparisonDraftCurrent(signature,navigation)){notify('比较已提交，当前页面与草稿已保留；可在比较记录或任务中心查看。',false);loadHistory().catch(()=>{});return result;}
+    if(!comparisonDraftCurrent(signature,navigation)||!routeCurrent())throw new Error('输入或算法参数已变化（含示例来源），请重新预检');if(!preflight?.ready)throw new Error(preflight?.errors?.join('；')||'当前输入尚未通过预检');
+    posted=true;const result=await api(submission?.path||'api/comparisons',submission?.body||payload);
+    if(!comparisonDraftCurrent(signature,navigation)||!routeCurrent()){notify('比较已提交，当前页面与草稿已保留；可在比较记录或任务中心查看。',false);loadHistory().catch(()=>{});return result;}
     const opening=state.pollToken+1;await openComparison(result.id);if(state.pollToken===opening&&state.comparison?.id===result.id)$('taskDialog').close();await loadHistory();return result;
   }catch(error){if(!navigation||comparisonNavigationCurrent(navigation)&&$('taskDialog').open)$('formError').textContent=error.message;else if(posted)notify('此前比较提交未确认，可在任务中心核对：'+error.message);}
   finally{state.submitting=false;$('start').disabled=false;}
@@ -301,6 +302,7 @@ document.addEventListener('click',event=>{for(const menu of document.querySelect
 document.addEventListener('keydown',event=>{if(event.key==='Escape')for(const menu of document.querySelectorAll('.run-action-menu[open]'))menu.open=false;});
 if($('closeRunDetails'))$('closeRunDetails').onclick=()=>$('runDetailsDialog').close();
 initializeWorkspace();
+if(typeof initializeDefaultExample==='function')initializeDefaultExample();
 (async()=>{try{
   const legacyDiagnostic=legacyDiagnosticHashURL(location.pathname,location.search,location.hash);if(legacyDiagnostic){location.replace(legacyDiagnostic);return;}
   let startupToken=state.pollToken;const startupCurrent=()=>startupToken===state.pollToken;

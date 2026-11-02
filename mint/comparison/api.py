@@ -153,6 +153,11 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
     def history():
         return jsonify(comparisons=manager().history(request.args.get('limit', 30), request.args.get('offset', 0)))
 
+    @blueprint.get('/api/comparison/default-example')
+    def default_example():
+        from .default_example import get_default_example
+        return jsonify(get_default_example(manager(), research()))
+
     @blueprint.post('/api/comparisons')
     def create():
         data = body()

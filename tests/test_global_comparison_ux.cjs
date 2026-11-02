@@ -62,6 +62,12 @@ test('editing a comparison during preflight never submits the new unvalidated in
 test('leaving or reopening the dialog during preflight cancels submission intent without a server task',async()=>{
  const f=fixture(),preflight=deferred();let checks=0;f.context.preflightComparison=()=>{checks++;return preflight.promise;};const pending=f.run('submit()');await f.run('submit()');assert.equal(checks,1);f.context.workspaceUI.taskDialogSession++;preflight.resolve({ready:true});await pending;assert.equal(f.calls.length,0);assert.equal(f.get('formError').textContent,'');
 });
+test('a selected native example submits through its GT-preserving route',async()=>{
+ const f=fixture(),route={path:'api/comparison/native/full-dataset/compare',body:{selections:[{algorithm:'mint'}],calibration:true,execution:{cache:'exact',priority:'interactive'}}};f.context.defaultExampleSubmission=()=>structuredClone(route);f.context.openComparison=async id=>{f.state.pollToken++;f.state.comparison={id,runs:[]};};f.context.api=async(url,data)=>{f.calls.push([url,structuredClone(data)]);return {id:'full-example'};};await f.run('submit()');const posts=f.calls.filter(v=>v[0].startsWith('api/'));assert.equal(posts.length,1);assert.equal(posts[0][0],route.path);assert.deepEqual(posts[0][1],route.body);assert.equal(f.get('taskDialog').open,false);
+});
+test('switching only the GT binding during preflight prevents submission',async()=>{
+ const f=fixture(),preflight=deferred();let dataset='first';f.context.defaultExampleSubmission=()=>({path:'api/comparison/native/'+dataset+'/compare',body:{selections:[{algorithm:'mint'}],calibration:true}});f.context.preflightComparison=()=>preflight.promise;const pending=f.run('submit()');dataset='second';preflight.resolve({ready:true});await pending;assert.equal(f.calls.length,0);assert.match(f.get('formError').textContent,/示例来源/);
+});
 test('a late successful submit keeps the later draft and uses only its frozen payload',async()=>{
  const f=fixture(),request=deferred(),posted=deferred();f.context.openComparison=async id=>f.calls.push(['open',id]);f.context.api=(url,data)=>{f.calls.push([url,structuredClone(data)]);posted.resolve();return request.promise;};const pending=f.run('submit()');await posted.promise;f.get('source').value='/data/new-draft.mp4';request.resolve({id:'created'});await pending;
  assert.equal(f.calls[0][0],'api/comparisons');assert.equal(f.calls[0][1].source,'/data/a.mp4');assert.equal(f.calls.some(v=>v[0]==='open'),false);assert.equal(f.get('taskDialog').open,true);assert.match(f.notices[0][0],/比较已提交/);

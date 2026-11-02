@@ -35,6 +35,8 @@ tests/*
 !tests/test_native_data_ux.cjs
 !tests/test_batch_integrity.py
 !tests/test_batch_workspace.cjs
+!tests/test_default_example.py
+!tests/test_default_example.cjs
 !eval/model_effect/benchmark/tests/
 !eval/model_effect/benchmark/tests/**
 !eval/model_effect/benchmark/dist/aliyun/tests/

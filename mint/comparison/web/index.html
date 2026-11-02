@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="comparison-assets/workspace-ux.css?v=20261102-global-experience-1">
   <link rel="stylesheet" href="comparison-assets/workflow-guide.css?v=20261102-module-flow-1">
   <link rel="stylesheet" href="comparison-assets/parameter-panel.css?v=20261102-parameters-1">
+  <link rel="stylesheet" href="comparison-assets/default-example.css?v=20261102-default-example-1">
 </head>
 <body>
 <svg class="icon-definitions" aria-hidden="true"><defs>
@@ -82,7 +83,7 @@
 <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
 <dialog id="taskDialog" class="task-dialog" aria-labelledby="taskDialogTitle">
   <div class="dialog-heading"><div><p class="eyebrow">INPUT / INFERENCE</p><h2 id="taskDialogTitle">新建算法比较</h2></div><button id="closeTask" class="icon-button" aria-label="关闭任务配置"><svg class="icon"><use href="#i-close"/></svg></button></div>
-  <div class="task-dialog-body"><p class="task-purpose hint">日常推理与对照统一从这里开始；只勾选 MINT 即为单算法任务。分窗、平滑与检查点在各算法参数中设置，逐帧损失等诊断工具位于“工具 → MINT 单算法诊断”。</p><div class="task-config-grid">
+  <div class="task-dialog-body"><section id="defaultExampleCard" class="default-example-card" aria-label="默认比较示例"><div class="default-example-copy"><strong>快速开始 · 带 GT 的默认示例</strong><p>ARCTIC Validation · s05/box_grab_01 · 完整 677 帧<br>一键填入视频、相机条件与五种算法，再点击“开始比较”。</p></div><button id="useDefaultExample" type="button">使用默认示例</button><p id="defaultExampleSummary" class="default-example-summary" role="status" aria-live="polite" hidden></p></section><p class="task-purpose hint">日常推理与对照统一从这里开始；只勾选 MINT 即为单算法任务。分窗、平滑与检查点在各算法参数中设置，逐帧损失等诊断工具位于“工具 → MINT 单算法诊断”。</p><div class="task-config-grid">
     <section class="config-card"><h3><span>01</span> 输入与协议</h3><p class="hint input-step-summary">选择数据 → 设置帧范围与算法 → 输入预检 → 提交。选择输入不会启动计算。</p>
       <div class="input-kind" role="group" aria-label="输入类型"><button id="chooseVideoInput" type="button" class="active">服务器视频</button><button id="chooseDatasetInput" type="button">LeRobot Episode / GT</button><button id="chooseNativeInput" type="button">开源数据集 / GT</button><button id="chooseExistingInput" type="button">导入已有结果</button></div>
       <section id="datasetFields" hidden><label>LeRobot 根目录<div class="source-path-row"><input id="datasetRoot" placeholder="包含 meta/info.json 的服务器目录"><button id="loadDataset" type="button">读取</button><button id="datasetUseDirectory" type="button">用浏览目录</button></div></label><label>相机流<select id="datasetCamera"></select></label><div class="source-path-row"><label>Episode<select id="datasetEpisode"></select></label><button id="datasetPreviousPage" type="button">上一页</button><button id="datasetNextPage" type="button">下一页</button></div><p id="datasetSummary" class="hint"></p><label><input id="datasetAttachGT" type="checkbox" checked>附加数据集 GT 参考（仅用于展示与评测）</label><label><input id="datasetCalibration" type="checkbox">使用数据集标定作为显式算法输入</label><p class="hint">相机流已定义视角；起始帧按 Episode 内位置解释。GT 与算法输入标定分别记录。</p></section>
@@ -166,17 +167,18 @@
     <section class="workflow-guide-terms" aria-label="数据与执行边界"><p><strong>比较、结果与任务：</strong>比较按输入组织；Run 保存一种算法配置的结果；任务记录实际执行过程。</p><p><strong>监督与对照：</strong>算法基准不等于 GT，二维修正不等于三维 GT，伪标签训练需要显式允许。</p><p><strong>明确执行：</strong>此处按钮只进入页面。浏览、配置与预检不提交计算；发布别名不会热替换运行中的模型，也不会改变默认权重。</p></section>
   </div>
 </dialog>
-<script src="comparison-assets/workspace.js?v=20261102-parameters-1"></script>
+<script src="comparison-assets/workspace.js?v=20261102-default-example-1"></script>
 <script src="comparison-assets/source-browser.js?v=20261101-platform-integrity-2"></script>
 <script src="comparison-assets/result-tools.js?v=20261102-parameters-1"></script>
 <script src="comparison-assets/geometry-tools.js?v=20261102-parameters-1"></script>
 <script src="comparison-assets/platform.js?v=20261102-parameters-1"></script>
-<script src="comparison-assets/research.js?v=20261102-module-flow-1"></script>
+<script src="comparison-assets/research.js?v=20261102-default-example-1"></script>
 <script src="comparison-assets/enhancements.js?v=20261102-module-flow-1"></script>
 <script src="comparison-assets/locale.js?v=20261102-parameters-1"></script>
 <script src="comparison-assets/parameter-math.js?v=20261102-parameters-1"></script>
 <script src="comparison-assets/parameter-summary.js?v=20261102-parameters-1"></script>
-<script src="comparison-assets/app.js?v=20261102-parameters-1"></script>
+<script src="comparison-assets/default-example.js?v=20261102-default-example-1"></script>
+<script src="comparison-assets/app.js?v=20261102-default-example-1"></script>
 <script src="comparison-assets/workflow-guide.js?v=20261102-module-flow-1"></script>
 <script src="comparison-assets/parameter-panel.js?v=20261102-parameters-1"></script>
 </body></html>

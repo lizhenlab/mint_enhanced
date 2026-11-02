@@ -5,6 +5,7 @@
   const $=id=>document.getElementById(id);
   const key='wuji-viewer-language';let language='zh';try{language=localStorage.getItem(key)||'zh';}catch(_){}
   const phrases={
+    'GT 参考标注':'GT reference','官方 GT 已绑定':'Official GT linked','自动附加':'Attached automatically','未绑定':'Not linked','核对中':'Checking','待核对':'Needs verification','数据集 GT':'Dataset GT','数据集 GT 将自动附加':'Dataset GT will be attached','提交前校验':'Validated on submission',
     '使用默认示例':'Use default example','快速开始 · 带 GT 的默认示例':'Quick start · default example with GT',
     '帧参数':'Frame parameters','逐帧分析':'Frame analysis','关闭逐帧分析':'Close frame analysis','手部':'Hands','相机':'Camera','质量':'Quality','来源':'Source','导出JSON':'Export JSON','在画面中查看':'Show in viewer',
     '功能流程':'Workflow guide','功能与工作流程':'Modules & workflow','关闭功能流程':'Close workflow guide','从输入到模型迭代':'From inputs to model iteration','贯穿流程的支持模块':'Supporting modules','进入比较':'Open comparison','训练配置':'Training configuration','复核与数据版本':'Reviews & dataset versions','固定回归与模型发布':'Fixed regression & model release',

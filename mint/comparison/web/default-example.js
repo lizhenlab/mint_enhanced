@@ -22,7 +22,26 @@ function defaultExampleDraftFingerprint(){
 function defaultExampleNavigation(){return typeof comparisonNavigation==='function'?JSON.stringify(comparisonNavigation()):JSON.stringify([typeof workspaceUI==='undefined'?null:workspaceUI.taskDialogSession,typeof state==='undefined'?null:state.pollToken]);}
 function defaultExampleFeedback(message,level='ready'){
   defaultExampleUI.message=message;defaultExampleUI.level=level;const node=$('defaultExampleSummary');if(!node)return;
-  node.textContent=message;node.dataset.state=level;node.hidden=!message;
+  const key=JSON.stringify([message,level]);if(node.dataset.feedbackKey!==key){node.textContent=message;node.dataset.feedbackKey=key;}node.dataset.state=level;node.hidden=!message;
+}
+function referenceInputModel(payload=null){
+  let current;try{current=payload||inputBody();}catch(_){current=null;}
+  const binding=defaultExampleUI.binding;
+  if(binding&&current&&defaultExampleProtocol(current)===binding.protocol)return {state:'bound',title:'官方 GT 已绑定',badge:'自动附加',description:`ARCTIC Validation · ${binding.example.frames} 帧官方双手关节、网格与相机参考。用于展示和评测，无需勾选，不参与算法推理。`};
+  if(defaultExampleUI.loading)return {state:'pending',title:'GT 参考标注',badge:'核对中',description:'正在核对默认示例与官方 GT，完成后将显示绑定状态。'};
+  if(typeof datasetForm!=='undefined'&&datasetForm.active){
+    if(!current||datasetForm.loading)return {state:'pending',title:'数据集 GT',badge:'待核对',description:'请先读取数据集并选择有效 Episode，再预检参考标注。'};
+    if(current.dataset?.attach_gt)return {state:'dataset',title:'数据集 GT 将自动附加',badge:'提交前校验',description:'已选择当前 Episode 的参考标注；提交前会校验可用性、帧范围和来源。'};
+  }
+  return {state:'unbound',title:'GT 参考标注',badge:'未绑定',description:'使用带 GT 的默认示例、LeRobot 标注，或在下方导入参考标注。普通视频不会自动生成 GT。'};
+}
+function syncReferenceInputState(payload=null){
+  const box=[...$('algorithmOptions').querySelectorAll('.algorithm')].find(node=>node.dataset.algorithm==='reference');if(!box)return;
+  // Reference is data, not a prediction backend. It must never enter selections.
+  const check=box.querySelector('input[type=checkbox]');if(check){check.checked=false;check.disabled=true;check.hidden=true;}
+  const title=box.querySelector('[data-reference-title]'),badge=box.querySelector('[data-reference-badge]'),description=box.querySelector('[data-reference-description]');if(!title||!badge||!description)return;
+  const model=referenceInputModel(payload),key=JSON.stringify(model);if(box.dataset.referenceModel===key)return;
+  box.dataset.referenceModel=key;box.dataset.referenceState=model.state;title.textContent=model.title;badge.textContent=model.badge;description.textContent=model.description;
 }
 function defaultExampleReadySummary(binding,payload){
   let selections;try{selections=typeof selectedAlgorithms==='function'?selectedAlgorithms():binding.example.selections;}catch(_){selections=binding.example.selections;}
@@ -32,6 +51,7 @@ function defaultExampleReadySummary(binding,payload){
   return `完整 ${binding.example.frames} 帧 / ${(binding.example.frames/binding.example.fps).toFixed(2)} 秒 · ${selections.length} 个算法配置 + 官方双手 GT · 已知内参条件 · 上限 ${maximum} GPU${shared?'共享调度':'（资源策略见下方）'}。\n${reuse}点击“开始比较”运行。`;
 }
 function syncDefaultExample(payload=null){
+  syncReferenceInputState(payload);
   if(defaultExampleUI.loading)return;
   const binding=defaultExampleUI.binding;
   if(binding){
@@ -52,6 +72,7 @@ function resetDefaultExample(reason=''){
   const button=$('useDefaultExample');if(button){button.disabled=false;button.textContent=defaultExampleUI.buttonLabel||'使用默认示例';button.removeAttribute('aria-busy');}
   if(hadExample)defaultExampleFeedback(reason==='closed'?'示例输入仍保留在草稿中；请重新点击“使用默认示例”以确认并附加官方 GT。':'默认示例已解除；重新点击“使用默认示例”可恢复完整视频与官方 GT。','changed');
   else defaultExampleFeedback('','');
+  syncReferenceInputState();
 }
 function defaultExampleValidateField(definition,value){
   if(value===null||value==='')return '';
@@ -90,6 +111,7 @@ async function loadDefaultExample(trigger=null){
   if(state.submitting){defaultExampleFeedback('当前比较正在提交，请完成后再选择默认示例。','changed');return null;}
   const serial=++defaultExampleUI.serial,navigation=defaultExampleNavigation(),fingerprint=defaultExampleDraftFingerprint(),button=$('useDefaultExample');
   defaultExampleUI.loading=true;if(button){button.disabled=true;button.textContent='正在选择示例…';button.setAttribute('aria-busy','true');}
+  syncReferenceInputState();
   defaultExampleFeedback('正在读取完整视频、官方 GT 和默认算法参数；不会启动计算。','pending');
   const sameSession=()=>serial===defaultExampleUI.serial&&$('taskDialog').open&&navigation===defaultExampleNavigation();
   const current=()=>sameSession()&&!state.submitting&&fingerprint===defaultExampleDraftFingerprint();
@@ -106,7 +128,7 @@ async function loadDefaultExample(trigger=null){
     if(typeof invalidateComparisonPreflight==='function')invalidateComparisonPreflight();if(typeof updateTaskProtocolSummary==='function')updateTaskProtocolSummary();if(typeof syncSourceSelection==='function')syncSourceSelection();
     syncDefaultExample();if(typeof prepareSourceBrowser==='function')prepareSourceBrowser();return example;
   }catch(error){if(sameSession())defaultExampleFeedback('默认示例选择失败：'+error.message+' 原草稿未改动。','error');return null;}
-  finally{if(serial===defaultExampleUI.serial){defaultExampleUI.loading=false;if(button){button.disabled=false;button.textContent=defaultExampleUI.buttonLabel||'使用默认示例';button.removeAttribute('aria-busy');}}}
+  finally{if(serial===defaultExampleUI.serial){defaultExampleUI.loading=false;if(button){button.disabled=false;button.textContent=defaultExampleUI.buttonLabel||'使用默认示例';button.removeAttribute('aria-busy');}syncReferenceInputState();}}
 }
 function defaultExampleSubmission(payload){
   syncDefaultExample(payload);const binding=defaultExampleUI.binding;if(!binding)return null;
@@ -117,4 +139,5 @@ function initializeDefaultExample(){
   defaultExampleUI.initialized=true;defaultExampleUI.buttonLabel=button.textContent||'使用默认示例';button.addEventListener('click',event=>loadDefaultExample(event.currentTarget));
   for(const type of ['input','change'])dialog.addEventListener(type,()=>syncDefaultExample());
   dialog.addEventListener('close',()=>resetDefaultExample('closed'));
+  syncReferenceInputState();
 }

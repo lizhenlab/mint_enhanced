@@ -129,6 +129,7 @@ function openTaskDialog(importMode=false){
 }
 function updateTaskProtocolSummary(){
   const host=$('taskProtocolSummary');if(!host)return;
+  if(typeof syncDefaultExample==='function')syncDefaultExample();
   const selected=[...$('algorithmOptions').querySelectorAll('.algorithm')].filter(box=>box.querySelector('input[type=checkbox]').checked);
   const lines=[`输入：${$('source').value.trim()||'尚未选择'}${datasetForm.active?'（LeRobot Episode）':''}`,`视角：${$('view').selectedOptions[0]?.textContent||'—'} · 目标 FPS：${Number($('targetFps').value)||'保留源帧率'} · 起始源索引：${$('startFrame').value||0}（从 0 开始） · ${$('maxFrames').value?`最多 ${$('maxFrames').value} 帧`:'处理至片尾'}`];
   for(const box of selected){const options={};for(const field of box.querySelectorAll('[data-option]'))if(field.value!=='')options[field.dataset.option]=field.value;const spec=state.specs.find(value=>value.id===box.dataset.algorithm);lines.push(`${spec?.label||box.dataset.algorithm}：${runProtocol({algorithm:box.dataset.algorithm,options}).short} · GPU 上限 ${options.max_gpus||'默认'}（实际数量随阶段与负载变化）`);}

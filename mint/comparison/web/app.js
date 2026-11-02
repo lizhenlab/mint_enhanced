@@ -18,6 +18,13 @@ function buildAlgorithms(){
   for(const spec of state.specs){
     const box=el('div',undefined,'algorithm');box.dataset.algorithm=spec.id;
     const label=el('label'),check=el('input');check.type='checkbox';check.value=spec.id;check.checked=['mint','hawor_full','ace_kfree'].includes(spec.id)&&spec.ready;check.disabled=!spec.ready||spec.import_only;
+    if(spec.import_only){
+      check.hidden=true;check.checked=false;check.setAttribute('aria-hidden','true');
+      const status=el('div',undefined,'reference-input-state');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+      const heading=el('div',undefined,'reference-input-heading'),title=el('strong','GT 参考标注'),badge=el('span','未绑定','reference-input-badge'),description=el('p','使用带 GT 的默认示例或在下方导入参考标注。普通视频不会自动生成 GT。');
+      title.dataset.referenceTitle='';badge.dataset.referenceBadge='';description.dataset.referenceDescription='';heading.append(title,badge);status.append(heading,description);box.classList.add('reference-input-card');box.append(check,status);host.append(box);
+      const option=el('option',spec.label);option.value=spec.id;$('importAlgorithm').append(option);continue;
+    }
     label.append(check,document.createTextNode(' '+spec.label));box.append(label,el('p',spec.ready?spec.description:'依赖未就绪：'+spec.missing.join(', '),spec.ready?'desc':'desc unavailable'));
     const details=el('details');details.append(el('summary','运行参数'));const fields=el('div');
     if(spec.parameters?.accepts_checkpoint)checkpointFields(fields);
@@ -31,6 +38,7 @@ function buildAlgorithms(){
     details.append(fields);box.append(details);host.append(box);
     const option=el('option',spec.label);option.value=spec.id;$('importAlgorithm').append(option);
   }
+  if(typeof syncReferenceInputState==='function')syncReferenceInputState();
 }
 function inputBody(){const camera=$('camera').value.trim();return decorateInputBody({source:$('source').value.trim(),view:$('view').value,target_fps:Number($('targetFps').value),start_frame:Number($('startFrame').value),max_frames:$('maxFrames').value===''?null:Number($('maxFrames').value),camera:camera?JSON.parse(camera):null,execution:{priority:$('executionPriority')?.value||'interactive',cache:$('executionCache')?.value||'exact'}});}
 function selectedAlgorithms(){return selectedAlgorithmsFrom($('algorithmOptions'));}

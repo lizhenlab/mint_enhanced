@@ -19,7 +19,8 @@ function fixture(){
     const inputs=fields.map(field=>{const input=node(String(field.default),field.choices?'select-one':'number');input.dataset.option=field.name;return input;});
     const checkpoint=id==='mint'?node('/old/checkpoint'):null,config=id==='mint'?node('/old/config'):null;
     if(checkpoint)checkpoint.dataset.selection='checkpoint';if(config)config.dataset.selection='config';
-    const box={dataset:{algorithm:id},check,inputs,checkpoint,config,querySelector(selector){if(selector==='input[type=checkbox]')return check;if(selector==='[data-selection=checkpoint]')return checkpoint;if(selector==='[data-selection=config]')return config;return null;},querySelectorAll(selector){if(selector==='[data-option]')return inputs;if(selector==='input,select,textarea')return [check,...inputs,checkpoint,config].filter(Boolean);throw new Error('Unexpected box query '+selector);}};
+    const reference=id==='reference'?{title:node(),badge:node(),description:node()}:null;
+    const box={dataset:{algorithm:id},check,inputs,checkpoint,config,reference,querySelector(selector){if(selector==='input[type=checkbox]')return check;if(selector==='[data-selection=checkpoint]')return checkpoint;if(selector==='[data-selection=config]')return config;if(selector==='[data-reference-title]')return reference?.title;if(selector==='[data-reference-badge]')return reference?.badge;if(selector==='[data-reference-description]')return reference?.description;return null;},querySelectorAll(selector){if(selector==='[data-option]')return inputs;if(selector==='input,select,textarea')return [check,...inputs,checkpoint,config].filter(Boolean);throw new Error('Unexpected box query '+selector);}};
     boxes.push(box);specs.push({id,label:id,ready:true,import_only:id==='reference',parameters:{fields}});
   }
   nodes.algorithmOptions={querySelectorAll:selector=>{assert.equal(selector,'.algorithm');return boxes;}};
@@ -89,4 +90,19 @@ test('an unrelated draft does not claim that it still contains example input aft
 });
 test('the initialized button only loads defaults and duplicate clicks do not start another request',async()=>{
   const x=fixture(),pending=deferred();x.context.api=(...args)=>{x.calls.push(args);return pending.promise;};x.nodes.useDefaultExample.dispatch('click');await Promise.resolve();assert.equal(x.calls.length,1);await x.run('loadDefaultExample()');assert.equal(x.calls.length,1);pending.resolve(x.example());await new Promise(resolve=>setImmediate(resolve));assert.ok(x.run('defaultExampleUI.binding'));assert.ok(x.calls.every(args=>args.length===1));
+});
+test('the default GT is a bound read-only status, never a selected prediction algorithm',async()=>{
+  const x=fixture(),reference=x.boxes.find(b=>b.dataset.algorithm==='reference');await x.run('loadDefaultExample()');assert.equal(reference.reference.title.textContent,'官方 GT 已绑定');assert.equal(reference.reference.badge.textContent,'自动附加');assert.match(reference.reference.description.textContent,/677.*无需勾选/);assert.equal(reference.dataset.referenceState,'bound');assert.equal(reference.check.hidden,true);assert.equal(reference.check.disabled,true);assert.equal(reference.check.checked,false);assert.equal(x.selectedAlgorithms().some(r=>r.algorithm==='reference'),false);
+});
+test('input changes and closing remove the official bound status while algorithm options retain it',async()=>{
+  const x=fixture(),reference=x.boxes.find(b=>b.dataset.algorithm==='reference');await x.run('loadDefaultExample()');x.boxes[1].check.checked=false;x.run('syncDefaultExample()');assert.equal(reference.dataset.referenceState,'bound');x.nodes.maxFrames.value='81';x.run('syncDefaultExample()');assert.equal(reference.reference.badge.textContent,'未绑定');assert.equal(reference.dataset.referenceState,'unbound');await x.run('loadDefaultExample()');x.nodes.taskDialog.open=false;x.nodes.taskDialog.dispatch('close');assert.equal(reference.dataset.referenceState,'unbound');assert.equal(reference.check.checked,false);
+});
+test('loading and a failed request cannot invent or erase a still-valid reference',async()=>{
+  const x=fixture(),reference=x.boxes.find(b=>b.dataset.algorithm==='reference'),pending=deferred();x.datasetForm.active=false;x.context.api=()=>pending.promise;const request=x.run('loadDefaultExample()');assert.equal(reference.dataset.referenceState,'pending');pending.resolve(x.example());await request;assert.equal(reference.dataset.referenceState,'bound');x.context.api=async()=>{throw Error('offline');};await x.run('loadDefaultExample()');assert.equal(reference.dataset.referenceState,'bound');assert.equal(reference.reference.badge.textContent,'自动附加');
+});
+test('a dataset reference is distinguished from official ARCTIC and must be selected for attachment',()=>{
+  const x=fixture(),reference=x.boxes.find(b=>b.dataset.algorithm==='reference');x.context.payload={...x.inputBody(),dataset:{root:'/dataset',episode:3,attach_gt:true}};x.run('syncReferenceInputState(payload)');assert.equal(reference.dataset.referenceState,'dataset');assert.equal(reference.reference.title.textContent,'数据集 GT 将自动附加');assert.equal(reference.reference.title.textContent.includes('官方'),false);x.context.payload.dataset.attach_gt=false;x.run('syncReferenceInputState(payload)');assert.equal(reference.dataset.referenceState,'unbound');x.datasetForm.loading=true;x.run('syncReferenceInputState(payload)');assert.equal(reference.dataset.referenceState,'pending');
+});
+test('a stale binding is not advertised and a tampered hidden checkbox cannot leak into selections',async()=>{
+  const x=fixture(),reference=x.boxes.find(b=>b.dataset.algorithm==='reference');await x.run('loadDefaultExample()');reference.check.checked=true;x.nodes.camera.value='invalid JSON';x.run('syncReferenceInputState()');assert.equal(reference.dataset.referenceState,'unbound');assert.equal(reference.check.checked,false);assert.equal(x.selectedAlgorithms().some(r=>r.algorithm==='reference'),false);
 });

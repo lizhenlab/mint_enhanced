@@ -43,8 +43,9 @@ def frame_payload(result_dir, sample, start=0, count=64, *, vertices=False, orig
     present[present] &= ids[positions[present]] == source_ids[present]
     n = len(source_ids)
     payload = {'sample_positions': list(range(start, start + n)), 'source_frame_indices': source_ids,
+               'timestamps_s': np.asarray(sample['timestamps_s'][start:start + n], float),
                'metadata': public_metadata(metadata), 'connections': CONNECTIONS}
-    for key in ('joints_camera_m', 'geometry_valid', 'K', 'presence', 'tracked', 'filled', 'confidence', 'exists_2d', 'exists_3d'):
+    for key in ('joints_camera_m', 'geometry_valid', 'K', 'presence', 'detected', 'tracked', 'filled', 'confidence', 'exists_2d', 'exists_3d'):
         if key not in arrays:
             payload[key] = None
             continue
@@ -60,6 +61,7 @@ def frame_payload(result_dir, sample, start=0, count=64, *, vertices=False, orig
         payload['vertices_camera_m'] = value
         payload['vertices_world_m'] = None
     payload['joints_world_m'], payload['camera_world_m'] = None, None
+    payload['T_world_camera'], payload['pose_valid'] = None, None
     if 'T_world_camera' in arrays:
         T = np.full((n, 4, 4), np.nan)
         T[present] = arrays['T_world_camera'][positions[present]]
@@ -70,6 +72,9 @@ def frame_payload(result_dir, sample, start=0, count=64, *, vertices=False, orig
                 raise ValueError('The requested common world origin is unavailable in this run')
             rebase = np.linalg.inv(arrays['T_world_camera'][index])
         T = rebase @ T
+        pose_valid = np.zeros(n, bool)
+        pose_valid[present] = arrays['pose_valid'][positions[present]]
+        payload['T_world_camera'], payload['pose_valid'] = T, pose_valid
         payload['joints_world_m'] = transform_points(T, payload['joints_camera_m'])
         payload['camera_world_m'] = T[:, :3, 3]
         if vertices and payload.get('vertices_camera_m') is not None:

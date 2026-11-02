@@ -64,7 +64,7 @@ function drawMesh3D(card,data,project){
 }
 function baselineCard(){return state.cards.get(resultView.reference);}
 function frameReadCards(){
-  const cards=visibleResultCards(),base=baselineCard();if(($('showBaseline')?.checked||$('frameInspector')?.open)&&base&&!cards.includes(base))cards.push(base);return cards;
+  const cards=visibleResultCards(),base=baselineCard();if(typeof parameterPanelReadCards==='function')for(const card of parameterPanelReadCards())if(!cards.includes(card))cards.push(card);if(($('showBaseline')?.checked||$('frameInspector')?.open||(typeof parameterPanelIsOpen==='function'&&parameterPanelIsOpen()))&&base&&!cards.includes(base))cards.push(base);return cards;
 }
 function drawBaseline(card,ctx,project,world=false){
   if(!$('showBaseline').checked||card===baselineCard())return;

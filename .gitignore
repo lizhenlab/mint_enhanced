@@ -138,3 +138,8 @@ docs/dataset-card/
 !tests/test_module_guide.cjs
 !tests/test_study_recovery_roles.py
 !tests/test_protocol_unique_samples.py
+
+!tests/test_frame_parameters.py
+!tests/test_parameter_math.cjs
+!tests/test_parameter_panel.cjs
+!tests/test_parameter_summary.cjs

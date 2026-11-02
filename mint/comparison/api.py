@@ -619,6 +619,13 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
         origin = request.args.get('origin')
         return jsonify(trajectory(manager().root / 'runs' / run_id / 'result', origin_source_frame=None if origin is None else int(origin)))
 
+    @blueprint.get('/api/comparison/runs/<run_id>/parameters')
+    def parameters(run_id):
+        from .parameters import frame_parameters
+        origin = request.args.get('origin')
+        return jsonify(frame_parameters(manager(), run_id, request.args.get('frame', 0),
+            origin_source_frame=origin))
+
     @blueprint.get('/api/comparisons/<comparison_id>/metrics')
     def metrics(comparison_id):
         from .results import paired_metrics

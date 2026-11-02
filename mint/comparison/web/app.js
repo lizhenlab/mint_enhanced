@@ -57,7 +57,7 @@ async function openComparison(id,{replace=false,history=true,keepPlatform=false}
   const draftSession=workspaceUI.taskDialogSession,restoreDraft=()=>workspaceUI.taskDialogSession===draftSession&&!$('taskDialog').open;
   if(!keepPlatform&&$('platformDialog').open)$('platformDialog').close();
   $('refreshMetrics').disabled=false;
-  pause();state.pollToken++;resetGeometryCache();state.cache.clear();state.loading.clear();state.cards.clear();state.comparison=null;state.metricsKey='';state.metricsRows=null;state.metricsRowsKey=null;state.metricRequest=null;state.frame=0;state.lastRendered=-1;state.frameBuffer=null;
+  pause();state.pollToken++;if(typeof resetParameterPanel==='function')resetParameterPanel();resetGeometryCache();state.cache.clear();state.loading.clear();state.cards.clear();state.comparison=null;state.metricsKey='';state.metricsRows=null;state.metricsRowsKey=null;state.metricRequest=null;state.frame=0;state.lastRendered=-1;state.frameBuffer=null;
   $('workspace').setAttribute('aria-busy','true');$('sessionTitle').textContent='正在读取比较任务…';$('sessionStatus').textContent='';$('sampleInfo').textContent='';
   for(const control of ['editComparison','downloadReport','exportVideo','play','prev','next','timeline','frameJump','snapshot'])$(control).disabled=true;
   $('runs').replaceChildren();$('welcome').hidden=true;$('workspace').hidden=false;setWorkspaceTab('view');const token=state.pollToken;
@@ -151,7 +151,7 @@ async function ensureFrame(frame){
     }
     if(!current())return;
     const trajectoryKey=resultFrameKey(card.run,'trajectory',origin);
-    if(($('showTrails').checked||$('frameInspector').open)&&card.trajectoryKey!==trajectoryKey){
+    if(($('showTrails').checked||$('frameInspector').open||(typeof parameterPanelIsOpen==='function'&&parameterPanelIsOpen()))&&card.trajectoryKey!==trajectoryKey){
       const query=origin!==null&&'T_world_camera'in card.run.result.arrays?`?origin=${origin}`:'';
       if(card.trajectoryRequest?.key!==trajectoryKey){
         const promise=api(`api/comparison/runs/${card.run.id}/trajectory${query}`).then(value=>{if(current()&&card.trajectoryRequest?.key===trajectoryKey){card.trajectory=value;card.trajectoryKey=trajectoryKey;}});card.trajectoryRequest={key:trajectoryKey,promise};
@@ -160,27 +160,43 @@ async function ensureFrame(frame){
       try{await pending.promise;}catch(error){if(card.trajectoryRequest===pending)card.trajectoryRequest=null;if(current())notify(error.message);}
     }
   }));
-  if(token===state.pollToken&&comparison.id===state.comparison?.id)await ensureMeshFrame(frame);
+  if(token===state.pollToken&&comparison.id===state.comparison?.id){await ensureMeshFrame(frame);if(token===state.pollToken&&comparison.id===state.comparison?.id&&typeof ensureParameterPreviousFrame==='function')await ensureParameterPreviousFrame(frame);}
 }
 function dataFor(card){if(!card?.run||!state.comparison)return null;const start=Math.floor(state.frame/FRAME_READ_COUNT)*FRAME_READ_COUNT,key=resultFrameKey(card.run,start,state.comparison.common_world_origin_source_frame);const payload=state.cache.get(key);return payload?{payload,index:state.frame-start}:null;}
 function resizeCanvas(canvas,width,height){if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height;}return canvas.getContext('2d');}
 function project2D(point,K){if(!point||!point.every(Number.isFinite)||point[2]<=.001)return null;return [(K[0][0]*point[0]+K[0][1]*point[1])/point[2]+K[0][2],(K[1][0]*point[0]+K[1][1]*point[1])/point[2]+K[1][2]];}
 function visible(data,index,slot){return data.geometry_valid?.[index]?.[slot]&&($('showAbsent').checked||data.presence===null||data.presence?.[index]?.[slot]);}
-function drawOverlay(card,data){const sample=state.comparison.sample;const ctx=resizeCanvas(card.overlay,...sample.proxy_pixel_grid);ctx.clearRect(0,0,card.overlay.width,card.overlay.height);if(state.frameBuffer)ctx.drawImage(state.frameBuffer,0,0,card.overlay.width,card.overlay.height);if(!data)return;const meshDrawn=drawMesh2D(card,data),sampleGrid=sample.proxy_content_grid||[sample.width,sample.height];drawBaseline(card,ctx,(point,K)=>{const p=project2D(point,K);return p?[p[0]*sampleGrid[0]/sample.width,p[1]*sampleGrid[1]/sample.height]:null;});if(geometryMode()==='mesh'&&meshDrawn)return;const {payload:p,index:i}=data;for(let slot=0;slot<2;slot++){if(!visible(p,i,slot))continue;const grid=sample.proxy_content_grid||[sample.width,sample.height];const points=p.joints_camera_m[i][slot].map(point=>{const q=project2D(point,p.K[i]);return q?[q[0]*grid[0]/sample.width,q[1]*grid[1]/sample.height]:null;});ctx.strokeStyle=handColor(slot);ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=Math.max(1.5,card.overlay.width/450);for(const [a,b]of p.connections){if(!points[a]||!points[b])continue;ctx.beginPath();ctx.moveTo(...points[a]);ctx.lineTo(...points[b]);ctx.stroke();}for(const point of points){if(!point)continue;ctx.beginPath();ctx.arc(...point,Math.max(2,card.overlay.width/350),0,Math.PI*2);ctx.fill();}}
+function drawOverlay(card,data){
+  const sample=state.comparison.sample,ctx=resizeCanvas(card.overlay,...sample.proxy_pixel_grid);
+  ctx.clearRect(0,0,card.overlay.width,card.overlay.height);if(state.frameBuffer)ctx.drawImage(state.frameBuffer,0,0,card.overlay.width,card.overlay.height);if(!data)return;
+  const meshDrawn=drawMesh2D(card,data),grid=sample.proxy_content_grid||[sample.width,sample.height],project=point=>{const p=project2D(point,data.payload.K[data.index]);return p?[p[0]*grid[0]/sample.width,p[1]*grid[1]/sample.height]:null;};
+  drawBaseline(card,ctx,(point,K)=>{const p=project2D(point,K);return p?[p[0]*grid[0]/sample.width,p[1]*grid[1]/sample.height]:null;});
+  if(!(geometryMode()==='mesh'&&meshDrawn)){
+    const {payload:p,index:i}=data;
+    for(let slot=0;slot<2;slot++){
+      if(!visible(p,i,slot))continue;const points=p.joints_camera_m[i][slot].map(project);
+      ctx.strokeStyle=handColor(slot);ctx.fillStyle=handColor(slot);ctx.lineWidth=Math.max(1.5,card.overlay.width/450);
+      for(const [a,b]of p.connections){if(!points[a]||!points[b])continue;ctx.beginPath();ctx.moveTo(...points[a]);ctx.lineTo(...points[b]);ctx.stroke();}
+      for(const point of points){if(!point)continue;ctx.beginPath();ctx.arc(...point,Math.max(2,card.overlay.width/350),0,Math.PI*2);ctx.fill();}
+    }
+  }
+  if(typeof drawParameterJoint==='function')drawParameterJoint(card,data,ctx,project,{ratio:Math.max(1,card.overlay.width/700)});
 }
 function sceneProject(point,center,scale,w,h){const x=point[0]-center[0],y=point[1]-center[1],z=point[2]-center[2],{yaw,pitch}=state.orbit;const u=Math.cos(yaw)*x+Math.sin(yaw)*z,v=-Math.sin(yaw)*x+Math.cos(yaw)*z;return [w/2+u*scale,h/2+(Math.cos(pitch)*y-Math.sin(pitch)*v)*scale];}
 function draw3D(card,data,bounds){const ratio=window.devicePixelRatio||1,w=Math.round(card.canvas.clientWidth*ratio),h=Math.round(card.canvas.clientHeight*ratio);if(!w||!h)return;const ctx=resizeCanvas(card.canvas,w,h);ctx.clearRect(0,0,w,h);ctx.font=`${11*ratio}px sans-serif`;ctx.textAlign='left';const world=$('space').value==='world';card.label.textContent=world?'3D · 世界系 · 米 · 首帧对齐':'3D · 相机系 · 米';if(!data||(world&&(!data.payload.joints_world_m||state.comparison.common_world_origin_source_frame===null))){const loading=!data&&!!card.run.result;ctx.fillStyle='#9fb4b5';ctx.textAlign='center';ctx.fillText(loading?'正在加载当前帧…':!data?'等待有效几何结果':'此结果暂无可用世界相机',w/2,h/2,w-28*ratio);ctx.font=`${9*ratio}px sans-serif`;ctx.fillText(loading?'':!data?'结果发布后自动显示':'可切换相机系查看手部',w/2,h/2+20*ratio,w-28*ratio);return;}
   const {payload:p,index:i}=data,joints=world?p.joints_world_m[i]:p.joints_camera_m[i];const center=bounds.center,scale=Math.min(w,h)*.65/bounds.span*state.orbit.zoom;const proj=point=>sceneProject(point,center,scale,w,h);
   ctx.lineWidth=ratio;for(let axis=0;axis<3;axis++){const from=center.slice(),to=center.slice();to[axis]+=.1;ctx.strokeStyle=['#fa7979','#8ed782','#79a9ef'][axis];ctx.beginPath();ctx.moveTo(...proj(from));ctx.lineTo(...proj(to));ctx.stroke();ctx.fillStyle=ctx.strokeStyle;ctx.fillText(['X','Y','Z'][axis],...proj(to));}
   if($('showTrails').checked&&card.trajectory){const wrists=world?card.trajectory.world_wrists_m:card.trajectory.camera_wrists_m;for(const [values,color]of [[wrists?.map((v,i)=>!$('showAbsent').checked&&card.trajectory.presence&&!card.trajectory.presence[i][0]?null:v[0]),card.color],[wrists?.map((v,i)=>!$('showAbsent').checked&&card.trajectory.presence&&!card.trajectory.presence[i][1]?null:v[1]),'#ffdf80'],[world?card.trajectory.camera_world_m:null,'#89a6c2']]){if(!values)continue;ctx.strokeStyle=color+'88';ctx.lineWidth=ratio;ctx.beginPath();let open=false;for(const point of values){if(!point||point.some(x=>x===null)){open=false;continue;}const xy=proj(point);if(open)ctx.lineTo(...xy);else ctx.moveTo(...xy);open=true;}ctx.stroke();}}
-  const meshDrawn=drawMesh3D(card,data,proj);drawBaseline(card,ctx,proj,world);if(geometryMode()==='mesh'&&meshDrawn)return;
+  const meshDrawn=drawMesh3D(card,data,proj);drawBaseline(card,ctx,proj,world);if(geometryMode()==='mesh'&&meshDrawn){if(typeof drawParameterJoint==='function')drawParameterJoint(card,data,ctx,proj,{world,ratio});return;}
   for(let slot=0;slot<2;slot++){if(!visible(p,i,slot)||!joints?.[slot])continue;const points=joints[slot];ctx.strokeStyle=handColor(slot);ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=2*ratio;for(const [a,b]of p.connections){if(points[a]?.some(x=>x===null)||points[b]?.some(x=>x===null))continue;ctx.beginPath();ctx.moveTo(...proj(points[a]));ctx.lineTo(...proj(points[b]));ctx.stroke();}for(const point of points){if(!point||point.some(x=>x===null))continue;ctx.beginPath();ctx.arc(...proj(point),2.2*ratio,0,Math.PI*2);ctx.fill();}}
+  if(typeof drawParameterJoint==='function')drawParameterJoint(card,data,ctx,proj,{world,ratio});
 }
-function render(force=false){updateResultLayoutHint();syncPlaybackReadiness();if(!state.comparison?.sample)return;if(!force&&state.lastRendered===state.frame)return;state.lastRendered=state.frame;const sample=state.comparison.sample;$('timeline').value=state.frame;if(document.activeElement!==$('frameJump'))$('frameJump').value=state.frame+1;$('timeLabel').textContent=`第 ${state.frame+1}/${sample.frames} 帧 · 源索引 ${sample.source_frame_indices[state.frame]}（0 起） · ${fmt(sample.timestamps_s[state.frame],3)}s`;
+function render(force=false){updateResultLayoutHint();syncPlaybackReadiness();if(!state.comparison?.sample){if(typeof updateParameterPanel==='function')updateParameterPanel();return;}if(!force&&state.lastRendered===state.frame)return;state.lastRendered=state.frame;const sample=state.comparison.sample;$('timeline').value=state.frame;if(document.activeElement!==$('frameJump'))$('frameJump').value=state.frame+1;$('timeLabel').textContent=`第 ${state.frame+1}/${sample.frames} 帧 · 源索引 ${sample.source_frame_indices[state.frame]}（0 起） · ${fmt(sample.timestamps_s[state.frame],3)}s`;
   const all=[];for(const card of visibleResultCards()){const d=dataFor(card),points=($('space').value==='world'?d?.payload.joints_world_m:d?.payload.joints_camera_m)?.[d?.index];if(points)for(const [slot,hand] of points.entries()){if(!visible(d.payload,d.index,slot))continue;for(const point of hand||[])if(point?.every(Number.isFinite))all.push(point);}if($('space').value==='world'&&$('showTrails').checked&&card.trajectory?.camera_world_m)for(const point of card.trajectory.camera_world_m)if(point?.every(Number.isFinite))all.push(point);}
   const min=[0,0,0],max=[0,0,0];if(all.length)for(let axis=0;axis<3;axis++){min[axis]=Math.min(...all.map(p=>p[axis]));max[axis]=Math.max(...all.map(p=>p[axis]));}const bounds={center:min.map((v,i)=>(v+max[i])/2),span:Math.max(.3,...min.map((v,i)=>max[i]-v))};
-  for(const card of visibleResultCards()){const data=dataFor(card);if(workspaceUI.mode!=='3d')drawOverlay(card,data);if(workspaceUI.mode!=='2d')draw3D(card,data,bounds);if(!data){card.numbers.replaceChildren(el('span',card.run.result?'当前帧数据加载中…':'等待几何结果'));}if(data){const {payload:p,index:i}=data;card.numbers.replaceChildren(...[0,1].map(slot=>{const isWorld=$('space').value==='world';const wrist=(isWorld?p.joints_world_m:p.joints_camera_m)?.[i]?.[slot]?.[0];return el('span',`${slot?'R':'L'} ${wrist?.every(Number.isFinite)?wrist.map(v=>fmt(v*100,1)).join(' / ')+' cm':isWorld&&!p.joints_world_m?'无世界坐标':'缺失'}${p.filled?.[i]?.[slot]?' · 补全':''}${p.presence?.[i]?.[slot]===false?' · 低存在性':''}`); }));}}
-  updateFrameInspector();
+  for(const card of visibleResultCards()){const data=dataFor(card);if(workspaceUI.mode!=='3d')drawOverlay(card,data);if(workspaceUI.mode!=='2d')draw3D(card,data,bounds);if(!data){delete card.numbers.dataset.parameterSummary;card.numbers.replaceChildren(el('span',card.run.result?'当前帧数据加载中…':'等待几何结果'));}else if(typeof renderWristSummary==='function')renderWristSummary(card,data);}
+
+  updateFrameInspector();if(typeof updateParameterPanel==='function')updateParameterPanel();
 }
 // Media readiness is separate from geometry: frame inspection stays usable without video.
 function comparisonPlaybackState(sample,video,frame){

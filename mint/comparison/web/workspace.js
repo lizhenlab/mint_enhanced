@@ -24,7 +24,7 @@ function setWorkspaceTab(tab){
   workspaceUI.tab=tab;
   for(const id of ['resultPicker','protocolPicker','frameInspector'])$(id).open=false;
   for(const name of ['view','metrics','manage']){const active=name===tab;$('panel-'+name).hidden=!active;$('tab-'+name).setAttribute('aria-selected',String(active));$('tab-'+name).tabIndex=active?0:-1;}
-  if(tab!=='view')pause();else requestAnimationFrame(()=>render(true));
+  if(tab!=='view'){pause();if(typeof closeParameterPanel==='function')closeParameterPanel();}else requestAnimationFrame(()=>render(true));
   if(tab==='metrics')loadComparisonMetrics().catch(error=>notify(error.message));
 }
 function setFocusMode(value){workspaceUI.focus=value;applyLayout();}

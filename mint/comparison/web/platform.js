@@ -410,7 +410,7 @@ function initializeToolsWorkspace(){
   $('renderUseAvailableRange').onclick=useAvailableRenderRange;$('startRenderTool').onclick=()=>startRenderTool().catch(hubError);
   window.addEventListener('mint-platform-open',event=>{if(event.detail==='tools'){const query=new URLSearchParams(location.search);showToolsView(query.has('tools_tab')?initialToolsView(query):toolsUI.view,{route:false});}});
 }
-function inspectResult(id){if(!state.cards.has(id))return;resultView.expanded=id;$('inspectRun').value=id;applyResultVisibility();if($('comparisonOptions'))$('comparisonOptions').open=true;$('frameInspector').open=true;pause();ensureFrame(state.frame).then(()=>render(true));}
+function inspectResult(id){if(!state.cards.has(id))return;if(typeof openParameterPanel==='function'){if($('comparisonOptions'))$('comparisonOptions').open=false;$('frameInspector').open=false;return openParameterPanel(id,document.activeElement);}resultView.expanded=id;$('inspectRun').value=id;applyResultVisibility();if($('comparisonOptions'))$('comparisonOptions').open=true;$('frameInspector').open=true;pause();ensureFrame(state.frame).then(()=>render(true));}
 function initializePlatform(){
   for(const button of document.querySelectorAll('[data-platform-tab]'))button.onclick=()=>openPlatform(button.dataset.platformTab);
   for(const button of document.querySelectorAll('[data-hub-pane]'))button.onclick=()=>switchHub(button.dataset.hubPane);

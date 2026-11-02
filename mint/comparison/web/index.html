@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="comparison-assets/platform-layout.css?v=20261102-tools-workspace-1">
   <link rel="stylesheet" href="comparison-assets/workspace-ux.css?v=20261102-global-experience-1">
   <link rel="stylesheet" href="comparison-assets/workflow-guide.css?v=20261102-module-flow-1">
+  <link rel="stylesheet" href="comparison-assets/parameter-panel.css?v=20261102-parameters-1">
 </head>
 <body>
 <svg class="icon-definitions" aria-hidden="true"><defs>
@@ -58,10 +59,10 @@
           <label class="inline-label reference-control" for="referenceRun" title="固定在第一列并作为指标对照；选择基准不会将其声明为 GT">基准<select id="referenceRun" aria-label="固定对照基准"></select></label>
           <button id="comparePair" class="quiet-button">A/B 对照</button><button id="showAllResults" class="quiet-button">显示全部</button>
           <details id="protocolPicker" class="protocol-picker"><summary>运行协议与来源</summary><div id="protocolList" class="result-popover protocol-list"></div></details>
-          <details id="frameInspector" class="inspector-picker"><summary>逐帧诊断</summary><div class="result-popover inspector-popover"><div class="inspector-head"><label>查看结果<select id="inspectRun"></select></label><button id="inspectPrev">上一帧</button><button id="inspectNext">下一帧</button></div><p id="inspectFrameLabel" class="hint"></p><p id="inspectRole" class="hint"></p><canvas id="inspectTrend" aria-label="腕部相机深度趋势"></canvas><div id="jointValues" class="metric-table-scroll"></div><p id="inspectCamera" class="hint"></p></div></details>
+          <button id="toggleParameterPanel" type="button" aria-controls="parameterPanel" aria-expanded="false">帧参数</button><details id="frameInspector" class="inspector-picker"><summary>逐帧诊断</summary><div class="result-popover inspector-popover"><div class="inspector-head"><label>查看结果<select id="inspectRun"></select></label><button id="inspectPrev">上一帧</button><button id="inspectNext">下一帧</button></div><p id="inspectFrameLabel" class="hint"></p><p id="inspectRole" class="hint"></p><canvas id="inspectTrend" aria-label="腕部相机深度趋势"></canvas><div id="jointValues" class="metric-table-scroll"></div><p id="inspectCamera" class="hint"></p></div></details>
         </div>
         <div class="view-toolbar"><div class="segmented" role="group" aria-label="画面布局"><button data-view-mode="split" aria-pressed="true" class="active">2D + 3D</button><button data-view-mode="2d" aria-pressed="false">2D 叠加</button><button data-view-mode="3d" aria-pressed="false">3D 空间</button></div><label class="inline-label" for="space" title="只切换 3D 与腕点数值的坐标；2D 始终投影到原相机">3D 坐标<select id="space"><option value="camera">相机系</option><option value="world">世界系</option></select></label><label class="inline-label" for="geometryStyle">几何<select id="geometryStyle" aria-label="显示几何"><option value="skeleton">骨架</option><option value="mesh">网格</option><option value="mesh_skel">网格 + 骨架</option></select></label><div class="view-options"><label><input id="showBaseline" type="checkbox">叠加基准</label><label><input id="showTrails" type="checkbox">轨迹</label><label title="显示存在性较低但有有限几何的预测"><input id="showAbsent" type="checkbox">低存在性</label></div><button id="resetView" class="icon-button" aria-label="重置三维视角" title="重置三维视角"><svg class="icon"><use href="#i-refresh"/></svg></button><button id="snapshot" class="icon-button" aria-label="保存当前画面" title="保存当前画面"><svg class="icon"><use href="#i-camera"/></svg></button><button id="focusMode" class="icon-button" aria-label="专注查看" aria-pressed="false" title="专注查看（F），Esc 退出"><svg class="icon"><use href="#i-expand"/></svg></button></div>
-        <div id="runs" class="run-grid" data-view-mode="split" role="list" aria-label="联动结果"></div>
+        <div class="parameter-workspace"><div id="runs" class="run-grid" data-view-mode="split" role="list" aria-label="联动结果"></div><aside id="parameterPanel" aria-label="当前帧参数" hidden></aside></div>
         <div class="transport"><div class="playback-buttons"><button id="prev" class="icon-button" aria-label="前一帧" title="前一帧（←）"><svg class="icon"><use href="#i-prev"/></svg></button><button id="play" class="play-button" aria-label="播放"><svg class="icon"><use href="#i-play"/></svg></button><button id="next" class="icon-button" aria-label="后一帧" title="后一帧（→）"><svg class="icon"><use href="#i-next"/></svg></button></div><div class="timeline-control"><input id="timeline" type="range" min="0" max="0" value="0" aria-label="视频帧时间轴"><div class="timeline-meta"><output id="timeLabel">等待输入准备…</output><span id="playbackStatus" class="keyboard-hint" role="status">← → 逐帧 · 空格播放 · F 专注</span></div></div><label class="jump-control" for="frameJump">跳至<input id="frameJump" type="number" min="1" value="1" aria-label="跳转到样本帧"><span>帧</span></label><select id="speed" aria-label="播放速度"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></div>
       </section>
       <section id="panel-metrics" class="workspace-panel scroll-panel" role="tabpanel" aria-labelledby="tab-metrics" hidden>
@@ -165,14 +166,17 @@
     <section class="workflow-guide-terms" aria-label="数据与执行边界"><p><strong>比较、结果与任务：</strong>比较按输入组织；Run 保存一种算法配置的结果；任务记录实际执行过程。</p><p><strong>监督与对照：</strong>算法基准不等于 GT，二维修正不等于三维 GT，伪标签训练需要显式允许。</p><p><strong>明确执行：</strong>此处按钮只进入页面。浏览、配置与预检不提交计算；发布别名不会热替换运行中的模型，也不会改变默认权重。</p></section>
   </div>
 </dialog>
-<script src="comparison-assets/workspace.js?v=20261102-global-experience-1"></script>
+<script src="comparison-assets/workspace.js?v=20261102-parameters-1"></script>
 <script src="comparison-assets/source-browser.js?v=20261101-platform-integrity-2"></script>
-<script src="comparison-assets/result-tools.js?v=20261102-global-experience-1"></script>
-<script src="comparison-assets/geometry-tools.js?v=20261102-global-experience-1"></script>
-<script src="comparison-assets/platform.js?v=20261102-global-experience-1"></script>
+<script src="comparison-assets/result-tools.js?v=20261102-parameters-1"></script>
+<script src="comparison-assets/geometry-tools.js?v=20261102-parameters-1"></script>
+<script src="comparison-assets/platform.js?v=20261102-parameters-1"></script>
 <script src="comparison-assets/research.js?v=20261102-module-flow-1"></script>
 <script src="comparison-assets/enhancements.js?v=20261102-module-flow-1"></script>
-<script src="comparison-assets/locale.js?v=20261102-module-flow-1"></script>
-<script src="comparison-assets/app.js?v=20261102-global-experience-1"></script>
+<script src="comparison-assets/locale.js?v=20261102-parameters-1"></script>
+<script src="comparison-assets/parameter-math.js?v=20261102-parameters-1"></script>
+<script src="comparison-assets/parameter-summary.js?v=20261102-parameters-1"></script>
+<script src="comparison-assets/app.js?v=20261102-parameters-1"></script>
 <script src="comparison-assets/workflow-guide.js?v=20261102-module-flow-1"></script>
+<script src="comparison-assets/parameter-panel.js?v=20261102-parameters-1"></script>
 </body></html>

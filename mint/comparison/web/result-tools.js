@@ -142,7 +142,7 @@ function initializeComparisonToolbar(){
   const advanced=el('details',undefined,'comparison-options');advanced.id='comparisonOptions';advanced.append(el('summary','显示与诊断'));const content=el('div',undefined,'comparison-options-content');advanced.append(content);
   const picker=$('resultPicker');picker.querySelector('.hint').textContent='勾选总览中展示的结果；“基准 + 候选”模式通过候选菜单切换。导出可选择全部结果或当前可见结果。';
   content.append(picker,$('comparePair'),$('showAllResults'),old.querySelector('label[title]'),old.querySelector('label:not([title])'),old.querySelector('.view-options'),$('resetView'),$('snapshot'),$('protocolPicker'),$('frameInspector'));
-  const segment=old.querySelector('.segmented');toolbar.prepend(layout);$('referenceRun').closest('label').after(candidateField,sideField);toolbar.append(segment,advanced,$('focusMode'));old.hidden=true;
+  const segment=old.querySelector('.segmented');toolbar.prepend(layout);$('referenceRun').closest('label').after(candidateField,sideField);toolbar.append(segment);if($('toggleParameterPanel'))toolbar.append($('toggleParameterPanel'));toolbar.append(advanced,$('focusMode'));old.hidden=true;if($('toggleParameterPanel'))$('frameInspector').hidden=true;
   const referenceNote=el('p',undefined,'comparison-reference-note');referenceNote.id='comparisonReferenceNote';toolbar.after(referenceNote);$('referenceRun').setAttribute('aria-describedby','comparisonReferenceNote');
   $('resultPicker').querySelector('summary').title='仅影响总览选列，不改变基准和候选';
   layout.onchange=()=>{resultView.layout=layout.value;resultView.expanded=null;saveResultPreferences();applyResultVisibility();render(true);ensureFrame(state.frame).then(()=>render(true));};

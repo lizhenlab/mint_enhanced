@@ -1,0 +1,51 @@
+/* A bounded sibling of #runs; long parameter arrays never size the canvases. */
+.parameter-workspace{position:relative;display:flex;flex:1;min-height:0;min-width:0;overflow:hidden;gap:10px}
+.parameter-workspace>#runs{min-width:0;min-height:0;flex:1;width:100%}
+.parameter-panel{display:flex;flex-direction:column;width:350px;min-width:0;min-height:0;max-height:100%;overflow:hidden;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--text);font-size:11px;line-height:1.55;isolation:isolate}
+.parameter-panel[hidden]{display:none!important}
+.parameter-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 11px 7px;flex:none;border-bottom:1px solid var(--line-soft)}
+.parameter-heading h2{font-size:13px;line-height:1.4;margin:0}
+.parameter-heading-actions{display:flex;align-items:center;gap:6px;flex:none}.parameter-heading-actions>button:not(.parameter-close){font-size:10px;min-height:30px;padding:4px 7px}
+.parameter-heading .parameter-close{flex:none;width:34px;height:34px;min-height:34px;border:1px solid var(--line);border-radius:7px;padding:0;color:var(--text);background:var(--surface-2);font-size:25px;line-height:1}
+.parameter-close:hover{color:var(--cyan);border-color:var(--cyan)}
+.parameter-controls{display:flex;flex-direction:row;align-items:end;gap:8px;padding:6px 11px 4px;flex:none;min-width:0}.parameter-controls>label{flex:1;min-width:0}
+.parameter-panel label{font-size:11px;margin:0;min-width:0}
+.parameter-panel select{font-size:12px;min-height:32px;margin:3px 0 0;padding:4px 25px 4px 7px;min-width:0;width:100%}
+.parameter-hands{display:flex;gap:4px;flex:none}.parameter-hands button{flex:1;min-height:32px;font-size:10px;padding:3px 7px;color:var(--muted)}
+.parameter-hands button[aria-pressed=true]{border-color:#6ad5f088;color:#6ad5f0;background:#6ad5f00c}.parameter-hands button:nth-child(2)[aria-pressed=true]{border-color:#ffdf8088;color:#ffdf80;background:#ffdf800c}
+.parameter-frame,.parameter-coordinate{flex:none;margin:0;padding:2px 11px;color:var(--muted);font-size:10px;line-height:1.6;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.parameter-frame{color:var(--text)}.parameter-coordinate{padding-bottom:7px}
+.parameter-loading{flex:none;margin:0;padding:5px 11px;color:var(--orange);background:#ffb87a08;font-size:11px;line-height:1.6}
+.parameter-visibility{display:flex;align-items:center;gap:7px;flex:none;padding:6px 11px;background:#58d5d206;border-top:1px solid var(--line-soft)}
+.parameter-panel .parameter-visibility .parameter-note{flex:1;margin:0;font-size:10px}.parameter-visibility button{flex:none;font-size:10px;min-height:31px;padding:4px 7px;color:var(--cyan)}
+.parameter-tabs{display:flex;flex:none;gap:0;padding:0 10px;border-bottom:1px solid var(--line)}
+.parameter-tabs button{flex:1;min-height:33px;border:0;border-bottom:2px solid transparent;border-radius:0;padding:4px;color:var(--muted);background:transparent;font-size:12px}
+.parameter-tabs button[aria-selected=true]{color:var(--lime);border-bottom-color:var(--lime)}
+.parameter-scroll{min-height:0;min-width:0;flex:1;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#355247 transparent;padding:10px 11px}
+.parameter-scroll>section{min-width:0}.parameter-panel .parameter-note{margin:5px 0 10px;color:var(--muted);font-size:10px;line-height:1.7;overflow-wrap:anywhere}
+.parameter-facts{display:grid;grid-template-columns:minmax(80px,.8fr) minmax(0,1.3fr);gap:6px 10px;margin:0 0 12px;font-size:11px}
+.parameter-facts dt{color:var(--muted);min-width:0}.parameter-facts dd{margin:0;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap;font-variant-numeric:tabular-nums}
+.parameter-panel details{min-width:0;border-top:1px solid var(--line-soft);padding-top:6px;margin:8px 0}
+.parameter-panel summary{font-size:11px;line-height:1.6;min-height:30px;padding:5px 0;color:var(--cyan);overflow-wrap:anywhere;cursor:pointer}
+.parameter-panel details[open]>summary{margin-bottom:7px}.parameter-panel .parameter-advanced{margin-top:15px;border-top-color:var(--line);padding-top:8px}
+.parameter-panel table{width:100%;border-collapse:collapse;table-layout:fixed;font:10px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;font-variant-numeric:tabular-nums}
+.parameter-panel th,.parameter-panel td{padding:5px 3px;border-bottom:1px solid var(--line-soft);text-align:right;overflow-wrap:anywhere;vertical-align:top}
+.parameter-panel th{font-weight:500;color:var(--muted)}.parameter-panel th:first-child,.parameter-panel td:first-child{text-align:left}
+.parameter-table-scroll{max-height:310px;max-width:100%;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.parameter-panel table tr:first-child th{position:sticky;top:0;background:var(--surface-2);z-index:1}
+.parameter-joints td:first-child{width:66px}.parameter-joints button{font:10px ui-monospace,monospace;min-height:26px;min-width:40px;padding:3px 5px;background:transparent;border-color:transparent;justify-content:flex-start}
+.parameter-joints button[aria-pressed=true]{color:var(--lime);border-color:#b9f45a66;background:#b9f45a0b}
+.parameter-panel pre{font:10px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;max-width:100%;max-height:220px;overflow:auto;white-space:pre;overscroll-behavior:contain;margin:8px 0 12px;padding:8px;border:1px solid var(--line-soft);border-radius:6px;background:#07100f}
+.parameter-panel .parameter-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:8px 0}.parameter-actions button{font-size:10px;min-height:31px;padding:5px 8px}.parameter-actions select{width:auto;flex:0 1 105px;margin:0;font-size:10px}
+.parameter-pagination{display:flex;justify-content:space-between;align-items:center;gap:5px;margin-top:7px;min-width:0}.parameter-pagination span{font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums}.parameter-pagination button{font-size:10px;min-height:29px;padding:4px 7px}
+.parameter-quality-table code{display:block;font-size:9px;color:var(--muted);overflow-wrap:anywhere}.parameter-quality-table th{width:58%;font-family:inherit;text-align:left}.parameter-quality-table td{font-size:11px}.parameter-quality-table .parameter-quality-meaning{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;text-align:left;color:var(--muted);font-size:10px;line-height:1.6;padding-top:0;padding-bottom:10px}
+.parameter-matrix td{font-size:9px;padding:5px 2px}.parameter-native-field .parameter-facts{font-size:10px}.parameter-trend canvas{display:block;width:100%;height:auto;max-height:150px}
+.parameter-footer{flex:none;padding:4px 11px;border-top:1px solid var(--line);background:var(--surface-2)}
+.parameter-status{font-size:10px;color:var(--muted);line-height:1.6;margin:5px 0 0;min-height:0;overflow-wrap:anywhere}.parameter-status:empty{display:none}.parameter-status[data-state=error]{color:var(--red)}
+.parameter-panel :focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+@media(min-width:1100px){.parameter-workspace.parameter-is-open{display:grid;grid-template-columns:minmax(0,1fr) 350px}.parameter-workspace.parameter-is-open>.parameter-panel{width:350px;grid-column:2;grid-row:1}.parameter-workspace.parameter-is-open>#runs{grid-column:1;grid-row:1}}
+@media(max-width:1099px) and (min-width:761px){.parameter-workspace>.parameter-panel{position:absolute;right:0;top:0;bottom:0;z-index:15;width:min(375px,70%);box-shadow:-12px 0 32px #0009}}
+@media(max-width:760px){.parameter-workspace{gap:0}.parameter-workspace>.parameter-panel{position:absolute;z-index:15;left:0;right:0;bottom:0;width:100%;height:min(100%,470px);max-height:100%;border-radius:12px 12px 0 0;box-shadow:0 -10px 28px #0009}.parameter-heading{padding:7px 10px 5px}.parameter-heading .parameter-close{width:36px;height:36px;min-height:36px}.parameter-controls{flex-direction:row;align-items:end;gap:8px;padding:6px 10px 3px}.parameter-controls>label{flex:1;min-width:0}.parameter-hands{flex:none;gap:3px}.parameter-hands button{padding:4px 7px;font-size:10px;min-height:32px}.parameter-frame,.parameter-coordinate{padding-inline:10px;font-size:9px}.parameter-coordinate{padding-bottom:4px}.parameter-tabs button{min-height:32px;font-size:11px}.parameter-scroll{padding:8px 10px}.parameter-footer{padding:6px 10px}.parameter-footer>button{min-height:31px}.parameter-facts{font-size:10px;gap:5px 9px}.parameter-table-scroll{max-height:240px}}
+@media(prefers-reduced-motion:reduce){.parameter-panel button{transition:none}}
+
+.parameter-hands{gap:3px}.parameter-hands button{white-space:nowrap;min-width:46px;padding:4px 7px;font-size:10px}

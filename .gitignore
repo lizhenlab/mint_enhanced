@@ -148,3 +148,7 @@ docs/dataset-card/
 !tests/test_parameter_summary.cjs
 !tests/test_arctic_reference.py
 !tests/test_reference_withdrawal.py
+!tests/test_study_reference_validity.py
+!tests/test_media_reference_validity.py
+!tests/test_frontend_recovery.cjs
+!tests/test_comparison_process_cleanup.py

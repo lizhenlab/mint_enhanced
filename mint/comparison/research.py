@@ -110,6 +110,14 @@ class ResearchRegistry:
                             result_metadata(Path(identity['path']).parent)
                         except (OSError, ValueError, KeyError):
                             record['availability'] = 'missing_or_changed'
+                if kind == 'artifact' and record.get('run_id'):
+                    try:
+                        run = self.manager.run(record['run_id'], summary=True)
+                        if not run['result']:
+                            record['availability'] = 'annotation_withdrawn' if run.get('annotation_withdrawal') else 'missing_or_changed'
+                            record['reason'] = run.get('error') or 'Published result is unavailable'
+                    except (OSError, ValueError, KeyError):
+                        record['availability'] = 'missing_or_changed'
         return {'records': records, 'total': total, 'offset': offset}
 
     def index_artifacts(self):

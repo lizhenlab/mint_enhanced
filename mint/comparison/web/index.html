@@ -4,7 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark"><title>MINT · 多算法工作台</title>
   <link rel="stylesheet" href="comparison-assets/style.css?v=20261101-platform-integrity-2">
-  <link rel="stylesheet" href="comparison-assets/comparison-layout.css?v=20261101-platform-integrity-2">
+  <link rel="stylesheet" href="comparison-assets/comparison-layout.css?v=20261102-recovery-1">
   <link rel="stylesheet" href="comparison-assets/platform-layout.css?v=20261102-tools-workspace-1">
   <link rel="stylesheet" href="comparison-assets/workspace-ux.css?v=20261102-global-experience-1">
   <link rel="stylesheet" href="comparison-assets/workflow-guide.css?v=20261102-module-flow-1">
@@ -45,11 +45,12 @@
     <div class="sidebar-heading"><div><div class="eyebrow">WORKSPACE</div><h2>比较记录 <span id="historyCount" class="count">0</span></h2></div><button id="refreshHistory" class="icon-button" aria-label="刷新比较记录" title="刷新比较记录"><svg class="icon"><use href="#i-refresh"/></svg></button></div>
     <label class="search-field"><svg class="icon"><use href="#i-search"/></svg><input id="historySearch" type="search" placeholder="搜索比较、视频或算法" aria-label="搜索比较记录"></label>
     <div class="history-filters" role="group" aria-label="比较状态筛选"><button class="active" data-history-filter="all" aria-pressed="true">全部</button><button data-history-filter="active" aria-pressed="false">运行中</button><button data-history-filter="attention" aria-pressed="false">未完整完成</button></div>
-    <p class="sidebar-help hint">按输入保存比较；算法运行进度请到“任务”。</p><div id="history" class="history-list" aria-live="polite"><p class="empty-hint">正在读取比较记录…</p></div>
+    <p class="sidebar-help hint">按输入保存比较；算法运行进度请到“任务”。</p><p id="historyReadStatus" class="history-read-status" role="status" hidden></p><div id="history" class="history-list" aria-live="polite"><p class="empty-hint">正在读取比较记录…</p></div>
     <div class="sidebar-footer"><span class="status-dot"></span><span id="dependencyStatus">读取算法依赖…</span><button id="openImport" class="text-button">导入结果</button></div>
   </aside>
   <button id="sidebarBackdrop" class="sidebar-backdrop" aria-label="收起比较记录" hidden></button>
   <article id="comparisonMain" class="workspace-main" tabindex="-1" aria-label="比较工作区">
+    <div id="comparisonConnection" class="comparison-connection" role="status" aria-live="polite" hidden><span id="comparisonConnectionMessage"></span><button id="retryComparison" type="button">重试连接</button></div>
     <section id="welcome" class="welcome"><div class="welcome-inner"><span class="welcome-mark" aria-hidden="true"><svg class="icon"><use href="#i-layers"/></svg></span><p class="eyebrow">MINT / HAWOR / ACE EGO HAND</p><h2>同一段视频，看清算法差异。</h2><p>统一帧号、同一画面与米制坐标。选择左侧记录继续查看，或创建一次新的比较。</p><button id="welcomeNew" class="primary"><svg class="icon"><use href="#i-plus"/></svg>新建比较</button><div class="welcome-principles"><span>同步 2D / 3D</span><span>完整视频</span><span>结果可追溯</span></div></div></section>
     <section id="workspace" class="workspace" hidden>
       <div class="session-heading"><div class="session-copy"><div class="session-title-row"><h2 id="sessionTitle"></h2><span id="sessionStatus" class="status-badge"></span></div><p id="sampleInfo"></p></div><button id="editComparison" class="quiet-button" title="沿用当前输入和参数创建比较">沿用参数新建</button></div>
@@ -63,7 +64,7 @@
           <button id="toggleParameterPanel" type="button" aria-controls="parameterPanel" aria-expanded="false">帧参数</button><details id="frameInspector" class="inspector-picker"><summary>逐帧诊断</summary><div class="result-popover inspector-popover"><div class="inspector-head"><label>查看结果<select id="inspectRun"></select></label><button id="inspectPrev">上一帧</button><button id="inspectNext">下一帧</button></div><p id="inspectFrameLabel" class="hint"></p><p id="inspectRole" class="hint"></p><canvas id="inspectTrend" aria-label="腕部相机深度趋势"></canvas><div id="jointValues" class="metric-table-scroll"></div><p id="inspectCamera" class="hint"></p></div></details>
         </div>
         <div class="view-toolbar"><div class="segmented" role="group" aria-label="画面布局"><button data-view-mode="split" aria-pressed="true" class="active">2D + 3D</button><button data-view-mode="2d" aria-pressed="false">2D 叠加</button><button data-view-mode="3d" aria-pressed="false">3D 空间</button></div><label class="inline-label" for="space" title="只切换 3D 与腕点数值的坐标；2D 始终投影到原相机">3D 坐标<select id="space"><option value="camera">相机系</option><option value="world">世界系</option></select></label><label class="inline-label" for="geometryStyle">几何<select id="geometryStyle" aria-label="显示几何"><option value="skeleton">骨架</option><option value="mesh">网格</option><option value="mesh_skel">网格 + 骨架</option></select></label><div class="view-options"><label><input id="showBaseline" type="checkbox">叠加基准</label><label><input id="showTrails" type="checkbox">轨迹</label><label title="显示存在性较低但有有限几何的预测"><input id="showAbsent" type="checkbox">低存在性</label></div><button id="resetView" class="icon-button" aria-label="重置三维视角" title="重置三维视角"><svg class="icon"><use href="#i-refresh"/></svg></button><button id="snapshot" class="icon-button" aria-label="保存当前画面" title="保存当前画面"><svg class="icon"><use href="#i-camera"/></svg></button><button id="focusMode" class="icon-button" aria-label="专注查看" aria-pressed="false" title="专注查看（F），Esc 退出"><svg class="icon"><use href="#i-expand"/></svg></button></div>
-        <div class="parameter-workspace"><div id="runs" class="run-grid" data-view-mode="split" role="list" aria-label="联动结果"></div><aside id="parameterPanel" aria-label="当前帧参数" hidden></aside></div>
+        <p id="resultLayoutHint" class="result-layout-hint hint" role="status" hidden></p><div class="parameter-workspace"><div id="runs" class="run-grid" data-view-mode="split" role="list" aria-label="联动结果"></div><aside id="parameterPanel" aria-label="当前帧参数" hidden></aside></div>
         <div class="transport"><div class="playback-buttons"><button id="prev" class="icon-button" aria-label="前一帧" title="前一帧（←）"><svg class="icon"><use href="#i-prev"/></svg></button><button id="play" class="play-button" aria-label="播放"><svg class="icon"><use href="#i-play"/></svg></button><button id="next" class="icon-button" aria-label="后一帧" title="后一帧（→）"><svg class="icon"><use href="#i-next"/></svg></button></div><div class="timeline-control"><input id="timeline" type="range" min="0" max="0" value="0" aria-label="视频帧时间轴"><div class="timeline-meta"><output id="timeLabel">等待输入准备…</output><span id="playbackStatus" class="keyboard-hint" role="status">← → 逐帧 · 空格播放 · F 专注</span></div></div><label class="jump-control" for="frameJump">跳至<input id="frameJump" type="number" min="1" value="1" aria-label="跳转到样本帧"><span>帧</span></label><select id="speed" aria-label="播放速度"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></div>
       </section>
       <section id="panel-metrics" class="workspace-panel scroll-panel" role="tabpanel" aria-labelledby="tab-metrics" hidden>
@@ -167,19 +168,19 @@
     <section class="workflow-guide-terms" aria-label="数据与执行边界"><p><strong>比较、结果与任务：</strong>比较按输入组织；Run 保存一种算法配置的结果；任务记录实际执行过程。</p><p><strong>监督与对照：</strong>算法基准不等于 GT，二维修正不等于三维 GT，伪标签训练需要显式允许。</p><p><strong>明确执行：</strong>此处按钮只进入页面。浏览、配置与预检不提交计算；发布别名不会热替换运行中的模型，也不会改变默认权重。</p></section>
   </div>
 </dialog>
-<script src="comparison-assets/workspace.js?v=20261102-gt-state-1"></script>
+<script src="comparison-assets/workspace.js?v=20261102-recovery-1"></script>
 <script src="comparison-assets/source-browser.js?v=20261101-platform-integrity-2"></script>
 <script src="comparison-assets/result-tools.js?v=20261102-parameters-1"></script>
 <script src="comparison-assets/geometry-tools.js?v=20261102-frame-loading-1"></script>
 <script src="comparison-assets/platform.js?v=20261102-parameters-1"></script>
 <script src="comparison-assets/research.js?v=20261102-default-example-1"></script>
 <script src="comparison-assets/enhancements.js?v=20261102-module-flow-1"></script>
-<script src="comparison-assets/locale.js?v=20261102-gt-state-1"></script>
+<script src="comparison-assets/locale.js?v=20261102-recovery-1"></script>
 <script src="comparison-assets/parameter-math.js?v=20261102-parameters-1"></script>
 <script src="comparison-assets/parameter-summary.js?v=20261102-frame-loading-1"></script>
 <script src="comparison-assets/frame-loading.js?v=20261102-frame-loading-1"></script>
 <script src="comparison-assets/default-example.js?v=20261102-gt-state-1"></script>
-<script src="comparison-assets/app.js?v=20261102-frame-loading-1"></script>
+<script src="comparison-assets/app.js?v=20261102-recovery-1"></script>
 <script src="comparison-assets/workflow-guide.js?v=20261102-module-flow-1"></script>
 <script src="comparison-assets/parameter-panel.js?v=20261102-parameters-1"></script>
 </body></html>

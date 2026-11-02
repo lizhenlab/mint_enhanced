@@ -11,6 +11,18 @@ const fmt=(value,digits=2)=>value===null||value===undefined?'—':Number(value).
 function notify(message,error=true){showNotice(message,error);}
 function download(name,data,type='application/json'){const link=el('a');link.href=URL.createObjectURL(new Blob([data],{type}));link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);}
 function inputLabel(text,input){const label=el('label',text);label.append(input);return label;}
+async function comparisonRead(path,{timeoutMs=15000}={}){
+  // Only bounded read operations use this deadline. Task submission, reports,
+  // metrics and the frame loader retain their own execution/timeout contracts.
+  const controller=new AbortController();let timer;
+  const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{const error=new Error('读取比较信息超时，请检查服务连接后重试。');error.name='TimeoutError';reject(error);controller.abort();},timeoutMs);});
+  try{return await Promise.race([api(path,undefined,{signal:controller.signal}),timeout]);}finally{clearTimeout(timer);}
+}
+function comparisonConnection(message='',{token=state.pollToken,retry=null}={}){
+  if(token!==state.pollToken)return;const host=$('comparisonConnection'),label=$('comparisonConnectionMessage'),button=$('retryComparison');
+  if(!host||!label||!button)return;host.hidden=!message;host.dataset.state=message?'error':'ready';label.textContent=message;button.hidden=!retry;button.disabled=false;
+  button.onclick=retry?async()=>{if(button.disabled)return;button.disabled=true;try{await retry();}catch(error){if(token===state.pollToken)notify(error.message);}finally{if(token===state.pollToken)button.disabled=false;}}:null;
+}
 function selectInput(values,value){const node=el('select');for(const [id,label] of values){const option=el('option',label);option.value=id;node.append(option);}node.value=value;return node;}
 function optionField(container,name,label,values,value){const input=Array.isArray(values)?selectInput(values,value):el('input');input.dataset.option=name;if(!Array.isArray(values)){input.type='number';input.value=value??'';}container.append(inputLabel(label,input));return input;}
 function buildAlgorithms(){
@@ -60,26 +72,48 @@ async function submit(){
   }catch(error){if(!navigation||comparisonNavigationCurrent(navigation)&&$('taskDialog').open)$('formError').textContent=error.message;else if(posted)notify('此前比较提交未确认，可在任务中心核对：'+error.message);}
   finally{state.submitting=false;$('start').disabled=false;}
 }
-async function refreshExisting(){if(!state.comparison)return;const comparison=state.comparison,token=state.pollToken,serial=state.existingSerial=(state.existingSerial||0)+1,old=$('existingRun').value;const data=await api('api/comparisons?limit=100');if(token!==state.pollToken||comparison.id!==state.comparison?.id||serial!==state.existingSerial)return;const select=$('existingRun');select.replaceChildren();const seen=new Set(comparison.run_ids);for(const value of data.comparisons){if(value.sample_id!==comparison.sample_id)continue;for(const run of value.runs){if(seen.has(run.id))continue;seen.add(run.id);const option=el('option',`${run.label} · ${STAGES[run.status]||run.status} · ${run.id.slice(0,8)}`);option.value=run.id;select.append(option);}}if([...select.options].some(option=>option.value===old))select.value=old;}
-async function loadHistory(){const serial=workspaceUI.historySerial=(workspaceUI.historySerial||0)+1,data=await api('api/comparisons?limit=100');if(serial!==workspaceUI.historySerial)return;workspaceUI.history=data.comparisons;renderHistoryList();}
-async function openComparison(id,{replace=false,history=true,keepPlatform=false}={}){
+async function refreshExisting(){if(!state.comparison)return;const comparison=state.comparison,token=state.pollToken,serial=state.existingSerial=(state.existingSerial||0)+1,old=$('existingRun').value;const data=await comparisonRead('api/comparisons?limit=100');if(token!==state.pollToken||comparison.id!==state.comparison?.id||serial!==state.existingSerial)return;const select=$('existingRun');select.replaceChildren();const seen=new Set(comparison.run_ids);for(const value of data.comparisons){if(value.sample_id!==comparison.sample_id)continue;for(const run of value.runs){if(seen.has(run.id))continue;seen.add(run.id);const option=el('option',`${run.label} · ${STAGES[run.status]||run.status} · ${run.id.slice(0,8)}`);option.value=run.id;select.append(option);}}if([...select.options].some(option=>option.value===old))select.value=old;}
+async function loadHistory(){
+  const serial=workspaceUI.historySerial=(workspaceUI.historySerial||0)+1;
+  try{const data=await comparisonRead('api/comparisons?limit=100');if(serial!==workspaceUI.historySerial)return;workspaceUI.history=data.comparisons;const status=$('historyReadStatus');if(status)status.hidden=true;renderHistoryList();}
+  catch(error){if(serial!==workspaceUI.historySerial)return;const status=$('historyReadStatus');if(status){status.hidden=false;status.textContent='比较记录读取失败；点击“刷新比较记录”重试。'+error.message;}throw error;}
+}
+async function openComparison(id,{replace=false,history=true,keepPlatform=false,restorePosition=false}={}){
   const draftSession=workspaceUI.taskDialogSession,restoreDraft=()=>workspaceUI.taskDialogSession===draftSession&&!$('taskDialog').open;
   if(!keepPlatform&&$('platformDialog').open)$('platformDialog').close();
   $('refreshMetrics').disabled=false;
   pause();state.pollToken++;resetFrameLoading();if(typeof resetParameterPanel==='function')resetParameterPanel();resetGeometryCache();state.cache.clear();state.loading.clear();state.cards.clear();state.comparison=null;state.metricsKey='';state.metricsRows=null;state.metricsRowsKey=null;state.metricRequest=null;state.frame=0;state.lastRendered=-1;state.frameBuffer=null;
   $('workspace').setAttribute('aria-busy','true');$('sessionTitle').textContent='正在读取比较任务…';$('sessionStatus').textContent='';$('sampleInfo').textContent='';
   for(const control of ['editComparison','downloadReport','exportVideo','play','prev','next','timeline','frameJump','snapshot'])$(control).disabled=true;
-  $('runs').replaceChildren();$('welcome').hidden=true;$('workspace').hidden=false;setWorkspaceTab('view');const token=state.pollToken;
+  $('runs').replaceChildren();$('welcome').hidden=true;$('workspace').hidden=false;setWorkspaceTab('view');const token=state.pollToken;comparisonConnection('',{token});
+  const previousPoll=state.comparisonPoll;if(previousPoll?.wake)previousPoll.wake();
   document.querySelectorAll('[data-comparison]').forEach(row=>{const active=row.dataset.comparison===id;row.classList.toggle('active',active);if(active)row.setAttribute('aria-current','page');else row.removeAttribute('aria-current');});
-  await refresh(id,token);if(token!==state.pollToken)return;if(restoreDraft())restoreForm();$('workspace').setAttribute('aria-busy','false');$('editComparison').disabled=false;$('downloadReport').disabled=false;
-  if(history){const query=new URLSearchParams(location.search),method=replace||query.get('id')===id?'replaceState':'pushState';if(!keepPlatform)for(const key of ['hub','section','collection','tool_job','tools_tab','workflow','study','research_tab','source_type','task_query','task_status','task_kind'])query.delete(key);query.set('id',id);window.history[method](null,'','/compare?'+query.toString());}
-  try{localStorage.setItem('mint.compare.last',id);}catch(_){}
-  updateHistorySelection();await refreshExisting();if(token!==state.pollToken)return;if(restoreDraft())restoreDatasetForm(state.comparison);poll(id,token);
+  try{
+    await refresh(id,token);if(token!==state.pollToken)return;if(restoreDraft())restoreForm();$('workspace').setAttribute('aria-busy','false');$('editComparison').disabled=false;$('downloadReport').disabled=false;
+    if(history){const query=new URLSearchParams(location.search),method=replace||query.get('id')===id?'replaceState':'pushState';if(!keepPlatform)for(const key of ['hub','section','collection','tool_job','tools_tab','workflow','study','research_tab','source_type','task_query','task_status','task_kind'])query.delete(key);if(!restorePosition)for(const key of ['frame','run'])query.delete(key);query.set('id',id);window.history[method](null,'','/compare?'+query.toString());}
+    try{localStorage.setItem('mint.compare.last',id);}catch(_){}
+    updateHistorySelection();poll(id,token);if(restoreDraft())restoreDatasetForm(state.comparison);
+    // The optional attach-list must not prevent the comparison or its polling
+    // from becoming usable when a separate history read fails.
+    refreshExisting().catch(error=>{if(token===state.pollToken)notify('可加入结果列表读取失败，可在“结果管理”刷新列表重试。'+error.message);});
+  }catch(error){
+    if(token===state.pollToken){$('sessionTitle').textContent='比较读取失败';$('sessionStatus').textContent='连接异常';$('sessionStatus').dataset.state='attention';syncPlaybackReadiness();comparisonConnection('无法读取比较，请检查服务或访问通道。'+error.message,{token,retry:async()=>{const opening=state.pollToken+1;await openComparison(id,{replace,history,keepPlatform,restorePosition});if(opening!==state.pollToken||state.comparison?.id!==id||$('platformDialog').open)return;if(restorePosition||!history){const query=new URLSearchParams(location.search);if(query.get('run'))inspectResult(query.get('run'));if(query.get('frame')&&state.comparison.sample){const frame=comparisonJumpFrame(query.get('frame'),state.comparison.sample.frames);if(frame!==null)seek(frame);}}}});}
+    throw error;
+  }finally{if(token===state.pollToken)$('workspace').setAttribute('aria-busy','false');}
 }
 function restoreForm(){const item=state.comparison?.sample_request;if(!item)return;$('source').value=item.source.path;$('examples').value=[...$('examples').options].some(option=>option.value===item.source.path)?item.source.path:'';$('view').value=item.view;$('targetFps').value=item.target_fps;$('startFrame').value=item.start_frame;$('maxFrames').value=item.max_frames??'';$('camera').value=item.camera?JSON.stringify(item.camera,null,2):'';
   for(const box of $('algorithmOptions').querySelectorAll('.algorithm')){const run=state.comparison.runs.find(r=>r.algorithm===box.dataset.algorithm);const check=box.querySelector('input[type=checkbox]');check.checked=!!run&&!check.disabled;const checkpoints=box.querySelector('[data-selection=checkpoint]'),configuration=box.querySelector('[data-selection=config]');if(checkpoints)checkpoints.value=state.comparison.runs.filter(r=>r.algorithm===box.dataset.algorithm&&r.checkpoint).map(r=>r.checkpoint).join('\n');if(configuration)configuration.value=run?.config||'';if(run)for(const field of box.querySelectorAll('[data-option]'))if(run.options[field.dataset.option]!==undefined&&run.options[field.dataset.option]!==null)field.value=field.dataset.option==='max_gpus'&&run.algorithm!=='mint'&&!run.result?.parallel_stages?8:run.options[field.dataset.option];}}
-async function poll(id,token){while(token===state.pollToken){await new Promise(resolve=>setTimeout(resolve,1000));if(token!==state.pollToken)return;try{await refresh(id,token);if(state.comparison.runs.every(r=>TERMINAL.has(r.status)))return;}catch(error){notify(error.message);}}}
-async function refresh(id,token){if(token!==state.pollToken)return;const serial=state.refreshSerial=(state.refreshSerial||0)+1,value=await api(`api/comparisons/${id}`);if(token!==state.pollToken||serial!==state.refreshSerial)return;state.comparison=value;const revision=comparisonResultRevision(value);if(revision!==state.metricsKey){state.metricsKey=revision;state.metricsRows=null;state.metricsRowsKey=null;state.metricRequest=null;$('refreshMetrics').disabled=false;$('metrics').textContent='打开此页后计算共同有效帧的数值。';if(workspaceUI.tab==='metrics')loadComparisonMetrics().catch(error=>notify(error.message));}if(typeof syncToolsComparison==='function')syncToolsComparison();syncSessionSummary(value);$('sessionTitle').textContent=comparisonDisplayName(value);const sample=value.sample;$('sampleInfo').textContent=sample?`${sample.frames} 帧 · ${sample.width}×${sample.height} · ${fmt(sample.fps,4)} FPS · ${{full:'完整画面',left:'左眼',right:'右眼'}[sample.request.view]||sample.request.view} · 源索引 ${sample.source_frame_indices[0]}…${sample.source_frame_indices.at(-1)}（从 0 开始）`:'共享输入准备中';if(sample){$('timeline').max=sample.frames-1;}
+function poll(id,token){
+  const existing=state.comparisonPoll;if(existing?.id===id&&existing.token===token)return existing.promise;
+  const context={id,token,wake:null},current=()=>token===state.pollToken&&state.comparison?.id===id;state.comparisonPoll=context;
+  context.promise=(async()=>{let failures=0,delay=1000;while(current()){
+    await new Promise(resolve=>{let timer;const wake=()=>{clearTimeout(timer);if(context.wake===wake)context.wake=null;resolve();};context.wake=wake;timer=setTimeout(wake,delay);});
+    if(!current())return;
+    try{await refresh(id,token);if(!current())return;failures=0;delay=1000;comparisonConnection('',{token});if(state.comparison.runs.every(r=>TERMINAL.has(r.status)))return;}
+    catch(error){if(!current())return;failures++;delay=Math.min(30000,1000*2**Math.min(failures,5));comparisonConnection(`连接中断，${delay/1000} 秒后自动重试；已有结果保留。`+error.message,{token,retry:()=>context.wake?.()});}
+  }})().finally(()=>{if(state.comparisonPoll===context)state.comparisonPoll=null;});return context.promise;
+}
+async function refresh(id,token){if(token!==state.pollToken)return;const serial=state.refreshSerial=(state.refreshSerial||0)+1,value=await comparisonRead(`api/comparisons/${id}`);if(token!==state.pollToken||serial!==state.refreshSerial)return;state.comparison=value;const revision=comparisonResultRevision(value);if(revision!==state.metricsKey){state.metricsKey=revision;state.metricsRows=null;state.metricsRowsKey=null;state.metricRequest=null;$('refreshMetrics').disabled=false;$('metrics').textContent='打开此页后计算共同有效帧的数值。';if(workspaceUI.tab==='metrics')loadComparisonMetrics().catch(error=>notify(error.message));}if(typeof syncToolsComparison==='function')syncToolsComparison();syncSessionSummary(value);$('sessionTitle').textContent=comparisonDisplayName(value);const sample=value.sample;$('sampleInfo').textContent=sample?`${sample.frames} 帧 · ${sample.width}×${sample.height} · ${fmt(sample.fps,4)} FPS · ${{full:'完整画面',left:'左眼',right:'右眼'}[sample.request.view]||sample.request.view} · 源索引 ${sample.source_frame_indices[0]}…${sample.source_frame_indices.at(-1)}（从 0 开始）`:'共享输入准备中';if(sample){$('timeline').max=sample.frames-1;}
   for(const [index,run] of value.runs.entries()){let card=state.cards.get(run.id);if(!card){card=createCard(run,index);state.cards.set(run.id,card);$('runs').append(card.node);}updateCard(card,run,sample);}
   syncResultTools(value);updateCombination();render(true);await ensureFrame(state.frame);if(token!==state.pollToken||serial!==state.refreshSerial)return;render(true);
 
@@ -338,7 +372,7 @@ if(typeof initializeDefaultExample==='function')initializeDefaultExample();
   }
   // A navigation made while the request is pending retains its pane and route.
   if(!startupCurrent())return;
-  if(id&&state.comparison?.id!==id){const opening=openComparison(id,{replace:true,keepPlatform:true});startupToken=state.pollToken;await opening;}
+  if(id&&state.comparison?.id!==id){const opening=openComparison(id,{replace:true,keepPlatform:true,restorePosition:true});startupToken=state.pollToken;await opening;}
   query=new URLSearchParams(location.search);if($('taskDialog').open||!startupCurrent())return;
   const hub=query.get('hub');
   if(!$('platformDialog').open&&!hub){if(query.get('run'))inspectResult(query.get('run'));if(query.get('frame'))seek(Math.max(0,Number(query.get('frame'))-1));}

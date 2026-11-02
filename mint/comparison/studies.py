@@ -144,6 +144,8 @@ class StudyManager:
         request = {'kind': kind, 'name': str(name)[:200], 'selections': selections, 'versions': versions,
                    'protocol_id': protocol_id, 'comparison_id': comparison_id, 'split': split, 'cases': cases,
                    'gpu_counts': counts, 'repeats': int(repeats), 'atol_m': float(atol_m)}
+        for case in cases:
+            self._verify_reference(case)
         key = uuid.uuid4().hex
         with self.manager.db() as db:
             db.execute('INSERT INTO studies VALUES(?,?,?,?)', (key, json.dumps(request), json.dumps({
@@ -188,11 +190,20 @@ class StudyManager:
             source = case['sample_request']['source']
             if file_identity(source['path']) != source:
                 raise ValueError('Frozen study source changed')
-            if case.get('reference_run'):
-                folder = self.manager.root / 'runs' / case['reference_run'] / 'result'
-                if file_identity(folder / 'result.json') != case['reference_identity']:
-                    raise ValueError('Frozen reference changed')
-                result_metadata(folder)
+            self._verify_reference(case)
+
+    def _verify_reference(self, case):
+        if not case.get('reference_run'):
+            return
+        reference = self.manager.run(case['reference_run'], summary=True)
+        if not reference['result']:
+            raise ValueError('Frozen reference is unavailable or withdrawn; create a corrected protocol')
+        if reference['sample_id'] != case['sample_id']:
+            raise ValueError('Frozen reference no longer belongs to the study input')
+        folder = self.manager.root / 'runs' / case['reference_run'] / 'result'
+        if file_identity(folder / 'result.json') != case['reference_identity']:
+            raise ValueError('Frozen reference changed')
+        result_metadata(folder)
 
     def _wait(self, key, child):
         while not self.stop.wait(.5) and not self.manager._stopping.is_set():
@@ -224,6 +235,7 @@ class StudyManager:
                         state = self.get(key)
                         if state['status'] == 'cancelling' or self.stop.is_set() or self.manager._stopping.is_set():
                             raise InterruptedError('Study stopped')
+                        self._verify_reference(case)
                         child = state['children'].get(tag)
                         if child is None:
                             selections = [dict(s) for s in request['selections']]
@@ -234,11 +246,15 @@ class StudyManager:
                                 **{k: sample[k] for k in ('view', 'target_fps', 'max_frames', 'start_frame', 'camera')},
                                 comparison_key='study:' + key + ':' + tag, title=request['name'] + ' · ' + tag,
                                 execution={'priority': 'background', 'cache': 'fresh' if count else 'exact'})
-                            if case.get('reference_run'):
-                                self.manager.attach(comp['id'], case['reference_run'])
                             child = {'comparison_id': comp['id'], 'runs': list(comp['run_ids']),
                                      'owned': comp['created_run_ids'], 'started': started}
                             children = state['children']; children[tag] = child; self._set(key, children=children)
+                            if case.get('reference_run'):
+                                try:
+                                    self.manager.attach(comp['id'], case['reference_run'])
+                                except BaseException:
+                                    self._cancel_child(child)
+                                    raise
                         else:
                             with self.manager.db() as db:
                                 stored = db.execute('SELECT payload FROM comparisons WHERE id=?', (child['comparison_id'],)).fetchone()
@@ -320,6 +336,8 @@ class StudyManager:
                 self._set(row['id'], status='interrupted' if self.stop.is_set() or self.manager._stopping.is_set() else 'cancelled',
                           error=str(error), _expected={'launching', 'running', 'cancelling'})
             except BaseException as error:
+                for child in self.get(row['id'])['children'].values():
+                    self._cancel_child(child)
                 self._set(row['id'], status='failed', error=str(error), _expected={'launching', 'running', 'cancelling'})
 
     def task_rows(self):

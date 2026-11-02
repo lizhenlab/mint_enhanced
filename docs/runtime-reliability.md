@@ -84,7 +84,29 @@ Shared/Idle 遵守显存与负载监测。固定片段单次前向协议仍需�
 `python -m mint.service --state PATH --log PATH -- ./run_mint.sh viewer ...` 可监督自己创建的 Viewer 子进程，崩溃后有限次退避重启。
 Viewer CLI 通过 exec 替换自身，监督器直接持有实际 Viewer 的 PID。
 监督进程仅清理自己创建的会话中、UID 和 PID 创建身份匹配的成员；启动器先退出时，也会先回收所属残留进程再重启。
+同一状态文件的规范路径由独占文件锁保护，锁跨越子进程重启、退避等待和清理全过程；第二个监督器会拒绝启动，不覆盖现有状态。可执行文件或日志打开失败会写入 `failed` 和具体错误，不遗留旧的 `running` 进程记录。
 任务窗口检查点在进程退出后仍可恢复。
+
+监督器只能处理自身存活期间的子进程崩溃。整机重启后仍需用户级 systemd 拉起服务；后台 `ssh`/`nohup` 启动本身不提供开机恢复。
+
+服务器已有 `.deployment/viewer.json` 登记命令时，先生成并检查与现有参数一致的 unit：
+
+```bash
+.venv/bin/python scripts/render_user_service.py
+systemd-analyze --user verify .deployment/mint-viewer.service
+mkdir -p ~/.config/systemd/user
+install -m 644 .deployment/mint-viewer.service ~/.config/systemd/user/mint-viewer.service
+systemctl --user daemon-reload
+systemctl --user enable mint-viewer.service
+```
+
+渲染脚本只写项目内 `.deployment/mint-viewer.service`，不安装或停止服务。切换到 unit 时，先确认任务空闲并按登记 PID 和启动身份停止旧监督器，再执行 `systemctl --user start mint-viewer.service`；不要在旧服务仍监听8011时直接叠加启动。unit 保留登记的模型、共享GPU和完整视频参数，使用混合清理模式给监督器最多90秒回收自己所属的进程。
+
+unit 根据 [systemd 命令行规则](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html#Command%20lines)以 `ExecStart=:` 禁止环境变量替换，保留登记参数中的字面 `$`；[WorkingDirectory](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#WorkingDirectory=)使用路径值，不套用命令参数引号。两处均转义 `%` specifier。回归会在有 `systemd-analyze` 的环境中用真实解析器校验包含空格、`%`、`$` 的路径。
+
+用户未登录时需要 `loginctl show-user "$USER" -p Linger` 返回 `Linger=yes`，用户管理器才会在开机时持续运行。`loginctl enable-linger "$USER"` 可能要求该主机的账号管理授权；如果当前账号无法执行，应交由服务器管理员处理，不能把仅登录后自启描述成整机开机自启。
+
+状态与日志使用 `systemctl --user status mint-viewer.service`、`journalctl --user -u mint-viewer.service` 和 `.deployment/mint-supervisor.json` 核对。主动停服用 `systemctl --user stop mint-viewer.service`；仅杀子进程会触发监督器重启。
 
 已有 `.venv` 的服务器可运行：
 
@@ -103,6 +125,14 @@ Viewer CLI 通过 exec 替换自身，监督器直接持有实际 Viewer 的 PID
 公开 GeoCalib、MoGe-2 和 MegaSaM 权重准备脚本保留来源与 SHA-256；权重不随源码上传。
 完整数据生成还需要本地适配的 HaWoR、已编译的 SLAM 扩展及所选数据；完整训练需要相应数据和初始化权重。
 doctor 会逐项报告缺项，`--inspect` 仅构建模型结构，不要求 Stage 1 初始化文件已就绪。
+
+## 参考标注撤销与界面恢复
+
+参考标注撤销按原始文件 SHA-256 登记。更改导入名称、复制文件或选择重新计算，均不能把同一份已撤销 GT 重新当作可用标注。登记时同步隔离已完成的导入别名；服务启动时回填历史撤销记录，并检查从退出标记恢复的结果。原始文件和数值结果保留用于追溯，不删除或覆盖。
+
+校验覆盖单次导入、数据集 GT、批量创建、排队执行、恢复和结果发布。固定协议研究、历史视频导出、仿真工具和资源目录也会报告参考来源失效；等待 GPU 期间失效的渲染不会启动。文件摘要只在接入与迁移边界计算，逐帧浏览使用已有 Run 撤销标记。
+
+比较读取失败时保留明确的连接状态和重试入口；重试恢复原深链接的帧及结果。主动切换比较回到第 1 帧，避免把上一个比较的位置误当成当前输入。轮询失败退避到最多 30 秒，恢复后清除连接提示；可选的附加结果列表读取失败不阻断主视图。
 
 ## 验证
 

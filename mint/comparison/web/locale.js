@@ -181,13 +181,28 @@
   "输入或设置已变化，请重新预检；尚未提交后台任务。": "Inputs or settings changed. Validate again; no background task has been submitted."
 });
   Object.assign(phrases,{'新建批次':'New batch'});
+  Object.assign(phrases,{
+    '重试连接':'Retry connection','比较读取失败':'Comparison unavailable','连接异常':'Connection issue',
+    '读取比较信息超时，请检查服务连接后重试。':'Comparison read timed out. Check the service connection and retry.',
+    '比较记录读取失败；点击“刷新比较记录”重试。':'Comparison history could not be loaded. Click Refresh comparison history to retry.',
+    '无法读取比较，请检查服务或访问通道。':'Comparison could not be loaded. Check the service or connection.',
+    '可加入结果列表读取失败，可在“结果管理”刷新列表重试。':'Available results could not be loaded. Refresh the list in Manage results to retry.'
+  });
+  function recoveryTranslation(text){
+    const retry=text.match(/^连接中断，([\d.]+) 秒后自动重试；已有结果保留。([\s\S]*)$/);
+    if(retry)return `Connection interrupted. Retrying in ${retry[1]} seconds; existing results are retained.`+(retry[2]?' '+(phrases[retry[2]]||retry[2]):'');
+    for(const prefix of ['比较记录读取失败；点击“刷新比较记录”重试。','无法读取比较，请检查服务或访问通道。','可加入结果列表读取失败，可在“结果管理”刷新列表重试。']){
+      if(text.startsWith(prefix)){const detail=text.slice(prefix.length);return phrases[prefix]+(detail?' '+(phrases[detail]||detail):'');}
+    }
+    return null;
+  }
   const states=new WeakMap();let pending=false;
   function apply(){pending=false;document.documentElement.lang=language==='en'?'en':'zh-CN';$('languageSelect').value=language;
     const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let node;
     while(node=walker.nextNode()){
       if(node.parentElement?.closest('script,style,textarea,[data-i18n-ignore],pre,code'))continue;
       let saved=states.get(node);if(!saved||node.nodeValue!==saved.output)saved={source:node.nodeValue};
-      const trimmed=saved.source.trim(),translated=language==='en'?phrases[trimmed]:null;
+      const trimmed=saved.source.trim(),translated=language==='en'?(phrases[trimmed]||recoveryTranslation(trimmed)):null;
       const output=translated?saved.source.replace(trimmed,translated):saved.source;saved.output=output;states.set(node,saved);if(node.nodeValue!==output)node.nodeValue=output;
     }
   }

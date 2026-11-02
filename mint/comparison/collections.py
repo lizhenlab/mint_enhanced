@@ -93,7 +93,7 @@ def _reference_matches(path, expected):
     return (_reference_identity(path) if 'sha256' in expected else file_identity(path)) == expected
 
 
-def validate_collection_reference(reference, frames=None):
+def validate_collection_reference(reference, frames=None, *, manager=None):
     """Reject malformed GT before publishing any inference child."""
     import numpy as np
     from .contracts import validate_geometry
@@ -102,6 +102,10 @@ def validate_collection_reference(reference, frames=None):
         raise ValueError('Reference file is unavailable')
     from zipfile import BadZipFile
     before = _reference_identity(path)
+    if manager is not None:
+        from .reference_validity import assert_reference_import_current
+        assert_reference_import_current(manager, {**reference, 'path': str(path), 'identity': before},
+                                        checksum=before['sha256'])
     try:
         archive = np.load(path, allow_pickle=False)
         if not isinstance(archive, np.lib.npyio.NpzFile):
@@ -221,7 +225,7 @@ class CollectionManager:
                 if item.get('reference'):
                     reference = dict(item['reference'])
                     reference['path'] = str(Path(reference['path']).expanduser().resolve())
-                    reference['identity'] = validate_collection_reference(reference)
+                    reference['identity'] = validate_collection_reference(reference, manager=self.manager)
                     if reference['identity'].get('missing'):
                         raise ValueError('Reference file is unavailable')
                     descriptor['reference'] = reference
@@ -453,6 +457,8 @@ class CollectionManager:
                         if current != descriptor['snapshot']:
                             raise ValueError('Collection input changed; create a new collection')
                         if descriptor.get('reference'):
+                            from .reference_validity import assert_reference_import_current
+                            assert_reference_import_current(self.manager, descriptor['reference'])
                             if not _reference_matches(descriptor['reference']['path'], descriptor['reference']['identity']):
                                 raise ValueError('Reference annotations changed')
                         if items[index].get('comparison_id'):

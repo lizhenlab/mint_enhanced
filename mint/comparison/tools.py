@@ -144,6 +144,12 @@ class RenderTools:
             raise KeyError('Render job not found')
         request = json.loads((path / 'request.json').read_text())
         state = json.loads((path / 'status.json').read_text())
+        if request.get('run_id') and state['status'] in {'queued', 'waiting_gpu', 'running', 'completed'}:
+            try:
+                self._assert_source(request)
+            except (OSError, ValueError, KeyError) as error:
+                return {**request, **state, 'status': 'failed', 'source_invalidated': True, 'url': None,
+                        'error': 'Render source is unavailable or withdrawn: ' + str(error)}
         if state['status'] == 'running' and not process_matches(state.get('pid'), state.get('pid_token'), path / 'request.json'):
             state.update(status='interrupted', error='Rendering process is no longer running')
         if state['status'] == 'completed':
@@ -163,6 +169,11 @@ class RenderTools:
                 else:
                     state['output_integrity'] = 'identity_verified' if state.get('outputs') else 'legacy_presence_and_mapping'
         return {**request, **state, 'url': f'/api/comparison/tools/{job_id}/video' if state['status'] == 'completed' else None}
+
+    def _assert_source(self, request):
+        source = self.manager.run(request['run_id'], summary=True)
+        if not source['result']:
+            raise ValueError(source.get('error') or 'Render source is unavailable or withdrawn')
 
     def history(self, limit=100):
         jobs = []
@@ -276,8 +287,18 @@ class RenderTools:
 
     def _lease(self, request, folder):
         while not self.stop.is_set() and not (folder / 'cancel').exists():
+            self._assert_source(request)
             try:
                 samples = self.probe()
+            except Exception as error:
+                if not (folder / 'cancel').exists():
+                    write_status(folder, {'id': request['id'], 'status': 'waiting_gpu', 'error': str(error), 'updated': time.time()})
+                self.stop.wait(2)
+                continue
+            # A probe can itself take time. Keep source withdrawal outside the
+            # retryable GPU-error handler so an invalid job releases the slot.
+            self._assert_source(request)
+            try:
                 for uuid, gpu in sorted(samples.items(), key=lambda pair: -pair[1].free_mib):
                     if gpu.free_mib < 2048 or gpu.utilization > (35 if request['resource_policy'] == 'shared' else 10):
                         continue
@@ -319,6 +340,7 @@ class RenderTools:
                                 'error': str(error), 'updated': time.time()})
 
     def _execute(self, job, folder):
+        from mint.service import _child_exited, _reap_session
         # The scheduler snapshot may predate another owner completing/cancelling
         # this request. Recheck after the execution lock, before taking a GPU.
         current = self.status(job['id'])
@@ -331,6 +353,7 @@ class RenderTools:
             env.update(PYTHONPATH=str(PROJECT), PYTHONDONTWRITEBYTECODE='1', MINT_MANO_DEVICE='cpu')
             if env.get('MUJOCO_GL') != 'osmesa':
                 uuid, lease, foreign = self._lease(job, folder)
+                self._assert_source(job)
                 # MuJoCo EGL enumerates physical devices, independently of CUDA_VISIBLE_DEVICES.
                 listing = subprocess.check_output(['nvidia-smi', '--query-gpu=index,uuid', '--format=csv,noheader,nounits'], text=True)
                 index = next(line.split(',')[0].strip() for line in listing.splitlines() if uuid in line)
@@ -344,13 +367,15 @@ class RenderTools:
             with file_lock(folder / '.state.lock'), (folder / 'worker.log').open('ab', buffering=0) as log:
                 if (folder / 'cancel').exists():
                     raise InterruptedError('Rendering cancelled before launch')
+                self._assert_source(job)
                 child = subprocess.Popen([str(python), '-m', 'mint.comparison.tool_worker', '--request', str(folder / 'request.json')],
                     cwd=PROJECT, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
                     pass_fds=(lease.file.fileno(),) if lease else ())
                 token = _token(child.pid)
                 atomic_json(folder / 'status.json', {'id': job['id'], 'status': 'running', 'pid': child.pid, 'pid_token': token, 'updated': time.time()})
             cancelled_at = None
-            while child.poll() is None:
+            while not _child_exited(child):
+                self._assert_source(job)
                 if self.stop.is_set() or (folder / 'cancel').exists():
                     (folder / 'cancel').touch()
                     cancelled_at = cancelled_at or time.monotonic()
@@ -363,11 +388,15 @@ class RenderTools:
                 if json.loads((folder / 'status.json').read_text())['status'] == 'running':
                     atomic_json(folder / 'status.json', {'id': job['id'], 'status': 'cancelled' if cancelled_at else 'failed', 'error': 'Renderer exited without a completion marker', 'updated': time.time()})
         finally:
-            if child is not None:
-                from mint.service import _reap_session
-                _reap_session(child, token or '0', grace=3)
-            if lease:
-                lease.release()
+            try:
+                if child is not None:
+                    try:
+                        _reap_session(child, token or '0', grace=3)
+                    finally:
+                        child.wait(timeout=5)
+            finally:
+                if lease:
+                    lease.release()
 
     def close(self):
         self.stop.set()

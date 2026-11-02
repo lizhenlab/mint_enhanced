@@ -34,6 +34,10 @@ def inspect_request(manager, source, selections, *, view='full', target_fps=0, m
         source, view, target_fps, max_frames, start_frame, camera = (resolved[k] for k in
             ('source', 'view', 'target_fps', 'max_frames', 'start_frame', 'camera'))
         if dataset.get('attach_gt'):
+            from .reference_validity import assert_reference_request_current
+            assert_reference_request_current(manager, {'algorithm': 'reference', 'import': {
+                'format': 'lerobot_reference', 'dataset_context': context,
+                'path': context['identity']['parquet']['path'], 'identity': context['identity']['parquet']}})
             selections = [row for row in selections if row.get('algorithm') != 'reference'] + [{'algorithm': 'reference'}]
     from .execution import execution_options
     execution_options(execution)
@@ -131,7 +135,7 @@ def inspect_collection(manager, *, items, selections, options=None, kind='batch'
                 row['errors'].append('量化评测需要显式 GT；无 GT 时请使用批量比较和差异分析')
             if item.get('reference'):
                 try:
-                    identity = validate_collection_reference(item['reference'], row['frames'] or None)
+                    identity = validate_collection_reference(item['reference'], row['frames'] or None, manager=manager)
                     row['reference_identity'] = identity
                     references.append({'index': index, 'identity': identity})
                 except (ValueError, OSError) as error:

@@ -205,7 +205,10 @@ class ComparisonExports:
                     self._write(selected['id'], status='failed', error=str(error), owner_pid=None, owner_token=None)
 
     def _execute(self, export_id):
-        self.status(export_id)  # Validate the path-bearing ID before opening a request.
+        current = self.status(export_id)  # Validate the path-bearing ID before opening a request.
+        if current.get('source_invalidated'):
+            self._write(export_id, status='failed', error=current['error'], owner_pid=None, owner_token=None)
+            return
         with file_lock(self.directory / (export_id + '.state.lock')):
             state = self._read(export_id)
             if state['status'] != 'queued' or self._alive(state):
@@ -234,6 +237,8 @@ class ComparisonExports:
 
     def resume(self, export_id):
         state = self.status(export_id)
+        if state.get('source_invalidated'):
+            raise ValueError(state['error'])
         if state['status'] == 'absent':
             raise KeyError('Export not found')
         if state['status'] == 'completed' or self._alive(state):
@@ -289,12 +294,37 @@ class ComparisonExports:
             raise KeyError('Invalid export ID')
         path = self.directory / (export_id + '.json')
         state = self._read(export_id)
+        if state['status'] != 'absent':
+            try:
+                self._assert_sources(export_id, state)
+            except (OSError, ValueError, KeyError) as error:
+                return {**state, 'status': 'failed', 'source_invalidated': True,
+                        'url': None, 'error': 'Export source is unavailable or withdrawn: ' + str(error)}
         if state['status'] == 'completed':
             if not (self.directory / (export_id + '.mp4')).is_file():
                 state['status'] = 'evicted'
             else:
                 state['url'] = '/api/comparison/exports/' + export_id + '/download'
         return state
+
+    def _assert_sources(self, export_id, state=None):
+        """A cached video cannot outlive a source annotation withdrawal."""
+        request_path = self.directory / (export_id + '.request.json')
+        if request_path.is_file():
+            request = json.loads(request_path.read_text())
+            identity = request['identity']
+            keys = list(identity['runs']) + ([identity['baseline_run']] if identity.get('baseline_run') else [])
+            sample_id = identity['sample']
+        else:
+            # Legacy videos without a durable request keep their recorded run
+            # list when one is available; do not infer it from today's members.
+            state = state or self._read(export_id)
+            keys = list(state.get('run_ids', [])) + ([state['baseline_run']] if state.get('baseline_run') else [])
+            sample_id = None
+        for key in dict.fromkeys(keys):
+            run = self.manager.run(key, summary=True)
+            if not run['result'] or sample_id is not None and run['sample_id'] != sample_id:
+                raise ValueError(run.get('error') or 'Published result is no longer available')
 
     def _render(self, export_id, sample, runs, include_absent, geometry='skeleton', baseline_run=None):
         from mint.visualization.encoding import atomic_video_file
@@ -308,6 +338,7 @@ class ComparisonExports:
             with file_lock(path.with_suffix('.lock')):
                 if self.status(export_id)['status'] == 'completed':
                     return
+                self._assert_sources(export_id)
                 request = json.loads((self.directory / (export_id + '.request.json')).read_text())
                 identity = request['identity']
                 current = [file_identity(self.manager.root / 'runs' / r['id'] / 'result/result.json') for r in runs]
@@ -343,6 +374,7 @@ class ComparisonExports:
                                     canvas[y:y + height + 58, x:x + width] = panel
                                 writer.write(canvas)
                                 if i % 48 == 0:
+                                    self._assert_sources(export_id)
                                     progress(status='rendering', done=i + 1, total=sample['frames'])
                                     if shutil.disk_usage(self.directory).free < budget.minimum_free or destination.exists() and destination.stat().st_size > budget.maximum:
                                         raise OSError('Comparison export reached disk-space reserve or configured quota')
@@ -352,6 +384,7 @@ class ComparisonExports:
                         atomic_video_file(path, render, sample['frames'])
                     finally:
                         frames._mmap.close()
+                self._assert_sources(export_id)
                 progress(status='completed', done=sample['frames'], total=sample['frames'],
                     seconds=time.perf_counter() - started, format='synchronized_2d_overlay_mp4',
                     include_absent=include_absent,

@@ -47,8 +47,15 @@ def annotation_capability(episode):
     raw = all(f'{side}_{key}' in names for side in ('left', 'right')
               for key in ('transl_world', 'orient_world', 'hand_pose', 'kept')) and 'observation.state' in names
     ready = camera and ((mano and 'hand_kept' in names) or keypoints or raw)
+    issue = ''
+    if ready and episode.get('dataset_root'):
+        from .reference_validity import assert_dataset_reference_current
+        try:
+            assert_dataset_reference_current(episode['dataset_root'])
+        except ValueError as error:
+            ready, issue = False, str(error)
     return {'ready': ready, 'camera': camera, 'mesh': mano or raw,
-            'reason': '' if ready else '需要相机标注、手有效掩码及完整 MANO/21 点字段；缺失手形不使用零值伪造 GT'}
+            'reason': '' if ready else issue or '需要相机标注、手有效掩码及完整 MANO/21 点字段；缺失手形不使用零值伪造 GT'}
 
 
 def catalog(root, video_key=None, offset=0, limit=100, episode=None):

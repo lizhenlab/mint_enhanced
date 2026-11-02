@@ -61,7 +61,13 @@ class ComparisonManager:
                 db.execute('ALTER TABLE runs ADD COLUMN priority INTEGER NOT NULL DEFAULT 1')
             db.execute('CREATE INDEX IF NOT EXISTS run_admission ON runs(status,priority,created)')
             db.execute('CREATE TABLE IF NOT EXISTS comparisons (id TEXT PRIMARY KEY, payload TEXT NOT NULL, created REAL NOT NULL)')
+        from .reference_validity import ensure_reference_withdrawals
+        ensure_reference_withdrawals(self)
         self._recover()
+        # Recovery can publish an old exit.json without running a fresh worker.
+        # Backfill withdrawals and quarantine aliases once before serving it.
+        from .reference_validity import quarantine_withdrawn_imports
+        quarantine_withdrawn_imports(self)
         if autostart:
             self._coordinator = threading.Thread(target=self._loop, name='comparison-coordinator', daemon=True)
             self._coordinator.start()
@@ -198,6 +204,9 @@ class ComparisonManager:
                         raise ValueError('HaWoR import requires explicit image_size [width,height] of its native camera grid')
                     entry['image_size'] = grid
                 identity['import'] = entry
+            if algorithm == 'reference':
+                from .reference_validity import assert_reference_request_current
+                assert_reference_request_current(self, identity)
             if intent['cache'] == 'fresh':
                 identity['fresh_nonce'] = digest({'fresh_comparison': comparison_key}) if comparison_key else uuid.uuid4().hex
             run_id = digest(identity)
@@ -342,6 +351,13 @@ class ComparisonManager:
         payload = json.loads(row['payload'])
         if payload['algorithm'] == 'reference' and payload.get('annotation_withdrawal'):
             raise ValueError('This reference was withdrawn: ' + payload['annotation_withdrawal']['reason'])
+        if payload['algorithm'] == 'reference':
+            from .reference_validity import assert_reference_request_current, ReferenceWithdrawn, withdraw_reference_run
+            try:
+                assert_reference_request_current(self, payload)
+            except ReferenceWithdrawn as error:
+                withdraw_reference_run(self, run_id, error.withdrawal)
+                raise
         if payload['algorithm'] == 'camera_combination':
             raise ValueError('Regenerate camera combinations from their complete source results using Generate combination')
         selection = {key: payload['backend'][key] for key in ('checkpoint', 'config') if payload['backend'].get(key)}
@@ -442,6 +458,12 @@ class ComparisonManager:
         leases, child, child_token = [], None, None
         storage = contextlib.ExitStack()
         try:
+            from .reference_validity import assert_reference_request_current, ReferenceWithdrawn, withdraw_reference_run
+            try:
+                assert_reference_request_current(self, request)
+            except ReferenceWithdrawn as error:
+                withdraw_reference_run(self, run_id, error.withdrawal)
+                raise
             with file_lock(directory / '.execution.lock', blocking=False):
                 from .prepare import prepare_sample
                 if cancel():
@@ -490,7 +512,8 @@ class ComparisonManager:
                 self._set(run_id, 'running', worker_pid=child.pid, worker_token=child_token)
                 cancelled_at = None
                 deadline = time.monotonic() + float(os.environ.get('MINT_COMPARISON_JOB_TIMEOUT_SECONDS', '86400'))
-                while child.poll() is None:
+                from mint.service import _child_exited, _reap_session
+                while not _child_exited(child):
                     if cancel() or time.monotonic() > deadline:
                         if time.monotonic() > deadline:
                             (directory / 'cancel').touch()
@@ -501,7 +524,6 @@ class ComparisonManager:
                         if time.monotonic() - cancelled_at > 15:
                             break
                     time.sleep(.25)
-                from mint.service import _reap_session
                 _reap_session(child, child_token or '0', grace=5)
                 child.wait(timeout=10)
                 self._finish_from_disk(run_id, returncode=child.returncode)
@@ -510,12 +532,17 @@ class ComparisonManager:
             self._set(run_id, status, error=str(exc))
             self._write_progress(run_id, stage=status, error=str(exc))
         finally:
-            if child is not None and child.poll() is None:
-                from mint.service import _reap_session
-                _reap_session(child, child_token or '0', grace=5)
-            for lease in leases:
-                lease.release()
-            storage.close()
+            try:
+                if child is not None:
+                    from mint.service import _reap_session
+                    try:
+                        _reap_session(child, child_token or '0', grace=5)
+                    finally:
+                        child.wait(timeout=10)
+            finally:
+                for lease in leases:
+                    lease.release()
+                storage.close()
 
     def _finish_from_disk(self, run_id, returncode=None):
         directory = self.root / 'runs' / run_id
@@ -523,6 +550,12 @@ class ComparisonManager:
             result = json.loads((directory / 'exit.json').read_text())
             status = result['status']
             if status in {'completed', 'partial'}:
+                from .reference_validity import assert_reference_request_current, ReferenceWithdrawn, withdraw_reference_run
+                try:
+                    assert_reference_request_current(self, json.loads(self.row(run_id)['payload']))
+                except ReferenceWithdrawn as error:
+                    withdraw_reference_run(self, run_id, error.withdrawal)
+                    return
                 load_result(directory / 'result')
             self._set(run_id, status, error=result.get('error'))
         except (OSError, ValueError, KeyError) as exc:

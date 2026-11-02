@@ -78,13 +78,57 @@ class ResearchRegistry:
             raise ValueError('Registry record kind mismatch')
         if withdrawal:
             record = self._withdrawn_record(record, json.loads(withdrawal['payload']))
-        return record
+        return self._reference_availability(record)
 
     @staticmethod
     def _withdrawn_record(record, withdrawal):
         """Availability is mutable; the original dataset/protocol payload stays frozen."""
         return {**record, 'availability': 'annotation_withdrawn', 'annotation_withdrawal': withdrawal,
+                'reason': withdrawal.get('reason') or 'Reference annotation was withdrawn',
                 **({'training_ready': False} if record['kind'] == 'dataset' else {})}
+
+    def _reference_availability(self, record):
+        """Invalidate cached scores using metadata, without loading or hashing arrays."""
+        if record['kind'] not in {'protocol', 'evaluation'} or record.get('availability') == 'annotation_withdrawn':
+            return record
+        try:
+            if record['kind'] == 'evaluation':
+                # Read the frozen protocol directly: get(protocol) checks every
+                # split, whereas an evaluation depends only on its own split.
+                with self.manager.db() as db:
+                    row = db.execute("SELECT r.payload,w.payload AS withdrawal FROM research_records r "
+                                     'LEFT JOIN research_withdrawals w ON w.record_id=r.id '
+                                     "WHERE r.id=? AND r.kind='protocol'", (record['protocol_id'],)).fetchone()
+                if not row:
+                    raise ValueError('Frozen evaluation protocol is unavailable')
+                if row['withdrawal']:
+                    return self._withdrawn_record(record, json.loads(row['withdrawal']))
+                entries = [entry for entry in json.loads(row['payload'])['entries'] if entry['split'] == record['split']]
+                if not entries:
+                    raise ValueError('Frozen evaluation split has no reference entries')
+            else:
+                entries = record['entries']
+            if not isinstance(entries, list):
+                raise ValueError('Frozen protocol reference entries are unavailable')
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            return {**record, 'availability': 'missing_or_changed', 'reason': str(error)}
+        problem = None
+        for entry in entries:
+            try:
+                run = self.manager.row(entry['reference_run'])
+                payload = json.loads(run['payload'])
+                withdrawal = payload.get('annotation_withdrawal') if payload['algorithm'] == 'reference' else None
+                if withdrawal:
+                    return self._withdrawn_record(record, withdrawal)
+                if run['status'] not in {'completed', 'partial'}:
+                    raise ValueError('Frozen reference is not a completed published result')
+                directory = self.manager.root / 'runs' / entry['reference_run'] / 'result'
+                if payload['sample_id'] != entry['sample_id'] or file_identity(directory / 'result.json') != entry['reference_identity']:
+                    raise ValueError('Frozen reference identity changed or is unavailable')
+                result_metadata(directory)
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                problem = problem or str(error)
+        return {**record, 'availability': 'missing_or_changed', 'reason': problem} if problem else record
 
     def page(self, kind='artifact', *, query='', offset=0, limit=50):
         if kind not in KINDS:
@@ -99,9 +143,12 @@ class ResearchRegistry:
             withdrawn = {row['record_id']: json.loads(row['payload']) for row in db.execute(
                 'SELECT record_id,payload FROM research_withdrawals WHERE record_id IN (' +
                 ','.join('?' for _ in records) + ')', [record['id'] for record in records])} if records else {}
-        records = [self._withdrawn_record(record, withdrawn[record['id']]) if record['id'] in withdrawn else record for record in records]
+        records = [self._reference_availability(self._withdrawn_record(record, withdrawn[record['id']])
+                   if record['id'] in withdrawn else record) for record in records]
         if kind in {'artifact', 'model'}:
             for record in records:
+                if record.get('availability') == 'annotation_withdrawn':
+                    continue
                 identity = record.get('identity')
                 if identity:
                     record['availability'] = 'available' if file_identity(identity['path']) == identity else 'missing_or_changed'

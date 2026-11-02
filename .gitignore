@@ -152,3 +152,4 @@ docs/dataset-card/
 !tests/test_media_reference_validity.py
 !tests/test_frontend_recovery.cjs
 !tests/test_comparison_process_cleanup.py
+!tests/test_research_reference_validity.py

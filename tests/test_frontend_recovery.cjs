@@ -149,7 +149,7 @@ test('a polling failure from a replaced comparison never leaves an obsolete conn
 });
 
 test('connection recovery controls and dynamic notices translate while retaining server evidence',()=>{
-  const originals=['重试连接','比较读取失败','连接异常','连接中断，8 秒后自动重试；已有结果保留。ECONNRESET /data1/中文目录','无法读取比较，请检查服务或访问通道。读取比较信息超时，请检查服务连接后重试。','比较记录读取失败；点击“刷新比较记录”重试。HTTP 503'];
+  const originals=['重试连接','比较读取失败','连接异常','连接中断，8 秒后自动重试；已有结果保留。ECONNRESET /data1/中文目录','无法读取比较，请检查服务或访问通道。读取比较信息超时，请检查服务连接后重试。','比较记录读取失败；点击“刷新比较记录”重试。HTTP 503','参考标注已撤销：原始 MANO 约定错误','产物暂不可用：Server evidence','查看历史比较'];
   const nodes=originals.map(nodeValue=>({nodeValue,parentElement:{closest:()=>false}})),listeners={};
   const select={value:'',addEventListener:(name,callback)=>listeners[name]=callback};
   const document={body:{},documentElement:{},getElementById:()=>select,createTreeWalker:()=>{let index=0;return {nextNode:()=>nodes[index++]||null};}};
@@ -157,5 +157,106 @@ test('connection recovery controls and dynamic notices translate while retaining
   assert.equal(nodes[0].nodeValue,'Retry connection');assert.equal(nodes[1].nodeValue,'Comparison unavailable');assert.equal(nodes[2].nodeValue,'Connection issue');
   assert.match(nodes[3].nodeValue,/Retrying in 8 seconds/);assert.match(nodes[3].nodeValue,/ECONNRESET \/data1\/中文目录$/);
   assert.match(nodes[4].nodeValue,/Comparison could not be loaded.*Comparison read timed out/);assert.match(nodes[5].nodeValue,/Refresh comparison history.*HTTP 503/);
+  assert.equal(nodes[6].nodeValue,'Reference withdrawn: 原始 MANO 约定错误');assert.equal(nodes[7].nodeValue,'Artifact unavailable: Server evidence');assert.equal(nodes[8].nodeValue,'View comparison history');
   select.value='zh';listeners.change();assert.deepEqual(nodes.map(node=>node.nodeValue),originals);
+});
+
+// Reuse the existing platform DOM fixture without registering its test cases.
+function registryFixture(){
+  const path=require('node:path'),file=require.resolve('./test_module_handoffs.cjs'),text=fs.readFileSync(file,'utf8');
+  const build=vm.runInNewContext(text.slice(text.indexOf('function fixture(){'),text.indexOf('function plain('))+';fixture;',
+    {vm,fs,path,URL,URLSearchParams,structuredClone,__dirname:path.dirname(file)});
+  return build();
+}
+
+test('registry availability blocks every explicit unavailable state without treating capability flags as availability',()=>{
+  const x=registryFixture();
+  assert.equal(x.run('registryRecordAvailable({})'),true);assert.equal(x.run("registryRecordAvailable({availability:'available',status:'failed',ready:false,training_ready:false})"),true);
+  for(const availability of ['annotation_withdrawn','missing_or_changed','future_quarantine',null,'']){
+    x.context.record={availability,annotation_withdrawal:{reason:'Incorrect MANO convention'}};
+    assert.equal(x.run('registryRecordAvailable(record)'),false);assert.throws(()=>x.run('assertRegistryRecordAvailable(record)'),/Incorrect MANO convention/);
+  }
+});
+
+test('registry choices preserve a withdrawn selection with its reason even when its training capability was removed',async()=>{
+  const x=registryFixture();x.get('workflowDataset').value='withdrawn';
+  x.context.api=async()=>({records:[{id:'withdrawn',name:'Old labels',availability:'annotation_withdrawn',training_ready:false,annotation_withdrawal:{reason:'Mean pose missing'}},
+    {id:'changed',availability:'missing_or_changed',training_ready:true,reason:'Checksum changed'},
+    {id:'future',availability:'future_quarantine',training_ready:true,reason:'Review required'},
+    {id:'valid',availability:'available',training_ready:true}]});
+  await x.run("loadRegistryChoices('dataset','workflowDataset',{filter:row=>row.training_ready})");
+  assert.equal(x.get('workflowDataset').value,'withdrawn');
+  const options=x.get('workflowDataset').options;for(const id of ['withdrawn','changed','future'])assert.equal(options.find(option=>option.value===id).disabled,true);
+  assert.equal(options.find(option=>option.value==='valid').disabled,false);assert.match(options.find(option=>option.value==='withdrawn').textContent,/参考标注已撤销.*Mean pose missing/);
+  assert.throws(()=>x.run("assertRegistrySelectionAvailable('workflowDataset')"),/Mean pose missing/);
+});
+
+test('withdrawn registry rows retain history and details while excluding import, training, protocol and model actions',async()=>{
+  const x=registryFixture();x.run("platform.pane='catalog'");x.get('registryKind').value='artifact';x.get('registryQuery').value='';
+  const records=[{id:'artifact',kind:'artifact',run_id:'old-run',importable:true},{id:'dataset',kind:'dataset',native:{},training_ready:true},
+    {id:'model',kind:'model'},{id:'protocol',kind:'protocol'},{id:'evaluation',kind:'evaluation',protocol_id:'p',rows:[{origin:'native',model:{}}]}]
+    .map(row=>({...row,availability:'annotation_withdrawn',reason:'Official reference superseded'}));
+  x.context.api=async()=>({records,total:records.length,offset:0});await x.run('refreshArtifactCatalog()');
+  const rows=x.get('artifactRows').querySelectorAll('tr').slice(1);
+  assert.deepEqual(Array.from(rows,row=>Array.from(row.querySelectorAll('button'),button=>button.textContent)),
+    [['来源详情','查看历史比较'],['来源详情'],['来源详情'],['来源详情'],['来源详情']]);
+  assert.ok(rows.every(row=>/参考标注已撤销.*Official reference superseded/.test(row.textContent)));
+  const inspected=[];x.context.inspectResult=id=>inspected.push(id);x.context.api=async()=>({comparisons:['history']});
+  await rows[0].querySelectorAll('button')[1].onclick();assert.deepEqual(Array.from(x.opened),['history']);assert.equal(inspected.length,0);
+  await rows[0].querySelector('button').onclick();assert.equal(x.get('logDialog').open,true);assert.match(x.get('logText').textContent,/annotation_withdrawn/);
+});
+
+test('unavailable catalog handoffs fail before navigation or submission and report the server withdrawal reason',async()=>{
+  const x=registryFixture();x.context.unavailable={id:'old',availability:'annotation_withdrawn',reason:'Known bad reference',native:{},training_ready:true,status:'reviewed_manifest'};
+  for(const expression of ['importCatalogArtifact(unavailable)','useSavedProtocol(unavailable)','useEvaluationReport(unavailable)',
+    'useEvaluationProtocol(unavailable)','useTrainingDataset(unavailable)','useReviewedDataset(unavailable)','useNativeDataset(unavailable)']){
+    await assert.rejects(x.run(expression),/Known bad reference/);
+  }
+  assert.throws(()=>x.run('useRegisteredModel(unavailable)'),/Known bad reference/);
+  assert.equal(x.requests.length,0);assert.equal(x.opened.length,0);
+});
+
+test('withdrawn selected training data disables preflight and submission while keeping an explanatory summary',async()=>{
+  const x=registryFixture();x.get('workflowKind').value='train';x.get('workflowDataset').value='old';
+  x.context.api=async()=>({records:[{id:'old',name:'Legacy data',training_ready:false,availability:'annotation_withdrawn',reason:'Re-export official GT'}]});
+  await x.run('refreshWorkflowDatasetChoices()');
+  assert.match(x.get('workflowDatasetSummary').textContent,/Legacy data.*参考标注已撤销.*Re-export official GT/);
+  assert.equal(x.get('workflowPreflight').disabled,true);assert.equal(x.get('workflowSubmit').disabled,true);
+  assert.throws(()=>x.run('workflowParameters()'),/Re-export official GT/);
+  x.get('workflowKind').value='diagnostic';x.get('workflowProfile').value='data';x.run('updateWorkflowDatasetSummary()');
+  assert.equal(x.get('workflowPreflight').disabled,false);assert.equal(x.run('workflowParameters().profile'),'data');
+});
+
+test('a completed workflow keeps its historical training view but offers no reuse shortcuts for withdrawn output',async()=>{
+  const x=registryFixture();x.context.api=async()=>({id:'old',native:{},training_ready:true,availability:'annotation_withdrawn',annotation_withdrawal:{reason:'Pose convention corrected'}});
+  await x.run("renderWorkflowNextSteps({id:'finished',request:{kind:'train'},status:'completed',output:{dataset_id:'old'}})");
+  const host=x.get('workflowNextSteps');assert.deepEqual(Array.from(host.querySelectorAll('button'),button=>button.textContent),['查看训练曲线与检查点']);
+  assert.match(host.textContent,/参考标注已撤销.*Pose convention corrected/);
+});
+
+test('training initialization picker retains an unavailable selection with its reason and cannot build a training request',async()=>{
+  const x=registryFixture(),old=x.create('option','Prior model');old.value='old';x.get('workflowInitPicker').append(old);x.get('workflowInitPicker').value='old';
+  x.get('workflowKind').value='train';
+  x.context.api=async url=>url.startsWith('api/comparisons?')?{comparisons:[]}:url.startsWith('api/comparison/workspace?')?{tasks:[]}:
+    {records:[{id:'old',name:'Prior model',path:'/old',availability:'annotation_withdrawn',reason:'Evaluation reference withdrawn'},{id:'valid',path:'/valid',availability:'available'}]};
+  x.context.refreshProductionRunChoices=async()=>{};await x.run('refreshResearchRecordPickers()');
+  const option=x.get('workflowInitPicker').options.find(row=>row.value==='old');assert.equal(option.disabled,true);assert.match(option.textContent,/Evaluation reference withdrawn/);
+  assert.throws(()=>x.run('workflowParameters()'),/Evaluation reference withdrawn/);assert.equal(x.get('workflowPreflight').disabled,true);assert.equal(x.get('workflowSubmit').disabled,true);assert.match(x.get('workflowCheck').textContent,/Evaluation reference withdrawn/);
+  x.get('workflowInitPicker').value='valid';x.run('invalidateWorkflowReadiness()');assert.equal(x.get('workflowPreflight').disabled,false);
+});
+
+test('native sample comparison and training reject all explicit unavailable versions, including retained selections',async()=>{
+  const x=registryFixture();x.get('nativeVersion').value='selected';
+  for(const availability of ['annotation_withdrawn','missing_or_changed','future_quarantine']){
+    x.context.selected={id:'selected',native:{},training_ready:true,availability,reason:'Corrected annotation required'};
+    x.run('nextUI.nativeVersions=[selected];updateNativeProtocol();updateNativeTrainingAction()');
+    assert.equal(x.get('nativeCompare').disabled,true);assert.equal(x.get('nativeUseTraining').disabled,true);
+    assert.match(x.get('nativeProtocolNote').textContent,/Corrected annotation required/);assert.match(x.get('nativeUseTraining').title,/Corrected annotation required/);
+    await assert.rejects(x.run('compareNative()'),/Corrected annotation required/);
+  }
+  assert.equal(x.requests.length,0);assert.equal(x.opened.length,0);
+  x.run("nextUI.nativeVersions=[{id:'selected',native:{},availability:'available',training_ready:true}];updateNativeProtocol();updateNativeTrainingAction()");
+  assert.equal(x.get('nativeCompare').disabled,false);assert.equal(x.get('nativeUseTraining').disabled,false);assert.doesNotMatch(x.get('nativeProtocolNote').textContent,/Corrected annotation required/);
+  x.run("nextUI.nativeVersions=[{id:'selected',native:{},training_ready:false}];updateNativeProtocol();updateNativeTrainingAction()");
+  assert.equal(x.get('nativeCompare').disabled,false);assert.equal(x.get('nativeUseTraining').disabled,true);
 });

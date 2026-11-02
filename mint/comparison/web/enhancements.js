@@ -110,7 +110,8 @@ function updateNativeProtocol(){
   const table=el('table');for(const [label,value]of [['MINT','保持模型自身 FoV 预测'],['HaWoR · Full / Camera',known?'使用数据集内参并按原生相机模型重映射':'使用算法配置焦距或原生默认值'],['ACE · K-free','保持模型自身内参预测'],['ACE · K-given',known?'使用数据集内参':'需要提供已知内参，当前条件下不可运行']]){const tr=el('tr');tr.append(el('th',label),el('td',value));table.append(tr);}host.append(table);
   const choices=[...$('nativeAlgorithms').querySelectorAll('.algorithm')].filter(box=>box.querySelector('input[type=checkbox]')?.checked).map(box=>box.dataset.algorithm);
   const blocked=!known&&choices.includes('ace_kgiven');if(blocked)host.append(el('p','请取消 ACE · K-given，或切换为提供数据集内参。','native-version-warning'));
-  nativeLock('nativeCompare',!nativeSelectedVersion()||blocked||!!nextUI.nativeComparing);
+  const version=nativeSelectedVersion(),unavailable=version&&!registryRecordAvailable(version);if(unavailable)host.append(el('p',registryUnavailableReason(version),'native-version-warning'));
+  nativeLock('nativeCompare',!version?.native||unavailable||blocked||!!nextUI.nativeComparing);
 }
 function updateNativeSample(){
   const row=nativeSelectedVersion(),warning=$('nativeVersionWarning');warning.textContent=nextUI.nativeVersionWarning||'';warning.hidden=!warning.textContent;
@@ -166,7 +167,7 @@ async function refreshNativeVersions(){
   nextUI.nativeVersions=value.records.filter(row=>!!row.native);updateNativeSample();return value;
 }
 async function useNativeDataset(dataset){
-  if(!dataset.native||dataset.availability==='missing_or_changed')throw new Error('此版本不是可用的已准备原生样本');
+  assertRegistryRecordAvailable(dataset);if(!dataset.native)throw new Error('此版本不是可用的已准备原生样本');
   const serial=nextUI.nativeHandoffSerial=(nextUI.nativeHandoffSerial||0)+1;await openPlatform('data');showDataSource('native');const navigation=platform.serial,selected=$('nativeVersion').value,choice=nextUI.nativeVersionChoice||0;
   await refreshNativeVersions();if(serial!==nextUI.nativeHandoffSerial||navigation!==platform.serial||platform.pane!=='data'||!$('platformDialog').open||nextUI.dataSource!=='native'||selected!==$('nativeVersion').value||choice!==(nextUI.nativeVersionChoice||0))return null;
   chooseRegistryRecord('nativeVersion',dataset);if(!(nextUI.nativeVersions||[]).some(row=>row.id===dataset.id))nextUI.nativeVersions=[...(nextUI.nativeVersions||[]),dataset];
@@ -189,6 +190,7 @@ async function pollNativePreparation(){
 }
 async function compareNative(){
   if(nextUI.nativeComparing)return;const row=nativeSelectedVersion();if(!row?.native)throw new Error('请先明确选择本次比较的已准备样本');
+  assertRegistryRecordAvailable(row);
   const selections=nextChoices('nativeAlgorithms'),calibration=$('nativeCalibration').value==='known';
   if(!selections.length)throw new Error('请至少选择一个算法');if(!calibration&&selections.some(value=>value.algorithm==='ace_kgiven'))throw new Error('ACE · K-given 需要提供已知内参，请切换内参条件或取消该算法');
   nextUI.nativeComparing=true;updateNativeProtocol();
@@ -428,7 +430,7 @@ async function refreshResearchRecordPickers(){
   const serial=nextUI.researchPickersSerial=(nextUI.researchPickersSerial||0)+1;
   let records;try{records=await Promise.all([api('api/comparisons?limit=200'),api('api/comparison/workspace?limit=200&query=train'),api('api/comparison/registry/model?limit=200')]);}catch(error){if(serial===nextUI.researchPickersSerial){const select=$('workflowInitPicker');if(!select.value)nextOptions('workflowInitPicker',[],'模型列表读取失败；可使用配置权重或高级路径');}throw error;}finally{if(serial===nextUI.researchPickersSerial)$('workflowInitPicker').disabled=false;}const [history,workspace,models]=records;if(serial!==nextUI.researchPickersSerial)return null;nextUI.researchComparisons=history.comparisons;nextUI.researchTasks=workspace.tasks;nextUI.researchModels=models.records;
   for(const id of ['suiteComparisonPicker','productionComparisonPicker'])preserveResearchChoices(id,history.comparisons.map(row=>[row.id,(row.title||row.id.slice(0,8))+' · '+statusLabel(row.status||'completed')]),id==='suiteComparisonPicker'?'留空使用当前比较':'留空使用比较工作区，或选择其他已有比较');
-  syncTrainingWorkflowPicker();preserveResearchChoices('workflowInitPicker',models.records.filter(row=>row.availability!=='missing_or_changed').map(row=>[row.id,(row.name||row.id.slice(0,8))+' · '+row.path.split('/').pop()]),'使用训练配置中的初始化权重');
+  syncTrainingWorkflowPicker();preserveResearchChoices('workflowInitPicker',models.records.filter(registryRecordAvailable).map(row=>[row.id,(row.name||row.id.slice(0,8))+' · '+row.path.split('/').pop()]),'使用训练配置中的初始化权重');for(const option of $('workflowInitPicker').options){const model=models.records.find(row=>row.id===option.value);if(model&&!registryRecordAvailable(model)){option.disabled=true;option.dataset.unavailableReason=registryUnavailableReason(model);option.textContent=(model.name||model.id.slice(0,8))+' · '+option.dataset.unavailableReason;option.title=option.dataset.unavailableReason;}}lockResearchAction('workflowPreflight',!!workflowRegistryUnavailableReason());if(workflowRegistryUnavailableReason())invalidateWorkflowReadiness();
   if(nextUI.curve&&Array.from($('curveWorkflowPicker').options).some(option=>option.value===nextUI.curve))$('curveWorkflowPicker').value=nextUI.curve;await refreshProductionRunChoices();return {history,workspace,models};
 }
 async function refreshProductionRunChoices(){
@@ -471,4 +473,4 @@ async function returnToAnnotation(){
 
 function productionParameters(){return {run_ids:$('productionRuns').value.split(/\s+/).filter(Boolean),split:$('productionSplit').value,acceleration_limit:Number($('productionAcceleration').value)};}
 
-function updateNativeTrainingAction(){const button=$('nativeUseTraining');if(!button)return;const row=(nextUI.nativeVersions||[]).find(value=>value.id===$('nativeVersion').value);button.disabled=!row?.training_ready;button.title=row?.training_ready?'选择此已验证训练版本，继续配置与预检':'仅完成训练格式转换的官方 Train 版本可用于训练';}
+function updateNativeTrainingAction(){const button=$('nativeUseTraining');if(!button)return;const row=(nextUI.nativeVersions||[]).find(value=>value.id===$('nativeVersion').value);button.disabled=!row?.training_ready||!registryRecordAvailable(row);button.title=registryUnavailableReason(row)||(row?.training_ready?'选择此已验证训练版本，继续配置与预检':'仅完成训练格式转换的官方 Train 版本可用于训练');}

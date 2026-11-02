@@ -65,7 +65,17 @@ class StudyManager:
             row = db.execute('SELECT * FROM studies WHERE id=?', (str(key),)).fetchone()
         if not row:
             raise KeyError('Study not found')
-        return {'id': row['id'], 'request': json.loads(row['payload']), **json.loads(row['state']), 'updated': row['updated']}
+        value = {'id': row['id'], 'request': json.loads(row['payload']), **json.loads(row['state']), 'updated': row['updated']}
+        if value['status'] == 'completed':
+            try:
+                for case in value['request']['cases']:
+                    self._verify_reference(case)
+            except (OSError, ValueError, KeyError) as error:
+                # Keep the original completion and timing rows for audit, but
+                # never present a withdrawn reference as a valid cached study.
+                value.update(status='failed', source_invalidated=True,
+                             error='Study reference is unavailable or withdrawn: ' + str(error))
+        return value
 
     def _set(self, key, *, _expected=None, **changes):
         with self.manager.db() as db:

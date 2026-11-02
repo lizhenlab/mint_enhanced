@@ -11,10 +11,20 @@ function researchOutput(host,value){$(host).textContent=typeof value==='string'?
 function researchSelect(id,label,choices){const field=selectInput(choices,choices[0]?.[0]);field.id=id;const wrapper=inputLabel(label,field);wrapper.setAttribute('for',id);return wrapper;}
 function researchSection(host,title,description){const section=el('section',undefined,'panel');section.append(el('h3',title),el('p',description,'hint'));host.append(section);return section;}
 function researchDetails(value){const dialog=$('logDialog');$('logText').textContent=JSON.stringify(value,null,2);dialog.showModal();}
+function registryRecordAvailable(row){return row?.availability===undefined||row.availability==='available';}
+function registryUnavailableReason(row){
+  if(registryRecordAvailable(row))return '';
+  const status=row.availability==='annotation_withdrawn'?'参考标注已撤销':row.availability==='missing_or_changed'?'文件缺失或变化':'产物暂不可用',reason=row.annotation_withdrawal?.reason||row.reason||row.error;
+  return status+(reason?'：'+reason:'');
+}
+function assertRegistryRecordAvailable(row){if(!registryRecordAvailable(row))throw new Error(registryUnavailableReason(row));}
+function registrySelectionUnavailableReason(id){const select=$(id),option=select&&Array.from(select.options||[]).find(row=>row.value===select.value);return option?.disabled?option.dataset.unavailableReason||'所选产物已不可用，请刷新目录':'';}
+function assertRegistrySelectionAvailable(id){const reason=registrySelectionUnavailableReason(id);if(reason)throw new Error(reason);}
+function workflowRegistryUnavailableReason(){const kind=$('workflowKind').value;return ['train','curate_dataset'].includes(kind)?registrySelectionUnavailableReason('workflowDataset')||(kind==='train'?registrySelectionUnavailableReason('workflowInitPicker'):''):'';}
 async function loadRegistryChoices(kind,id,{filter=()=>true,empty='请选择'}={}){
   const select=$(id),serial=Number(select.dataset.requestSerial||0)+1;select.dataset.requestSerial=String(serial);
   const value=await api(`api/comparison/registry/${kind}?limit=200`);if(String(serial)!==select.dataset.requestSerial)return null;const old=select.value;select.replaceChildren();const blank=el('option',empty);blank.value='';select.append(blank);
-  for(const row of value.records.filter(filter)){const option=el('option',(row.name||row.id.slice(0,12))+' · '+row.id.slice(0,8));option.value=row.id;if(row.availability==='missing_or_changed'){option.disabled=true;option.textContent+=' · 文件缺失或变化';}select.append(option);}if(old&&!Array.from(select.options).some(option=>option.value===old)){const missing=el('option','此前选择已不可用 · '+old.slice(0,12));missing.value=old;missing.disabled=true;select.append(missing);}if(old)select.value=old;return value;
+  for(const row of value.records.filter(row=>filter(row)||row.id===old&&!registryRecordAvailable(row))){const option=el('option',(row.name||row.id.slice(0,12))+' · '+row.id.slice(0,8));option.value=row.id;if(!registryRecordAvailable(row)){option.disabled=true;option.dataset.unavailableReason=registryUnavailableReason(row);option.title=option.dataset.unavailableReason;option.textContent+=' · '+option.title;}select.append(option);}if(old&&!Array.from(select.options).some(option=>option.value===old)){const missing=el('option','此前选择已不可用 · '+old.slice(0,12));missing.value=old;missing.disabled=true;select.append(missing);}if(old)select.value=old;return value;
 }
 async function refreshArtifactCatalog(){
   researchUI.catalogSerial=(researchUI.catalogSerial||0)+1;
@@ -24,11 +34,11 @@ async function refreshArtifactCatalog(){
   if(!current())return null;host.replaceChildren();
   const table=el('table'),head=el('tr');for(const text of ['产物 / 来源','类型与状态','操作'])head.append(el('th',text));table.append(head);
   for(const row of value.records){const tr=el('tr'),name=el('td'),actions=el('td');name.append(el('strong',row.name||row.id.slice(0,12)),el('small',row.source?.path||row.path||row.root||row.run_id||row.id));
-    tr.append(name,el('td',[row.type||row.kind,row.frames?`${row.frames} 帧`:'',row.availability==='missing_or_changed'?'文件缺失或变化':row.status||row.origin||''].filter(Boolean).join(' · ')));
+    const status=el('td',[row.type||row.kind,row.frames?`${row.frames} 帧`:'',registryRecordAvailable(row)?row.status||row.origin||'':''].filter(Boolean).join(' · '));if(!registryRecordAvailable(row))status.append(el('small',registryUnavailableReason(row)));tr.append(name,status);
     actions.append(researchButton('来源详情',()=>researchDetails(row)));
-    if(row.run_id)actions.append(researchButton('打开结果',()=>openCatalogResult(row)));
-    if(row.importable&&row.availability!=='missing_or_changed')actions.append(researchButton('导入已有数值',()=>importCatalogArtifact(row)));
-    if(row.availability!=='missing_or_changed'){
+    if(row.run_id)actions.append(researchButton(registryRecordAvailable(row)?'打开结果':'查看历史比较',()=>openCatalogResult(row)));
+    if(row.importable&&registryRecordAvailable(row))actions.append(researchButton('导入已有数值',()=>importCatalogArtifact(row)));
+    if(registryRecordAvailable(row)){
       if(row.kind==='model')actions.append(researchButton('用于 MINT 比较',()=>useRegisteredModel(row)));
       if(row.kind==='dataset'){
         if(row.native)actions.append(researchButton('用此样本配置比较',()=>useNativeDataset(row)));
@@ -41,7 +51,7 @@ async function refreshArtifactCatalog(){
         if(row.rows?.some(result=>result.origin==='native'&&result.model))actions.append(researchButton('配置模型发布',()=>useEvaluationReport(row)));
       }
     }
-    if(row.kind==='review'&&row.decision==='accepted'){const check=el('input');check.type='checkbox';check.checked=researchUI.accepted.has(row.id);check.onchange=()=>{if(check.checked)researchUI.accepted.add(row.id);else researchUI.accepted.delete(row.id);};actions.append(inputLabel('纳入数据版本',check));}
+    if(row.kind==='review'&&row.decision==='accepted'){const check=el('input');check.type='checkbox';check.disabled=!registryRecordAvailable(row);if(check.disabled)researchUI.accepted.delete(row.id);check.checked=researchUI.accepted.has(row.id);check.title=registryUnavailableReason(row);check.onchange=()=>{if(check.disabled)return;if(check.checked)researchUI.accepted.add(row.id);else researchUI.accepted.delete(row.id);};actions.append(inputLabel('纳入数据版本',check));}
     tr.append(actions);table.append(tr);
   }
   host.append(table);host.setAttribute('aria-busy','false');$('registryPage').textContent=`${value.total} 项 · ${value.total?value.offset+1:0}–${Math.min(value.total,value.offset+value.records.length)}`;$('registryPrevious').disabled=value.offset===0;$('registryNext').disabled=value.offset+value.records.length>=value.total;
@@ -51,26 +61,29 @@ function catalogNavigationCurrent(context){return $('platformDialog').open&&plat
 async function openCatalogResult(row){
   const context=catalogNavigation(),parents=await api(`api/comparison/runs/${row.run_id}/parent`);if(!catalogNavigationCurrent(context))return null;
   if(!parents.comparisons.length)throw new Error('此结果尚未附加到比较');const target=parents.comparisons[0];closePlatformWorkspace();const navigation=platform.serial;await openComparison(target);
-  if(navigation===platform.serial&&!$('platformDialog').open&&state.comparison?.id===target)inspectResult(row.run_id);return target;
+  if(registryRecordAvailable(row)&&navigation===platform.serial&&!$('platformDialog').open&&state.comparison?.id===target)inspectResult(row.run_id);return target;
 }
 async function importCatalogArtifact(row){
+  assertRegistryRecordAvailable(row);
   const context=catalogNavigation(),comparison=await api(`api/comparison/registry/artifacts/${row.id}/import`,{});
   if(!catalogNavigationCurrent(context)){researchSubmissionNotice('已有数值已导入，当前页面已保留；可从比较记录查看。');return comparison;}
   closePlatformWorkspace();await openComparison(comparison.id);return comparison;
 }
 function useRegisteredModel(model,configuration=model.config){
-  if(model.availability==='missing_or_changed')throw new Error('此模型文件缺失或已变化，请重新登记');
+  assertRegistryRecordAvailable(model);
   closePlatformWorkspace();openTaskDialog();const box=$('algorithmOptions').querySelector('[data-algorithm=mint]');
   box.querySelector('input[type=checkbox]').checked=true;const checkpoint=box.querySelector('[data-selection=checkpoint]');checkpoint.value=model.path;box.querySelector('[data-selection=config]').value=configuration?.path||'';
   const details=checkpoint.closest('details');if(details)details.open=true;invalidateComparisonPreflight();if(typeof updateTaskProtocolSummary==='function')updateTaskProtocolSummary();
 }
 function chooseRegistryRecord(id,row){
+  assertRegistryRecordAvailable(row);
   const select=$(id);let option=Array.from(select.options).find(value=>value.value===row.id);
-  if(option?.disabled&&option.textContent.startsWith('此前选择已不可用 · ')&&row.availability!=='missing_or_changed'){option.remove();option=null;}
+  if(option?.disabled&&option.textContent.startsWith('此前选择已不可用 · ')){option.remove();option=null;}
   if(!option){option=el('option',(row.name||row.id.slice(0,12))+' · '+row.id.slice(0,8));option.value=row.id;select.append(option);}
-  if(row.availability==='missing_or_changed'||option.disabled)throw new Error('所选产物已不可用，请刷新目录');select.value=row.id;
+  if(option.disabled)throw new Error(option.dataset.unavailableReason||'所选产物已不可用，请刷新目录');select.value=row.id;
 }
 async function useSavedProtocol(protocol,view='protocol'){
+  assertRegistryRecordAvailable(protocol);
   await openPlatform('research');showResearchView(view);const navigation=platform.serial,id=view==='regression'?'suiteProtocol':'offlineProtocol',selected=$(id).value;
   await loadRegistryChoices('protocol',id);if(navigation!==platform.serial||platform.pane!=='research'||!$('platformDialog').open||nextUI.researchView!==view||selected!==$(id).value)return null;
   chooseRegistryRecord(id,protocol);const splits=[...new Set((protocol.entries||[]).map(entry=>entry.split))];if(splits.length===1&&['validation','test'].includes(splits[0]))$(view==='regression'?'suiteSplit':'offlineSplit').value=splits[0];
@@ -81,9 +94,11 @@ async function useSavedProtocol(protocol,view='protocol'){
   revealPlatformTarget($(id));return protocol;
 }
 async function useEvaluationProtocol(report){
+  assertRegistryRecordAvailable(report);
   const context=catalogNavigation(),protocol=await api('api/comparison/registry/record/'+report.protocol_id);if(!catalogNavigationCurrent(context))return null;return useSavedProtocol(protocol);
 }
 async function useEvaluationReport(report){
+  assertRegistryRecordAvailable(report);
   await openPlatform('research');showResearchView('models');const navigation=platform.serial,selected=$('modelEvaluation').value;
   await loadRegistryChoices('evaluation','modelEvaluation');if(navigation!==platform.serial||platform.pane!=='research'||!$('platformDialog').open||nextUI.researchView!=='models'||selected!==$('modelEvaluation').value)return null;
   chooseRegistryRecord('modelEvaluation',report);updateModelActions();$('modelActionSummary').textContent='已选择评测报告 '+(report.name||report.id)+'；请选择匹配的模型版本并核对发布门槛。';revealPlatformTarget($('modelEvaluation'));return report;
@@ -251,6 +266,7 @@ async function openEvaluationCurrentMetrics(){
 }
 function workflowParameters(){
   const kind=$('workflowKind').value;
+  if(['train','curate_dataset'].includes(kind))assertRegistrySelectionAvailable('workflowDataset');if(kind==='train')assertRegistrySelectionAvailable('workflowInitPicker');
   if(kind==='diagnostic')return {profile:$('workflowProfile').value};
   if(kind==='prepare_training')return {source:$('workflowSource').value,episodes:$('workflowEpisodes').value.split(',').filter(Boolean).map(Number),...($('workflowFrames').value?{max_frames:Number($('workflowFrames').value)}:{})};
   if(kind==='curate_dataset')return {dataset_id:$('workflowDataset').value};
@@ -307,7 +323,7 @@ async function usePublishedModelAlias(alias){
   const selected=value.aliases.find(row=>row.name===alias);if(!selected?.ready)throw new Error('此别名当前不可用；请核对已评测权重和配置文件');
   useRegisteredModel(selected.model,selected.effective_config);researchSubmissionNotice('已为新比较选择别名 '+alias+' 的已评测权重和配置；请核对输入后预检。');return selected;
 }
-async function promoteModel(){const parameters=modelPromotionParameters();if(!parameters.model_id||!parameters.evaluation_id)throw new Error('请选择模型版本与离线评测报告');const signature=JSON.stringify(parameters),value=await api('api/comparison/models/promote',parameters);if(signature===JSON.stringify(modelPromotionParameters())){modelAliasReady(value.alias,'别名 '+value.alias+' 已更新');researchOutput('modelStatus',value);}else researchSubmissionNotice('模型别名更新已完成，当前表单选择已保留。');return value;}
+async function promoteModel(){assertRegistrySelectionAvailable('registeredModel');assertRegistrySelectionAvailable('modelEvaluation');const parameters=modelPromotionParameters();if(!parameters.model_id||!parameters.evaluation_id)throw new Error('请选择模型版本与离线评测报告');const signature=JSON.stringify(parameters),value=await api('api/comparison/models/promote',parameters);if(signature===JSON.stringify(modelPromotionParameters())){modelAliasReady(value.alias,'别名 '+value.alias+' 已更新');researchOutput('modelStatus',value);}else researchSubmissionNotice('模型别名更新已完成，当前表单选择已保留。');return value;}
 async function rollbackModel(){const alias=$('modelAlias').value.trim();if(!alias)throw new Error('请填写要回滚的模型别名');const value=await api('api/comparison/models/rollback',{alias});if(alias===$('modelAlias').value.trim()){modelAliasReady(alias,'别名 '+alias+' 已回滚到上一次通过评测的模型');researchOutput('modelStatus',value);}else researchSubmissionNotice('模型别名 '+alias+' 已回滚，当前别名输入已保留。');return value;}
 function initializeModelPanel(host){
   const model=researchSection(host,'模型版本与发布门槛','选择已登记模型和匹配的原生离线报告，核对门槛后更新别名。默认权重不变，不会热加载；新比较需明确选择已评测别名。');
@@ -350,6 +366,7 @@ function workflowSignature(){return JSON.stringify({kind:$('workflowKind').value
 function invalidateWorkflowReadiness(){
   researchUI.readySignature=null;const button=$('workflowSubmit');if(button){button.dataset.locked='true';button.disabled=true;}
   const check=$('workflowCheck');if(check){check.dataset.ready='pending';check.textContent=$('workflowKind').value==='pipeline'?'参考研究链：需单独配置 MegaSAM / MoGe / GeoCalib 与 HaWoR 资产；正在核对或等待预检。推荐先使用下方原生后端伪标签生产。':'待预检：请确认数据版本、权重、训练配置与 GPU 数量。修改参数后需要重新预检。';}
+  const reason=workflowRegistryUnavailableReason();lockResearchAction('workflowPreflight',!!reason);if(reason&&check)check.textContent=reason;
 }
 async function checkWorkflowReadiness(){
   const signature=workflowSignature(),serial=researchUI.preflightSerial=(researchUI.preflightSerial||0)+1;invalidateWorkflowReadiness();$('workflowCheck').textContent='正在核对依赖和输入，仅预检，不启动计算任务…';
@@ -363,6 +380,8 @@ async function refreshWorkflowDatasetChoices(){
 }
 function updateWorkflowDatasetSummary(){
   const host=$('workflowDatasetSummary');if(!host)return;const id=$('workflowDataset').value,dataset=(researchUI.workflowDatasets||[]).find(row=>row.id===id);
+  const unavailable=['train','curate_dataset'].includes($('workflowKind').value)&&dataset&&!registryRecordAvailable(dataset);lockResearchAction('workflowPreflight',!!workflowRegistryUnavailableReason());if(workflowRegistryUnavailableReason())invalidateWorkflowReadiness();
+  if(unavailable){invalidateWorkflowReadiness();host.textContent=(dataset.name||dataset.id)+' · '+registryUnavailableReason(dataset);return;}
   if(!id){host.textContent=$('workflowKind').value==='curate_dataset'?'请选择已接受复核的筛选清单；导出前仍需预检来源与官方划分。':'未选择数据版本：使用训练配置中的数据；预检会核对实际来源和监督格式。';return;}
   if(!dataset){host.textContent='所选版本的来源尚未读取，请刷新后核对。';return;}
   const pseudo=dataset.label_role==='model_generated_pseudo_labels'||!!dataset.requires_training_opt_in,native=dataset.native?.plan,split=dataset.split||native?.split;
@@ -375,15 +394,17 @@ async function renderWorkflowNextSteps(value){
   if(value.request.kind==='train'){host.append(researchButton('查看训练曲线与检查点',()=>selectTrainingCurve(value.id)));}
   if(value.status!=='completed'||!value.output?.dataset_id)return;
   const dataset=await api('api/comparison/registry/record/'+value.output.dataset_id);if(host.dataset.workflow!==value.id)return;
+  if(!registryRecordAvailable(dataset)){host.append(el('span',registryUnavailableReason(dataset),'hint'));return;}
   if(dataset.native)host.append(researchButton('用此数据版本创建比较',()=>useNativeDataset(dataset)));
   if(dataset.training_ready)host.append(researchButton('用此数据版本配置训练',async()=>{await useTrainingDataset(dataset);}));
   else host.append(el('span','此版本用于评测或尚未具备训练格式，未开放训练捷径。','hint'));
 }
 async function configureWorkflowDataset(dataset,kind){
+  assertRegistryRecordAvailable(dataset);
   const serial=researchUI.datasetHandoffSerial=(researchUI.datasetHandoffSerial||0)+1;await openPlatform('research');const navigation=platform.serial;showResearchView('train');$('workflowKind').value=kind;updateWorkflowFields();const expected=$('workflowDataset').value;await refreshWorkflowDatasetChoices();if($('workflowDataset').value!==expected)return null;if(serial!==researchUI.datasetHandoffSerial||navigation!==platform.serial||platform.pane!=='research'||!$('platformDialog').open||nextUI.researchView!=='train'||$('workflowKind').value!==kind)return null;
   chooseRegistryRecord('workflowDataset',dataset);if(!(researchUI.workflowDatasets||[]).some(row=>row.id===dataset.id))researchUI.workflowDatasets=[...(researchUI.workflowDatasets||[]),dataset];updateWorkflowDatasetSummary();$('workflowPseudoOptIn').checked=false;invalidateWorkflowReadiness();revealPlatformTarget($('workflowDataset'));
   if(kind==='curate_dataset')$('workflowCheck').textContent='已选择复核清单；请先预检再提交相机伪标签导出。复核记录与二维修正不会自动成为三维或 MANO 真值。';
   else if(dataset.label_role==='model_generated_pseudo_labels'||dataset.requires_training_opt_in)$('workflowCheck').textContent='已选择模型伪标签数据；请明确勾选允许伪标签训练，再预检配置。';return dataset;
 }
-async function useTrainingDataset(dataset){if(!dataset.training_ready)throw new Error('此数据版本尚未具备训练格式');return configureWorkflowDataset(dataset,'train');}
-async function useReviewedDataset(dataset){if(dataset.status!=='reviewed_manifest')throw new Error('请选择已接受复核的筛选清单');return configureWorkflowDataset(dataset,'curate_dataset');}
+async function useTrainingDataset(dataset){assertRegistryRecordAvailable(dataset);if(!dataset.training_ready)throw new Error('此数据版本尚未具备训练格式');return configureWorkflowDataset(dataset,'train');}
+async function useReviewedDataset(dataset){assertRegistryRecordAvailable(dataset);if(dataset.status!=='reviewed_manifest')throw new Error('请选择已接受复核的筛选清单');return configureWorkflowDataset(dataset,'curate_dataset');}

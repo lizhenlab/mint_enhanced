@@ -67,3 +67,28 @@ def test_reference_withdrawal_during_child_admission_cancels_only_owned_predicti
         assert all(run['status'] == 'completed' for run in original['runs'] if run['algorithm'] != 'reference')
     finally:
         studies.close()
+
+
+def test_completed_study_reports_reference_withdrawal_without_rewriting_history(manager, tmp_path, monkeypatch):
+    studies, protocol, reference = _setup(manager, tmp_path, monkeypatch)
+    try:
+        job = studies.create(kind='regression', protocol_id=protocol['id'], selections=[{'algorithm': 'mint'}])
+        studies._execute(job['id'])
+        before = studies.get(job['id'])
+        assert before['status'] == 'completed' and before['rows'] and before['evaluation_id']
+        with manager.db() as db:
+            frozen = tuple(db.execute('SELECT payload,state FROM studies WHERE id=?', (job['id'],)).fetchone())
+        _withdraw(manager, reference)
+        monkeypatch.setattr(manager, 'create', lambda *a, **k: pytest.fail('Reading invalidated history must not admit a GPU task'))
+        monkeypatch.setattr(manager, 'resume', lambda *a, **k: pytest.fail('Invalid reference must not resume a GPU task'))
+        current = studies.get(job['id'])
+        assert current['status'] == 'failed' and current['source_invalidated']
+        assert 'withdrawn' in current['error']
+        assert current['rows'] == before['rows'] and current['evaluation_id'] == before['evaluation_id']
+        assert studies.task_rows()[0]['status'] == 'failed'
+        with pytest.raises(ValueError, match='withdrawn'):
+            studies.resume(job['id'])
+        with manager.db() as db:
+            assert tuple(db.execute('SELECT payload,state FROM studies WHERE id=?', (job['id'],)).fetchone()) == frozen
+    finally:
+        studies.close()

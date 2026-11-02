@@ -50,6 +50,36 @@ def camera_fov_schema_errors(root):
     return ['相机数据来源出现循环，无法核对 FoV 顺序；请重新导出数据版本']
 
 
+def mano_training_schema_errors(root):
+    """Keep legacy ARCTIC MANO exports out of MINT's different shape basis.
+
+    Schema conversion must not erase the source's incompatible hand-label
+    convention. Genuine camera-only ARCTIC data has no MANO supervision and is
+    allowed; a conversion chain that contains legacy MANO labels is rejected.
+    """
+    root = Path(root).expanduser().resolve()
+    seen, has_mano, arctic_source = set(), False, None
+    while root not in seen:
+        seen.add(root)
+        info_path, manifest = root / 'meta/info.json', root / 'source_manifest.json'
+        info = json.loads(info_path.read_text()) if info_path.is_file() else {}
+        provenance = json.loads(manifest.read_text()) if manifest.is_file() else {}
+        origin = provenance.get('label_origin', {})
+        has_mano |= info.get('hand_supervision') in {'mano', 'pseudo_mano'}
+        datasets = (origin.get('native_dataset'), provenance.get('native_dataset'), info.get('native_dataset'))
+        if any(str(value).lower() == 'arctic' for value in datasets):
+            arctic_source = root
+        if origin.get('type') != 'existing_declared_camera_annotations' or not origin.get('source'):
+            break
+        root = Path(origin['source']).expanduser().resolve()
+    else:
+        return ['训练标注来源出现循环，无法核对 MANO 约定；请重新准备数据版本']
+    if arctic_source is not None and has_mano:
+        from .native_sources import ARCTIC_TRAINING_ISSUE
+        return [ARCTIC_TRAINING_ISSUE + '：' + str(arctic_source)]
+    return []
+
+
 def camera_normalization_schema_errors(root):
     """Check one data file before admitting a normalized training job to GPUs."""
     import pyarrow.parquet as pq
@@ -175,9 +205,9 @@ def prepare_existing_camera_dataset(source, destination, *, episode_ids=None, ma
     import pyarrow.parquet as pq
     from scipy.spatial.transform import Rotation
     from .datasets import select_episode
-    order_errors = camera_fov_schema_errors(source)
-    if order_errors:
-        raise ValueError('；'.join(order_errors))
+    schema_errors = camera_fov_schema_errors(source) + mano_training_schema_errors(source)
+    if schema_errors:
+        raise ValueError('；'.join(schema_errors))
     # Use the authoritative v3 episode/video resolver; no guessed video filenames.
     from .datasets import catalog
     inventory = catalog(str(source), limit=100)

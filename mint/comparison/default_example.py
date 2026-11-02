@@ -42,7 +42,7 @@ def _frame_indices(value, start):
 
 
 def _identity(record, path):
-    if not isinstance(record, dict) or record.get('missing') or record.get('path') != str(path):
+    if not isinstance(record, dict) or record.get('missing') or record.get('path') != str(path.resolve()):
         raise ValueError('Published example identity is missing or inconsistent')
     if not path.is_file() or file_identity(path) != record:
         raise ValueError('Published example artifact is missing or changed')
@@ -70,6 +70,8 @@ def _checked_native(manager, record):
         raise ValueError('The full example must contain 677 frames')
     if record.get('split') != 'val' or details.get('label_role') != 'official_MANO_annotation':
         raise ValueError('Official validation annotations are required')
+    if details.get('mano_convention') != 'arctic_official_mean_pose_v1':
+        raise ValueError('ARCTIC reference must be rebuilt with the official MANO mean-pose convention')
     if not isinstance(native.get('supervision'), list) or not {'camera', 'mano'}.issubset(native['supervision']):
         raise ValueError('Camera and hand annotations are required')
     if native.get('valid_gt_hand_frames') != [FRAMES, FRAMES] or any(
@@ -87,7 +89,7 @@ def _checked_native(manager, record):
     # The workflow publishes here; do not turn registry metadata into arbitrary
     # filesystem reads or accept a historic validation staging directory.
     folder = (Path(manager.root) / 'native-sources' / native_id).resolve()
-    if folder.parent != (Path(manager.root) / 'native-sources').resolve():
+    if folder.parent != (Path(manager.root) / 'native-sources').resolve() or folder.name != native_id:
         raise ValueError('Example artifacts must belong to the native sample store')
     marker = folder / 'native.json'
     _identity(record.get('identity'), marker)
@@ -103,6 +105,12 @@ def _checked_native(manager, record):
         path = folder / filename
         if path_key and native.get(path_key) != str(path):
             raise ValueError('Example publication paths disagree')
+        if path.resolve() != path:
+            # Corrected annotations may reuse the exact immutable RGB file.
+            # Only this video alias is allowed; labels/maps stay version-owned.
+            target = path.resolve()
+            if filename != 'video.mp4' or target.name != 'video.mp4' or target.parent.parent != folder.parent or not re.fullmatch(r'[0-9a-f]{64}', target.parent.name):
+                raise ValueError('Example video aliases must stay inside the native sample store')
         _identity(native.get(identity_key), path)
     camera = native['camera']
     if not isinstance(camera, dict) or any(

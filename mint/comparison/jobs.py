@@ -304,11 +304,16 @@ class ComparisonManager:
         except (OSError, ValueError, KeyError):
             if row['status'] in {'completed', 'partial'}:
                 row.update(status='failed', error='Completed result files changed or are unavailable; resume to regenerate')
+        withdrawal = payload.get('annotation_withdrawal') if payload['algorithm'] == 'reference' else None
+        if withdrawal:
+            result = None
+            row.update(status='failed', error=withdrawal['reason'])
         return {**row, 'algorithm': payload['algorithm'], 'label': payload['backend']['label'],
                 'checkpoint': payload['backend'].get('checkpoint'), 'config': payload['backend'].get('config'),
                 'execution': payload.get('execution', {'priority':'batch','cache':'exact'}),
                 'options': payload['options'], 'sample_id': payload['sample_id'], 'progress': progress,
-                'result': result, 'imported': bool(payload.get('import'))}
+                'result': result, 'imported': bool(payload.get('import')),
+                **({'annotation_withdrawal': withdrawal} if withdrawal else {})}
 
     def comparison(self, comparison_id, *, include_sample=True):
         with self.db() as db:
@@ -335,6 +340,8 @@ class ComparisonManager:
     def resume(self, run_id):
         row = self.row(run_id)
         payload = json.loads(row['payload'])
+        if payload['algorithm'] == 'reference' and payload.get('annotation_withdrawal'):
+            raise ValueError('This reference was withdrawn: ' + payload['annotation_withdrawal']['reason'])
         if payload['algorithm'] == 'camera_combination':
             raise ValueError('Regenerate camera combinations from their complete source results using Generate combination')
         selection = {key: payload['backend'][key] for key in ('checkpoint', 'config') if payload['backend'].get(key)}
@@ -553,6 +560,8 @@ class ComparisonManager:
 
     def attach(self, comparison_id, run_id):
         run = self.run(run_id)
+        if run.get('annotation_withdrawal'):
+            raise ValueError('This reference was withdrawn: ' + run['annotation_withdrawal']['reason'])
         with self.db() as db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT payload FROM comparisons WHERE id=?', (comparison_id,)).fetchone()

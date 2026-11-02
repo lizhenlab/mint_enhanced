@@ -49,6 +49,7 @@ class ResearchRegistry:
         with manager.db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS research_records (id TEXT PRIMARY KEY, kind TEXT, created REAL, search TEXT, payload TEXT)')
             db.execute('CREATE INDEX IF NOT EXISTS research_record_page ON research_records(kind,created DESC)')
+            db.execute('CREATE TABLE IF NOT EXISTS research_withdrawals (record_id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS model_aliases (name TEXT PRIMARY KEY, model_id TEXT, evaluation_id TEXT, updated REAL)')
             if 'configuration' not in {r[1] for r in db.execute('PRAGMA table_info(model_aliases)')}:
                 db.execute("ALTER TABLE model_aliases ADD COLUMN configuration TEXT NOT NULL DEFAULT '{}'")
@@ -69,12 +70,21 @@ class ResearchRegistry:
     def get(self, key, kind=None):
         with self.manager.db() as db:
             row = db.execute('SELECT payload FROM research_records WHERE id=?', (str(key),)).fetchone()
+            withdrawal = db.execute('SELECT payload FROM research_withdrawals WHERE record_id=?', (str(key),)).fetchone()
         if not row:
             raise KeyError('Registry record not found')
         record = json.loads(row['payload'])
         if kind and record['kind'] != kind:
             raise ValueError('Registry record kind mismatch')
+        if withdrawal:
+            record = self._withdrawn_record(record, json.loads(withdrawal['payload']))
         return record
+
+    @staticmethod
+    def _withdrawn_record(record, withdrawal):
+        """Availability is mutable; the original dataset/protocol payload stays frozen."""
+        return {**record, 'availability': 'annotation_withdrawn', 'annotation_withdrawal': withdrawal,
+                **({'training_ready': False} if record['kind'] == 'dataset' else {})}
 
     def page(self, kind='artifact', *, query='', offset=0, limit=50):
         if kind not in KINDS:
@@ -85,6 +95,11 @@ class ResearchRegistry:
             rows = db.execute('SELECT payload FROM research_records WHERE kind=? AND instr(search,?)>0 ORDER BY created DESC,id LIMIT ? OFFSET ?',
                 (kind, str(query).lower(), limit, offset)).fetchall()
         records = [json.loads(row['payload']) for row in rows]
+        with self.manager.db() as db:
+            withdrawn = {row['record_id']: json.loads(row['payload']) for row in db.execute(
+                'SELECT record_id,payload FROM research_withdrawals WHERE record_id IN (' +
+                ','.join('?' for _ in records) + ')', [record['id'] for record in records])} if records else {}
+        records = [self._withdrawn_record(record, withdrawn[record['id']]) if record['id'] in withdrawn else record for record in records]
         if kind in {'artifact', 'model'}:
             for record in records:
                 identity = record.get('identity')
@@ -267,6 +282,8 @@ class ResearchRegistry:
         for key, group in groups.items():
             metrics, failures, paired, total_gt, per_input = [], 0, 0, 0, []
             for sample_id, entry in entries.items():
+                if not self.manager.run(entry['reference_run'], summary=True)['result']:
+                    raise ValueError('Frozen reference is unavailable or withdrawn; create a corrected protocol')
                 reference = self.manager.root / 'runs' / entry['reference_run'] / 'result'
                 if file_identity(reference / 'result.json') != entry['reference_identity']:
                     raise ValueError('Frozen reference changed')
@@ -386,6 +403,8 @@ class ResearchRegistry:
         for entry in protocol['entries']:
             if entry['split'] != evaluation['split']:
                 continue
+            if not self.manager.run(entry['reference_run'], summary=True)['result']:
+                raise ValueError('Frozen reference is unavailable or withdrawn; create a corrected protocol')
             reference = self.manager.root / 'runs' / entry['reference_run'] / 'result'
             if file_identity(reference / 'result.json') != entry['reference_identity'] or file_identity(entry['sample_request']['source']['path']) != entry['sample_request']['source']:
                 raise ValueError('Frozen protocol source or reference changed after evaluation')
@@ -432,8 +451,25 @@ class ResearchRegistry:
             tested = [v.get('inference_configuration') for v in evaluation['rows'] if v.get('model') == model['identity'] and v.get('origin') == 'native']
             available = (file_identity(model['path']) == model['identity'] and bool(configuration) and
                          not configuration.get('missing') and file_identity(configuration['path']) == configuration)
+            withdrawn_reason = None
+            try:
+                protocol = self.get(evaluation['protocol_id'], 'protocol')
+                for entry in protocol['entries']:
+                    if entry['split'] != evaluation.get('split'):
+                        continue
+                    reference = json.loads(self.manager.row(entry['reference_run'])['payload'])
+                    withdrawal = reference.get('annotation_withdrawal') if reference['algorithm'] == 'reference' else None
+                    if withdrawal:
+                        withdrawn_reason = 'Evaluation reference was withdrawn: ' + withdrawal['reason']
+                        break
+            except KeyError:
+                # Preserve legacy alias availability behavior when its older
+                # registry records lack a retrievable protocol; only an actual
+                # annotation withdrawal adds this new gate.
+                pass
             output.append({**record, 'model': model, 'effective_config': configuration,
-                'ready': available and inference_configuration(configuration['path'], model['path']) in tested})
+                'ready': not withdrawn_reason and available and inference_configuration(configuration['path'], model['path']) in tested,
+                **({'reason': withdrawn_reason} if withdrawn_reason else {})})
         return output
 
     def rollback(self, alias):

@@ -24,6 +24,9 @@ from .normalizers import finish_geometry
 
 ADAPTERS = ('egodex', 'dexycb', 'arctic')
 SPLITS = {'egodex': ['train', 'test'], 'dexycb': ['train', 'val', 'test'], 'arctic': ['train', 'val', 'test']}
+ARCTIC_MANO_CONVENTION = 'arctic_official_mean_pose_v1'
+ARCTIC_TRAINING_ISSUE = ('ARCTIC 官方左手 MANO shape 基与 MINT 解码器不同；'
+                         '当前不能导出为 MINT MANO 训练监督，请仅准备参考评测数据')
 EGO_JOINTS = ['Hand'] + ['Thumb' + v for v in ('Knuckle', 'IntermediateBase', 'IntermediateTip', 'Tip')]
 EGO_JOINTS += [finger + 'Finger' + part for finger in ('Index', 'Middle', 'Ring', 'Little')
                for part in ('Knuckle', 'IntermediateBase', 'IntermediateTip', 'Tip')]
@@ -107,7 +110,8 @@ def dataset_catalog(root='/dataset'):
         supported = bool(adapter and working and path.is_dir() and row.get('status') != 'duplicates_removed')
         format_ready, format_issue = _format_presence(adapter, path) if supported else (None, '')
         result.append({**row, 'adapter': adapter, 'available': path.is_dir(), 'native_import': supported,
-                       'splits': SPLITS.get(adapter, []), 'training_export': adapter in {'egodex', 'arctic'},
+                       'splits': SPLITS.get(adapter, []), 'training_export': adapter == 'egodex',
+                       'training_export_issue': ARCTIC_TRAINING_ISSUE if adapter == 'arctic' else '',
                        'format_ready': format_ready, 'format_issue': format_issue,
                        'verification_level': 'directory_and_format_presence', 'full_content_verified': False,
                        'status_detail': 'Native adapter available' if supported else
@@ -199,6 +203,8 @@ def source_plan(dataset, root, sequence, *, split='test', start_frame=0, max_fra
         raise ValueError('Training conversion requires the official train partition')
     if training and dataset == 'dexycb':
         raise ValueError('This DexYCB adapter provides camera-frame joint GT, not a world trajectory/MANO training dataset')
+    if training and dataset == 'arctic':
+        raise ValueError(ARCTIC_TRAINING_ISSUE)
     if isinstance(start_frame, bool) or int(start_frame) != start_frame or isinstance(max_frames, bool):
         raise ValueError('Frame counts must be integers')
     if max_frames not in (None, '') and int(max_frames) != max_frames:
@@ -371,9 +377,42 @@ def _dex(plan, folder, cancel, progress):
         'invalid_label_frames': int((~valid.any(axis=1)).sum())}, None
 
 
+def _arctic_mano(trans, rot, local_pose, betas, is_right, *, cancelled=lambda: False):
+    """Decode the official ARCTIC convention without changing MINT's decoder.
+
+    ARCTIC's common/body_models.py uses MANO(use_pca=False,
+    flat_hand_mean=False), with the original left shape basis. MINT's shared
+    MANOLayer takes absolute rotation matrices and flips the left shape basis;
+    passing the raw mean-relative ARCTIC pose to it changes both annotations.
+    Use a fresh, unmodified layer and add its mean exactly once before rotation
+    conversion. This dataset preparation stays on CPU and does not populate the
+    renderer's model/device cache.
+    """
+    import torch
+    from mint.visualization import mano
+    model = mano._get_mano_class()(**mano._mano_cfg(is_right),
+                                    use_pca=False, flat_hand_mean=False).cpu().eval()
+    absolute_pose = np.asarray(local_pose, np.float32) + model.hand_mean.detach().cpu().numpy()[None]
+    trans, rot, betas = (np.asarray(value, np.float32) for value in (trans, rot, betas))
+    batch = max(1, int(os.environ.get('MINT_MANO_BATCH_SIZE', '128')))
+    vertices, joints = [], []
+    for start in range(0, len(trans), batch):
+        if cancelled():
+            raise InterruptedError('Native label reading cancelled')
+        end = start + batch
+        with torch.no_grad():
+            output = model(
+                global_orient=mano._aa_to_rotmat(torch.from_numpy(rot[start:end])).reshape(-1, 1, 3, 3),
+                hand_pose=mano._aa_to_rotmat(torch.from_numpy(absolute_pose[start:end]).reshape(-1, 3)).reshape(-1, 15, 3, 3),
+                betas=torch.from_numpy(betas[start:end]), transl=torch.from_numpy(trans[start:end]), pose2rot=False)
+        vertices.append(output.vertices.detach().cpu().numpy())
+        joints.append(output.joints.detach().cpu().numpy())
+    return np.concatenate(vertices), np.concatenate(joints), absolute_pose
+
+
 def _arctic(plan, folder, cancel, progress):
     import cv2
-    from mint.visualization import mano, geometry
+    from mint.visualization import geometry
     from scipy.spatial.transform import Rotation
     root = Path(plan['root']); sequence = plan['sequence']; subject = sequence.split('/')[0]
     raw = root / 'data/raw_seqs'
@@ -399,11 +438,12 @@ def _arctic(plan, folder, cancel, progress):
     for slot, side in enumerate(('left', 'right')):
         value = data[side]; beta = np.broadcast_to(np.asarray(value['shape']).reshape(1, 10), (n, 10)).copy()
         world_rot = np.asarray(value['rot'])[ids]; local_pose = np.asarray(value['pose'])[ids]
-        v_world, j_world = mano.run_mano(np.asarray(value['trans'])[ids], world_rot, local_pose, beta, slot == 1)
+        v_world, j_world, absolute_pose = _arctic_mano(
+            np.asarray(value['trans'])[ids], world_rot, local_pose, beta, slot == 1, cancelled=cancel)
         joints[:, slot] = np.einsum('tij,tkj->tki', R, j_world[:, :21]) + t[:, None]
         vertices[:, slot] = np.einsum('tij,tkj->tki', R, v_world) + t[:, None]
         orient = R @ Rotation.from_rotvec(world_rot).as_matrix()
-        pose_encoded = local_pose.copy()
+        pose_encoded = absolute_pose.copy()
         if slot == 0:
             pose_encoded[:, 1::3] *= -1; pose_encoded[:, 2::3] *= -1
         local_rot = Rotation.from_rotvec(pose_encoded.reshape(-1, 3)).as_matrix().reshape(n, 15, 3, 3)
@@ -421,11 +461,15 @@ def _arctic(plan, folder, cancel, progress):
     return arrays, K, numbers, 30., target_hw, {'label_role': 'official_MANO_annotation', 'ioi_offset': offset,
         'pose_frame_indices': ids.tolist(), 'distortion_policy': 'OpenCV rational undistortion into centred virtual pinhole',
         'original_dist8': np.asarray(ego['dist8']).tolist(), 'source_intrinsics': K_source.tolist(),
-        'source_hw': list(source_hw), 'camera_frame_rotation': 'identity'}, hands
+        'source_hw': list(source_hw), 'camera_frame_rotation': 'identity',
+        'mano_convention': ARCTIC_MANO_CONVENTION, 'mint_mano_training_compatible': False,
+        'training_export_issue': ARCTIC_TRAINING_ISSUE}, hands
 
 
 def _prepare_native(plan, directory, *, cancelled=lambda: False, progress=lambda **_: None):
     """Publish only after pixels, labels, calibration and source checks pass."""
+    if plan['dataset'] == 'arctic' and plan['training']:
+        raise ValueError(ARCTIC_TRAINING_ISSUE)
     directory = Path(directory); directory.mkdir(parents=True, exist_ok=True)
     for record in plan['files']:
         if file_identity(record['path']) != record:
@@ -497,6 +541,10 @@ def prepare_native(plan, directory, *, cancelled=lambda: False, progress=lambda 
         marker = directory / 'native.json'
         if marker.is_file():
             value = json.loads(marker.read_text())
+            if plan.get('dataset') == 'arctic' and value.get('details', {}).get('mano_convention') != ARCTIC_MANO_CONVENTION:
+                raise ValueError('旧版 ARCTIC 参考姿态转换有误，请重新准备数据版本')
+            if plan.get('dataset') == 'arctic' and plan.get('training'):
+                raise ValueError(ARCTIC_TRAINING_ISSUE)
             if value['plan'] != plan or any(file_identity(r['path']) != r for r in plan['files']):
                 raise ValueError('Native dataset version changed')
             for key in ('video_identity', 'reference_identity'):

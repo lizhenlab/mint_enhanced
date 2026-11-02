@@ -38,6 +38,7 @@ def store(tmp_path):
         camera = {'K': [[578., 0., 336.], [0., 578., 240.], [0., 0., 1.]],
                   'width': 672, 'height': 480, 'source': 'arctic native calibrated/rectified camera'}
         native = {'id': native_id, 'plan': plan, 'details': {'label_role': 'official_MANO_annotation',
+                  'mano_convention': 'arctic_official_mean_pose_v1',
                   'ioi_offset': 1, 'pose_frame_indices': list(range(frames))},
                   'frames': frames, 'fps': 30., 'width': 672, 'height': 480, 'camera': camera,
                   'source': str(folder / 'video.mp4'), 'reference': str(folder / 'reference.npz'),
@@ -105,6 +106,8 @@ def test_no_prepared_sample_returns_unavailable_without_executable_fields(store)
     {'mutate': lambda n: n['plan'].update(start_frame=True)},
     {'mutate': lambda n: n['plan'].update(training=True)},
     {'mutate': lambda n: n['details'].update(label_role='model_generated_pseudo_labels')},
+    {'mutate': lambda n: n['details'].pop('mano_convention')},
+    {'mutate': lambda n: n['details'].update(mano_convention='matrix_layer_without_hand_mean')},
     {'mutate': lambda n: n.update(valid_gt_hand_frames=[676, 677])},
     {'mutate': lambda n: n.update(native_frame_indices=list(range(677)))},
     {'mutate': lambda n: n.update(native_frame_indices=[float(i) for i in range(1, 678)])},
@@ -168,6 +171,59 @@ def test_native_publication_cannot_be_redirected_to_another_path(store, tmp_path
     record = store.create()
     record['native']['source'] = str(tmp_path / 'unrelated.mp4')
     assert not inspect(store)['available']
+
+
+def test_corrected_reference_can_reuse_immutable_native_video_without_changing_source_identity(store):
+    from mint.comparison.contracts import source_request
+    original = store.create(revision=0)
+    target = Path(original['native']['source'])
+
+    def reuse_video(native):
+        alias = Path(native['source'])
+        alias.unlink()
+        alias.symlink_to(target)
+        native['video_identity'] = file_identity(alias)
+
+    corrected = store.create(revision=1, mutate=reuse_video)
+    value = inspect(store)
+    assert value['available'] and value['dataset_id'] == corrected['id']
+    assert source_request(value['source'], camera=value['camera'])['id'] == source_request(
+        original['native']['source'], camera=original['native']['camera'])['id']
+    assert corrected['native']['reference'] != original['native']['reference']
+    target.write_bytes(b'changed RGB')
+    assert not inspect(store)['available']
+
+
+@pytest.mark.parametrize('filename', ['video.mp4', 'reference.npz', 'native-frame-map.npz'])
+def test_external_aliases_never_become_the_default(store, tmp_path, filename):
+    target = tmp_path / 'external' / filename
+    target.parent.mkdir()
+    target.write_bytes(b'external')
+
+    def redirect(native):
+        alias = Path(native['source']).parent / filename
+        alias.unlink()
+        alias.symlink_to(target)
+        native[{'video.mp4': 'video_identity', 'reference.npz': 'reference_identity',
+                'native-frame-map.npz': 'frame_map_identity'}[filename]] = file_identity(alias)
+
+    store.create(mutate=redirect)
+    assert not inspect(store)['available']
+
+
+@pytest.mark.parametrize('filename', ['reference.npz', 'native-frame-map.npz'])
+def test_reference_and_frame_map_aliases_are_rejected_even_inside_native_store(store, filename):
+    original = store.create(revision=0)
+    target = Path(original['native']['source']).parent / filename
+
+    def redirect(native):
+        alias = Path(native['source']).parent / filename
+        alias.unlink()
+        alias.symlink_to(target)
+        native['reference_identity' if filename == 'reference.npz' else 'frame_map_identity'] = file_identity(alias)
+
+    store.create(revision=1, mutate=redirect)
+    assert inspect(store)['dataset_id'] == original['id']
 
 
 @pytest.mark.parametrize('change', [lambda r: r.update(native=[]),

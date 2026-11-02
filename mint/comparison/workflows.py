@@ -110,6 +110,8 @@ class WorkflowManager:
         if kind == 'prepare_training':
             from .datasets import dataset_info
             root, info, cameras = dataset_info(p.get('source', ''))
+            from .training_data import mano_training_schema_errors
+            errors.extend(mano_training_schema_errors(root))
             p['source'] = str(root)
             snapshots['source'] = file_identity(root / 'meta/info.json')
             from .datasets import select_episode, annotation_identity
@@ -185,8 +187,9 @@ class WorkflowManager:
                         errors.append('MANO 训练必须使用实际 MANO 参数标注的数据版本：' + str(root))
                 if (root / 'meta/info.json').is_file():
                     info = json.loads((root / 'meta/info.json').read_text())
-                    from .training_data import training_label_role, camera_fov_schema_errors
+                    from .training_data import training_label_role, camera_fov_schema_errors, mano_training_schema_errors
                     errors.extend(camera_fov_schema_errors(root))
+                    errors.extend(mano_training_schema_errors(root))
                     if training_label_role(root, info) == 'model_generated_pseudo_labels' and not cfg.get('data', {}).get('allow_pseudo_labels', False):
                         errors.append('模型伪标签需要显式允许 allow_pseudo_labels；不能当作实际 GT：' + str(root))
                 provenance_path = root / 'source_manifest.json'

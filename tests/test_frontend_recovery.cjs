@@ -260,3 +260,82 @@ test('native sample comparison and training reject all explicit unavailable vers
   x.run("nextUI.nativeVersions=[{id:'selected',native:{},training_ready:false}];updateNativeProtocol();updateNativeTrainingAction()");
   assert.equal(x.get('nativeCompare').disabled,false);assert.equal(x.get('nativeUseTraining').disabled,true);
 });
+
+function trainingCurveFixture(){
+  const x=registryFixture(),draws=[];
+  x.context.updateDiagnosticReturnLinks=()=>{};x.context.revealPlatformTarget=()=>{};
+  x.run("nextUI.researchView='curves';curvePanel()");
+  x.get('trainingCurve').getContext=()=>new Proxy({}, {get:(_,key)=>(...args)=>draws.push([key,...args])});
+  return {...x,draws};
+}
+function trainingCurves(id,{points=[],checkpoints=[],status='completed',error=null}={}){
+  return {workflow_id:id,status,points,checkpoints,error,available_points:points.length,attempts:points.length?['1']:[],progress:{done:2,total:3}};
+}
+function trainingTask(id){return {id,kind:'workflow',source:'train',label:'Task '+id,status:'completed'};}
+
+test('curve task selector shows an empty state, loads the latest training automatically and respects a deliberate clear',async()=>{
+  const x=trainingCurveFixture(),calls=[];let tasks=[];
+  x.context.api=async url=>{calls.push(url);return url.includes('/workspace?')?{tasks}:trainingCurves('latest');};
+  await x.run('loadTrainingWorkflowChoices()');
+  assert.deepEqual(calls,['api/comparison/workspace?kind=workflow&source=train&limit=200']);
+  assert.match(x.get('curveTaskState').textContent,/暂无训练任务/);assert.equal(x.get('curveOpenTrain').hidden,false);
+  assert.equal(x.get('curveMetricPanel').hidden,true);assert.equal(x.get('curveCheckpointPanel').hidden,true);
+  tasks=[trainingTask('latest'),trainingTask('older'),{id:'other',kind:'workflow',source:'diagnostic',label:'Diagnostic'}];
+  await x.get('curveRefreshTasks').onclick();await flush();
+  assert.equal(x.get('curveWorkflowPicker').value,'latest');assert.match(x.get('curveSummary').textContent,/Task latest/);
+  assert.match(x.get('curveEmpty').textContent,/尚无优化器步骤记录/);assert.equal(x.get('curveMetricPanel').hidden,true);
+  assert.equal(x.get('curveCheckpointPanel').hidden,false);assert.doesNotMatch(x.get('curveWorkflowPicker').textContent,/Diagnostic/);
+  await x.run('selectTrainingCurve(null)');await x.run('loadTrainingWorkflowChoices()');
+  assert.equal(x.get('curveWorkflowPicker').value,'');assert.equal(x.get('curveRefresh').disabled,true);
+  assert.equal(x.get('curveCheckpointPanel').hidden,true);assert.equal(calls.filter(url=>url.endsWith('/curves')).length,1);
+});
+
+test('the curve picker never replaces a deep link or a newer list request, and list failures have a local retry',async()=>{
+  const x=trainingCurveFixture(),older=deferred(),newer=deferred();let reads=0;
+  x.location.href='http://localhost/compare?hub=research&research_tab=curves&workflow=linked';
+  x.location.search=new URL(x.location.href).search;
+  x.context.api=()=>reads++?newer.promise:older.promise;
+  const first=x.run('loadTrainingWorkflowChoices()'),second=x.run('loadTrainingWorkflowChoices()');
+  newer.resolve({tasks:[trainingTask('recent')]});await second;older.reject(Error('Late failure'));assert.equal(await first,null);
+  assert.equal(x.run('nextUI.curve'),null);assert.doesNotMatch(x.get('curveTaskState').textContent,/Late failure/);
+  x.context.api=async()=>{throw Error('Network unavailable\nInternal trace');};await x.get('curveRefreshTasks').onclick();
+  assert.equal(x.get('curveTaskState').dataset.state,'error');assert.match(x.get('curveTaskState').textContent,/Network unavailable/);
+  assert.doesNotMatch(x.get('curveTaskState').textContent,/Internal trace/);assert.equal(x.get('curveRefreshTasks').disabled,false);
+  assert.ok(x.get('curveWorkflowPicker').options.some(row=>row.value==='recent'));assert.equal(x.errors.length,0);
+});
+
+test('curve loading coalesces repeated reads, ignores stale failures and recovers in place with a single-point chart',async()=>{
+  const x=trainingCurveFixture(),older=deferred(),newer=deferred(),calls=[];
+  x.context.api=url=>{calls.push(url);return url.includes('/old/')?older.promise:newer.promise;};
+  const first=x.run("selectTrainingCurve('old')"),second=x.run("selectTrainingCurve('new')");
+  const same=x.run('refreshCurves()');assert.equal(calls.length,2);
+  newer.resolve(trainingCurves('new',{points:[{step:8,metrics:{loss:0.1,lr:0.00001}}]}));await second;await same;
+  older.reject(Error('Obsolete failure'));assert.equal(await first,null);
+  assert.equal(x.get('curveMetric').value,'loss');assert.equal(x.get('curveMetricPanel').hidden,false);
+  assert.match(x.get('curveMetricHint').textContent,/总损失/);assert.ok(x.draws.some(([name])=>name==='arc'));
+  assert.equal(x.get('curveEmpty').hidden,true);
+  x.context.api=async()=>{throw Error('Temporary failure\nInternal trace');};await x.get('curveRefresh').onclick();
+  assert.equal(x.get('curveEmpty').dataset.state,'error');assert.match(x.get('curveEmpty').textContent,/Temporary failure/);
+  assert.doesNotMatch(x.get('curveEmpty').textContent,/Internal trace/);assert.equal(x.get('curveRefresh').disabled,false);
+  assert.equal(x.get('curveMetricPanel').hidden,false);
+  x.context.api=async()=>trainingCurves('new',{points:[{step:9,metrics:{lr:0.00001}}]});await x.get('curveRefresh').onclick();
+  assert.equal(x.get('curveEmpty').hidden,true);assert.equal(x.get('curveMetric').value,'lr');assert.match(x.get('curveMetricHint').textContent,/学习率/);
+});
+
+test('checkpoint actions reject incomplete or superseded rows, and registration opens the Models view',async()=>{
+  const x=trainingCurveFixture(),checkpoint={path:'/job/training/step_00000002',model:'/job/training/step_00000002/model.safetensors',step:2,complete:true};
+  x.context.api=async url=>url.includes('/old/')?trainingCurves('old',{checkpoints:[checkpoint,{...checkpoint,path:'/damaged',step:3,complete:false,error:'Missing optimizer'}]}):trainingCurves('new',{checkpoints:[checkpoint]});
+  await x.run("selectTrainingCurve('old')");const buttons=x.get('curveCheckpoints').querySelectorAll('button');
+  assert.deepEqual(Array.from(buttons.slice(0,3),button=>button.textContent),['用此检查点配置续训','设为固定集回归候选','填入模型登记']);
+  assert.ok(buttons.slice(3).every(button=>button.disabled));assert.match(x.get('curveCheckpoints').textContent,/Missing optimizer/);
+  await x.run("selectTrainingCurve('new')");await buttons[2].onclick();assert.equal(x.get('modelPath').value,'');assert.match(String(x.errors[0]),/检查点状态已变化/);
+  await x.get('curveCheckpoints').querySelectorAll('button')[2].onclick();
+  assert.equal(x.run('nextUI.researchView'),'models');assert.equal(x.get('modelPath').value,checkpoint.model);
+  assert.equal(x.get('modelConfig').value,'/job/effective-config.yaml');assert.equal(x.get('modelRegistrationDetails').open,true);
+  await x.run("selectTrainingCurve('new')");assert.equal(x.run('nextUI.researchView'),'curves');
+  const advanced=x.create('details');advanced.append(x.get('workflowResumePath'));x.body.append(advanced);
+  x.context.updateWorkflowFields=()=>{};
+  await x.get('curveCheckpoints').querySelectorAll('button')[0].onclick();
+  assert.equal(x.run('nextUI.researchView'),'train');assert.equal(advanced.open,true);
+  assert.equal(x.get('workflowResumePath').value,checkpoint.path);assert.equal(x.get('workflowConfig').value,'/job/effective-config.yaml');
+});

@@ -175,8 +175,9 @@ test('research section navigation retains its bookmark while explicit tab change
 });
 
 test('research header action follows its selected view and only opens configuration',()=>{
-  const x=fixture();for(const [view,label,target] of [['models','登记检查点','modelName'],['curves','选择训练任务','curveWorkflowPicker'],['regression','配置回归','suiteProtocol'],['protocol','配置固定评测','offlineProtocol'],['production','配置伪标签生产','productionComparisonPicker']]){
+  const x=fixture();for(const [view,label,target] of [['models','登记检查点','modelName'],['regression','配置回归','suiteProtocol'],['protocol','配置固定评测','offlineProtocol'],['production','配置伪标签生产','productionComparisonPicker']]){
     x.run('showResearchView('+JSON.stringify(view)+')');assert.equal(x.get('newComparison').getAttribute('aria-label'),label);x.run('activatePlatformPrimaryAction()');assert.equal(x.get(target).focused,true);assert.equal(x.run('nextUI.researchView'),view);
   }
+  x.run("showResearchView('curves')");assert.equal(x.get('newComparison').hidden,true);
   assert.equal(x.get('modelRegistrationDetails').open,true);assert.deepEqual(x.requests,[]);
 });

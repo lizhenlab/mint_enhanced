@@ -216,14 +216,45 @@ async function startStudy(kind){
 async function studyAction(action){const id=nextUI.study;if(!id)throw new Error('尚未选择试验');await api(`api/comparison/studies/${id}/${action}`,{});if(id===nextUI.study)await pollNext();}
 function showStudy(value){$('studySummary').textContent=`${value.request.name} · ${statusLabel(value.status)} · ${value.progress.done}/${value.progress.total}${value.error?' · '+value.error:''}${value.evaluation_id?' · 已生成固定协议评测':''}`;nextTable($('studyRows'),['输入 / GPU 上限','运行状态','耗时范围','数值门槛 / 结果'],value.rows.map(row=>{const link=el('a','打开比较');link.href='/compare?id='+row.comparison_id;return [`${row.case+1} / ${row.gpu_cap??'原配置'}`,row.statuses.map(statusLabel).join('、'),`${fmt(row.wall_seconds_including_queue,1)} s（含排队）${row.result_reuse?'；复用查询 '+fmt(row.result_reuse.lookup_seconds,3)+' s':''}`,el('span')].map((cell,index)=>{if(index===3){const box=el('div');box.append(el('p',row.numerical_gate===undefined?'协议评测':row.numerical_gate?'数值一致':'需检查：差异或缺失'),link);return box;}return cell;});}));}
 
-function curvePanel(){const section=researchSection($('hub-research'),'训练曲线与完整检查点','每个实际优化器步骤记录本地 loss、学习率、耗时和 GPU 峰值。恢复后同一步以最新尝试显示，模型仍需固定集评测。');section.classList.add('next-wide');const row=el('div',undefined,'next-grid');row.append(nextField('curveWorkflow','训练 Workflow ID'),researchButton('读取训练曲线',()=>selectTrainingCurve($('curveWorkflow').value.trim())),researchSelect('curveMetric','曲线指标',[]));section.append(row,nextText('curveSummary'));const canvas=el('canvas');canvas.id='trainingCurve';canvas.width=1000;canvas.height=240;canvas.className='next-chart';section.append(canvas,nextText('curveCheckpoints','div'));$('curveMetric').onchange=drawTrainingCurve;}
+function curvePanel(){
+  const section=researchSection($('hub-research'),'训练曲线与检查点','选一条已有训练任务查看指标。检查点可用于续训、固定集回归或模型登记。');
+  section.id='research-pane-curves';section.classList.add('next-wide','training-curve-panel');
+  const controls=el('div',undefined,'training-curve-controls');
+  controls.append(researchSelect('curveWorkflowPicker','训练任务',[]),
+    nativeButton('curveRefreshTasks','刷新任务列表',loadTrainingWorkflowChoices),
+    nativeButton('curveRefresh','刷新当前任务',refreshCurves));
+  const taskState=nextText('curveTaskState');taskState.className='training-curve-state';taskState.setAttribute('role','status');
+  const openTrain=nativeButton('curveOpenTrain','前往训练任务',()=>showResearchView('train'));openTrain.hidden=true;
+  const advanced=el('details',undefined,'training-curve-advanced');
+  advanced.append(el('summary','按训练任务 ID 打开'),nextField('curveWorkflow','训练任务 ID'),
+    researchButton('打开任务',()=>selectTrainingCurve($('curveWorkflow').value.trim())));
+  const summary=nextText('curveSummary');summary.setAttribute('role','status');
+  const empty=nextText('curveEmpty','div');empty.className='training-curve-state';empty.setAttribute('role','status');
+  const metrics=el('div',undefined,'training-curve-metrics');metrics.id='curveMetricPanel';
+  const hint=nextText('curveMetricHint');hint.className='hint';
+  const canvas=el('canvas');canvas.id='trainingCurve';canvas.width=1000;canvas.height=240;canvas.className='next-chart';
+  canvas.setAttribute('aria-label','随优化器步骤变化的训练指标');
+  metrics.append(researchSelect('curveMetric','曲线指标',[]),hint,canvas);
+  const checkpoints=el('section',undefined,'training-curve-checkpoints');checkpoints.id='curveCheckpointPanel';
+  checkpoints.append(el('h4','检查点'),nextText('curveCheckpointSummary'),nextText('curveCheckpoints','div'));
+  section.append(controls,taskState,openTrain,advanced,summary,empty,metrics,checkpoints);
+  $('curveWorkflowPicker').onchange=()=>selectTrainingCurve($('curveWorkflowPicker').value||null).catch(hubError);
+  $('curveMetric').onchange=drawTrainingCurve;
+  nextUI.curvePanelReady=true;updateCurveTaskState();clearTrainingCurve();
+}
 function researchObjectRoute(kind,id,view,{replace=false,clearSection=true}={}){
   if(platform.pane!=='research'||!$('platformDialog').open||(typeof platformNavigation!=='undefined'&&platformNavigation.restoring))return;
   const url=new URL(location.href);url.searchParams.set('hub','research');for(const key of ['workflow','study','collection','tool_job','tools_tab','source_type','task_query','task_status','task_kind'])url.searchParams.delete(key);if(id)url.searchParams.set(kind,id);url.searchParams.set('research_tab',view);if(clearSection)url.searchParams.delete('section');if(url.href!==location.href)window.history[replace?'replaceState':'pushState'](null,'',url.pathname+url.search+url.hash);if(typeof updateDiagnosticReturnLinks==='function'&&typeof document.querySelector==='function')updateDiagnosticReturnLinks();
 }
 async function selectTrainingCurve(id,{route=true,show=true}={}){
-  if(id===null){nextUI.curve=null;nextUI.curves=null;$('curveWorkflow').value='';$('curveWorkflowPicker').value='';$('curveSummary').textContent='请选择训练任务后读取曲线。';$('curveCheckpoints').replaceChildren();drawTrainingCurve();if(route)researchObjectRoute('workflow',null,'curves');return null;}
-  id=String(id||'').trim();if(!id)throw new Error('请选择训练任务或填写训练任务 ID');const changed=nextUI.curve!==id;nextUI.curve=id;$('curveWorkflow').value=id;if(changed){nextUI.curves=null;$('curveSummary').textContent='正在读取训练任务 '+id.slice(0,12)+' 的曲线…';$('curveCheckpoints').replaceChildren();drawTrainingCurve();}syncTrainingWorkflowPicker();if(show)showResearchView('curves',{route:false});if(route)researchObjectRoute('workflow',id,'curves');return refreshCurves();
+  if(id!==null){id=String(id||'').trim();if(!id)throw new Error('请选择训练任务或填写训练任务 ID');}
+  nextUI.curveSelectionMade=true;
+  if(nextUI.curve!==id||id===null){nextUI.curve=id;nextUI.curveRequest=null;clearTrainingCurve();}
+  $('curveWorkflow').value=id||'';$('curveWorkflowPicker').value=id||'';
+  syncTrainingWorkflowPicker();updateCurveTaskState();
+  if(show&&nextUI.researchView!=='curves')showResearchView('curves',{route:false});
+  if(route)researchObjectRoute('workflow',id,'curves');
+  return id?refreshCurves():null;
 }
 function handleWorkflowInspected(value){if(value.request?.kind==='train')syncTrainingWorkflowPicker(value);}
 async function restoreInitialResearchOwner(){
@@ -231,8 +262,132 @@ async function restoreInitialResearchOwner(){
   if(workflow){if(query.get('research_tab')==='curves')return selectTrainingCurve(workflow,{route:false});showResearchView(query.get('research_tab')||'train',{route:false});return inspectWorkflow(workflow,{route:false});}
   nextUI.study=study;showResearchView('regression',{route:false});return pollNext();
 }
-async function refreshCurves(){const id=nextUI.curve;if(!id)return;const serial=nextUI.curveSerial=(nextUI.curveSerial||0)+1;const result=await api(`api/comparison/workflows/${id}/curves`);if(id!==nextUI.curve||serial!==nextUI.curveSerial)return;nextUI.curves=result;const metrics=[...new Set(result.points.flatMap(p=>Object.keys(p.metrics)))];const old=$('curveMetric').value;nextOptions('curveMetric',metrics.map(v=>[v,v]),'选择指标');$('curveMetric').value=metrics.includes(old)?old:(metrics.find(v=>v.toLowerCase().includes('loss'))||metrics[0]||'');$('curveSummary').textContent=`训练任务 ${id.slice(0,12)} · ${statusLabel(result.status)} · ${result.available_points} 个优化器步骤记录 · ${result.attempts.length} 次尝试${result.tail_limited?' · 显示最近记录':''}`;drawTrainingCurve();nextTable($('curveCheckpoints'),['检查点','完整性','操作'],result.checkpoints.map(row=>{const button=researchButton('设为固定集回归候选',()=>{$('studyCheckpoint').value=row.model;$('studyConfig').value=row.path.replace(/\/training\/step_[^/]+$/,'/effective-config.yaml');showResearchView('regression');revealPlatformTarget($('studyCheckpoint'));nextUIMessage('候选已填入回归表单；请选择冻结协议后运行。');});button.disabled=!row.complete;const register=researchButton('填入模型登记',()=>{$('modelName').value='MINT · '+row.path.split('/').pop();$('modelPath').value=row.model;$('modelConfig').value=row.path.replace(/\/training\/step_[^/]+$/,'/effective-config.yaml');if($('modelRegistrationDetails'))$('modelRegistrationDetails').open=true;if(typeof updateModelActions==='function')updateModelActions();revealPlatformTarget($('modelPath').closest('section'));});register.disabled=!row.complete;const actions=el('div',undefined,'button-row');actions.append(button,register);return [row.path.split('/').pop(),row.complete?'文件身份校验通过':'文件缺失或变化',actions];}));}
-function drawTrainingCurve(){const canvas=$('trainingCurve'),ctx=canvas.getContext('2d');ctx.clearRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#93aaa3';ctx.font='13px sans-serif';const metric=$('curveMetric').value,points=(nextUI.curves?.points||[]).filter(row=>Number.isFinite(row.metrics[metric]));if(!points.length){ctx.fillText('训练开始后显示曲线',45,45);return;}const values=points.map(p=>p.metrics[metric]),low=Math.min(...values),high=Math.max(...values),first=points[0].step,last=points.at(-1).step;ctx.fillText(`${metric}  ${fmt(low,6)} – ${fmt(high,6)}`,45,22);ctx.strokeStyle='#37584e';ctx.strokeRect(45,36,920,164);ctx.strokeStyle='#b9f45a';ctx.lineWidth=2;ctx.beginPath();points.forEach((p,i)=>{const x=45+(p.step-first)/Math.max(1,last-first)*920,y=200-(p.metrics[metric]-low)/Math.max(1e-12,high-low)*164;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();ctx.fillText(`step ${first}`,45,225);ctx.fillText(`step ${last}`,895,225);}
+function curvePaneActive(){return platform.pane==='research'&&nextUI.researchView==='curves'&&$('platformDialog').open;}
+function curveReadContext(){return JSON.stringify([platform.serial,platform.pane,nextUI.researchView,nextUI.curveViewEpoch,$('platformDialog').open]);}
+function showCurveState(node,state,label,detail=''){
+  if(!node)return;
+  node.dataset.state=state;node.hidden=!label;node.replaceChildren(el('span',label));
+  if(detail)node.append(el('small',detail));
+}
+function curveErrorDetail(error){return String(error?.message||error||'').trim().split(/\r?\n/,1)[0].slice(0,240);}
+function clearTrainingCurve(){
+  nextUI.curves=null;nextUI.curveError=null;
+  nextOptions('curveMetric',[],'选择指标');$('curveMetric').disabled=true;
+  $('curveSummary').textContent='';$('curveSummary').setAttribute('aria-busy','false');lockResearchAction('curveRefresh',!nextUI.curve);
+  $('curveCheckpoints').replaceChildren();$('curveCheckpointSummary').textContent='';
+  if($('curveCheckpointPanel'))$('curveCheckpointPanel').hidden=true;
+  showCurveState($('curveEmpty'),'empty',nextUI.curve?'':'选择任务后自动读取曲线与检查点。');
+  drawTrainingCurve();
+}
+function refreshCurves(){
+  const id=nextUI.curve;if(!id)return null;
+  const navigation=curveReadContext(),previous=nextUI.curveRequest;
+  if(previous?.id===id&&previous.navigation===navigation)return previous.promise;
+  const request={id,navigation};nextUI.curveRequest=request;
+  const current=()=>nextUI.curve===id&&nextUI.curveRequest===request&&curveReadContext()===navigation;
+  $('curveSummary').setAttribute('aria-busy','true');lockResearchAction('curveRefresh',true);
+  if(!nextUI.curves)showCurveState($('curveEmpty'),'loading','正在读取训练曲线与检查点…');
+  request.promise=(async()=>{
+    try{
+      const result=await api(`api/comparison/workflows/${encodeURIComponent(id)}/curves`);
+      if(!current())return null;
+      if(!Array.isArray(result?.points)||!Array.isArray(result.checkpoints)||!Array.isArray(result.attempts))throw new Error('训练曲线响应格式无效');
+      if(result.workflow_id&&result.workflow_id!==id)throw new Error('训练任务响应与当前选择不一致');
+      nextUI.curves=result;nextUI.curveError=null;renderTrainingCurve(id,result);return result;
+    }catch(error){
+      if(!current())return null;
+      nextUI.curveError=error;
+      showCurveState($('curveEmpty'),'error','训练曲线读取失败，请刷新当前任务。',curveErrorDetail(error));
+      if(nextUI.curves)renderTrainingCheckpoints(id,nextUI.curves.checkpoints);
+      return null;
+    }finally{
+      if(nextUI.curveRequest===request){nextUI.curveRequest=null;$('curveSummary').setAttribute('aria-busy','false');lockResearchAction('curveRefresh',!nextUI.curve);}
+    }
+  })();
+  return request.promise;
+}
+const TRAINING_METRICS={
+  loss:['训练损失','本地训练目标的总损失，用于观察同一训练配置的变化趋势。'],
+  lr:['学习率','每个优化器步骤记录的学习率。'],
+  'time/step_s':['单步耗时（秒）','一次优化器步骤的耗时，包含该步骤内的数据与计算。'],
+  'time/data_s':['数据读取耗时（秒）','该步骤等待数据的耗时。'],
+  'memory/peak_allocated_mib':['GPU 峰值显存（MiB）','记录进程的 PyTorch 峰值已分配显存。'],
+};
+function renderTrainingCurve(id,result){
+  const metrics=[...new Set(result.points.flatMap(point=>Object.keys(point.metrics)))];
+  const select=$('curveMetric'),old=select.value;
+  nextOptions('curveMetric',metrics.map(metric=>[metric,TRAINING_METRICS[metric]?.[0]||metric]),'选择指标');
+  select.value=metrics.includes(old)?old:(metrics.includes('loss')?'loss':metrics.find(metric=>metric.startsWith('loss/'))||metrics[0]||'');select.disabled=!metrics.length;
+  const task=trainingWorkflowRows().find(row=>row.id===id),progress=result.progress||{};
+  const completed=Number.isFinite(progress.done)&&Number.isFinite(progress.total)&&progress.total>0?`${progress.done}/${progress.total} 步`:'';
+  $('curveSummary').textContent=[task?.label||'训练任务 '+id.slice(0,12),statusLabel(result.status),completed,
+    `${result.available_points} 个优化器步骤记录`,`${result.attempts.length} 次尝试`,result.tail_limited?'显示最近记录':''].filter(Boolean).join(' · ');
+  showCurveState($('curveEmpty'),result.error?'error':'empty',result.error?'训练任务报告了错误':metrics.length?'':'尚无优化器步骤记录',curveErrorDetail(result.error));
+  drawTrainingCurve();renderTrainingCheckpoints(id,result.checkpoints);
+}
+function drawTrainingCurve(){
+  const canvas=$('trainingCurve'),metric=$('curveMetric').value;
+  const points=(nextUI.curves?.points||[]).filter(row=>Number.isFinite(row.metrics[metric]));
+  if(!canvas)return;
+  canvas.hidden=!points.length;
+  if($('curveMetricPanel'))$('curveMetricPanel').hidden=!points.length;
+  const hint=$('curveMetricHint');if(hint){hint.hidden=!points.length;hint.textContent=points.length?(TRAINING_METRICS[metric]?.[1]||'此指标来自训练日志。横轴为优化器步骤。'):'';}
+  if(!points.length)return;
+  const ctx=canvas.getContext('2d'),values=points.map(point=>point.metrics[metric]);
+  const low=Math.min(...values),high=Math.max(...values),first=points[0].step,last=points.at(-1).step;
+  const label=TRAINING_METRICS[metric]?.[0]||metric;
+  ctx.clearRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#b7c9c2';ctx.font='14px sans-serif';
+  ctx.fillText(`${label}  ${Number(low.toPrecision(5))} – ${Number(high.toPrecision(5))}`,45,22);
+  ctx.strokeStyle='#37584e';ctx.strokeRect(45,36,920,164);ctx.strokeStyle='#b9f45a';ctx.lineWidth=2;
+  const x=step=>first===last?505:45+(step-first)/(last-first)*920;
+  const y=value=>low===high?118:200-(value-low)/(high-low)*164;
+  ctx.beginPath();
+  if(points.length===1){ctx.fillStyle='#b9f45a';ctx.arc(x(first),y(values[0]),4,0,2*Math.PI);ctx.fill();}
+  else{points.forEach((point,index)=>index?ctx.lineTo(x(point.step),y(values[index])):ctx.moveTo(x(point.step),y(values[index])));ctx.stroke();}
+  ctx.fillStyle='#b7c9c2';ctx.fillText(`step ${first}`,45,225);
+  if(last!==first)ctx.fillText(`step ${last}`,885,225);
+}
+function renderTrainingCheckpoints(id,checkpoints){
+  const host=$('curveCheckpoints'),summary=$('curveCheckpointSummary');
+  if($('curveCheckpointPanel'))$('curveCheckpointPanel').hidden=false;
+  const complete=checkpoints.filter(row=>row.complete).length;
+  summary.textContent=complete?'完整检查点包含权重、优化器、学习率调度器和随机状态，可用于续训。固定集回归和模型登记使用权重及训练配置。':'此训练任务没有完整检查点';
+  host.hidden=!checkpoints.length;
+  if(!checkpoints.length){host.replaceChildren();return;}
+  nextTable(host,['检查点','完整性','操作'],checkpoints.map(row=>{
+    const actions=el('div',undefined,'button-row');
+    const config=row.path.replace(/\/training\/step_[^/]+$/,'/effective-config.yaml');
+    const action=(label,apply)=>{
+      const button=researchButton(label,()=>{
+        if(!curvePaneActive()||nextUI.curveError||nextUI.curve!==id||!nextUI.curves?.checkpoints.some(value=>value.path===row.path&&value.complete))throw new Error('检查点状态已变化，请刷新当前任务');
+        return apply();
+      });
+      button.disabled=!row.complete||!!nextUI.curveError;button.dataset.locked=String(button.disabled);actions.append(button);
+    };
+    action('用此检查点配置续训',()=>{
+      showResearchView('train');$('workflowKind').value='train';updateWorkflowFields();
+      const resume=$('workflowResumePath');resume.value=row.path;$('workflowConfig').value=config;$('workflowDataset').value='';
+      $('workflowInit').value='';$('workflowInitPicker').value='';$('workflowRecipePicker').value='';
+      updateWorkflowDatasetSummary();invalidateWorkflowReadiness();
+      const advanced=resume.closest('details');if(advanced)advanced.open=true;
+      revealPlatformTarget(resume);
+      nextUIMessage('已填入续训检查点。请核对原训练 GPU 数与续训步数，再预检。');
+    });
+    action('设为固定集回归候选',()=>{
+      $('studyCheckpoint').value=row.model;$('studyConfig').value=config;
+      showResearchView('regression');revealPlatformTarget($('studyCheckpoint'));
+      nextUIMessage('候选已填入回归表单；请选择冻结协议后运行。');
+    });
+    action('填入模型登记',()=>{
+      $('modelName').value='MINT · '+row.path.split('/').pop();$('modelPath').value=row.model;$('modelConfig').value=config;
+      showResearchView('models');if($('modelRegistrationDetails'))$('modelRegistrationDetails').open=true;
+      updateModelActions();revealPlatformTarget($('modelPath'));
+    });
+    const state=el('div');state.append(el('span',row.complete?'完整，可续训':'文件缺失或变化'));
+    if(row.error)state.append(el('small',curveErrorDetail(row.error)));
+    return [Number.isInteger(row.step)?`Step ${row.step}`:row.path.split('/').pop(),state,actions];
+  }));
+}
 
 function qualityExtensions(){
   const host=$('hub-quality'),section=researchSection(host,'误差明细','以当前所选预测与参考计算差异；没有 GT 时表示模型差异。');section.id='qualityBreakdownPanel';section.className='panel quality-panel';section.dataset.qualityView='breakdown';
@@ -321,15 +476,20 @@ function productionPanel(){
   const check=researchButton('仅预检生产输入',checkProductionReadiness);check.id='productionCheck';const submit=researchButton('预检并启动 Ray 生产',startProduction);submit.id='productionSubmit';section.append(check,submit);const readiness=nextText('productionReadiness');readiness.dataset.ready='pending';readiness.textContent='选择来源结果后可先检查，不启动生产任务。';section.append(readiness);section.addEventListener('input',invalidateProductionReadiness);section.addEventListener('change',invalidateProductionReadiness);updateProductionActions();
 }
 
-async function pollNext(){clearTimeout(nextUI.timer);if(!$('platformDialog').open)return;try{await pollNativePreparation();const id=nextUI.study;if(id&&platform.pane==='research'){const serial=nextUI.studyReadSerial=(nextUI.studyReadSerial||0)+1;const study=await api('api/comparison/studies/'+id);if(id===nextUI.study&&serial===nextUI.studyReadSerial&&platform.pane==='research')showStudy(study);}if(nextUI.curve&&platform.pane==='research')await refreshCurves();}catch(error){hubError(error);}finally{if($('platformDialog').open)nextUI.timer=setTimeout(pollNext,3000);}}
+async function pollNext(){clearTimeout(nextUI.timer);if(!$('platformDialog').open)return;try{await pollNativePreparation();const id=nextUI.study;if(id&&platform.pane==='research'){const serial=nextUI.studyReadSerial=(nextUI.studyReadSerial||0)+1;const study=await api('api/comparison/studies/'+id);if(id===nextUI.study&&serial===nextUI.studyReadSerial&&platform.pane==='research')showStudy(study);}if(nextUI.curve&&curvePaneActive()&&!nextUI.curveError&&!TERMINAL.has(nextUI.curves?.status))await refreshCurves();}catch(error){hubError(error);}finally{if($('platformDialog').open)nextUI.timer=setTimeout(pollNext,3000);}}
 const RESEARCH_VIEWS=[['train','训练任务','workflowKind'],['curves','曲线与检查点','curveWorkflow'],['regression','回归与性能','suiteProtocol'],['protocol','固定协议与评测','offlineProtocol'],['production','伪标签生产','productionRuns'],['models','模型与发布','modelName']];
 function researchViewForTarget(target){const region=target?.closest('[data-research-view]');return region?.dataset.researchView||null;}
 function showResearchView(view,{route=true,clearSection=false}={}){
-  if(!RESEARCH_VIEWS.some(row=>row[0]===view))view='train';nextUI.researchView=view;const host=$('hub-research');host.dataset.researchTab=view;
+  if(!RESEARCH_VIEWS.some(row=>row[0]===view))view='train';const changed=nextUI.researchView!==view;
+  if(changed)nextUI.curveViewEpoch=(nextUI.curveViewEpoch||0)+1;
+  nextUI.researchView=view;const host=$('hub-research');host.dataset.researchTab=view;
   for(const section of host.querySelectorAll(':scope > [data-research-view]'))section.hidden=section.dataset.researchView!==view;
   for(const button of host.querySelectorAll('[data-research-tab]')){const active=button.dataset.researchTab===view;button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1;}
   if(route&&!platformNavigation.restoring&&platform.pane==='research'&&$('platformDialog').open){const kind=view==='regression'?'study':'workflow',owner=view==='curves'?nextUI.curve:view==='train'?researchUI.workflow:view==='regression'?nextUI.study:null;researchObjectRoute(kind,owner,view,{replace:true,clearSection});}
   if(platform.pane==='research'&&typeof syncPlatformPrimaryAction==='function')syncPlatformPrimaryAction('research');if(typeof refreshPlatformContext==='function')refreshPlatformContext();if(typeof updateDiagnosticReturnLinks==='function')updateDiagnosticReturnLinks();
+  if(changed&&nextUI.curvePanelReady&&curvePaneActive()){
+    if(nextUI.curve)refreshCurves();else autoSelectTrainingCurve();
+  }
 }
 function revealResearchTarget(target){const view=researchViewForTarget(target);if(view)showResearchView(view);}
 function initialResearchView(params,current='train'){
@@ -418,17 +578,52 @@ window.addEventListener('beforeunload',event=>{persistAnnotationDraft();if(nextU
 function advancedResearchFields(ids,label){const existing=ids.map(id=>$(id)?.closest('label')).filter(Boolean);if(!existing.length)return;const details=el('details',undefined,'hub-secondary');details.append(el('summary',label));existing[0].before(details);for(const row of existing)details.append(row);return details;}
 function selectedListValues(id){return [...$(id).selectedOptions].map(option=>option.value).filter(Boolean);}
 function addRecordPicker(before,id,label,{multiple=false,onchange}={}){const select=selectInput([],'');select.id=id;select.multiple=multiple;if(multiple)select.size=5;select.onchange=()=>{if(onchange)Promise.resolve().then(onchange).catch(hubError);};const row=inputLabel(label,select);before.before(row);return select;}
+function trainingWorkflowRows(){
+  const rows=new Map((nextUI.researchTasks||[]).filter(row=>row.kind==='workflow'&&row.source==='train').map(row=>[row.id,row]));
+  const observed=nextUI.currentTrainingWorkflow;if(observed)rows.set(observed.id,observed);
+  return [...rows.values()];
+}
 function syncTrainingWorkflowPicker(workflow=null){
   if(workflow?.request?.kind==='train')nextUI.currentTrainingWorkflow={id:workflow.id,kind:'workflow',source:'train',label:workflow.request.name||workflow.id.slice(0,12),status:workflow.status};
-  const select=$('curveWorkflowPicker');if(!select)return;const selected=nextUI.curve||select.value,rows=new Map((nextUI.researchTasks||[]).filter(row=>row.kind==='workflow'&&row.source==='train').map(row=>[row.id,row]));
-  if(nextUI.currentTrainingWorkflow)rows.set(nextUI.currentTrainingWorkflow.id,nextUI.currentTrainingWorkflow);if(selected&&!rows.has(selected))rows.set(selected,{id:selected,label:'指定训练任务 '+selected.slice(0,12),status:'已选择'});
+  const select=$('curveWorkflowPicker');if(!select)return;const selected=nextUI.curve||select.value,rows=new Map(trainingWorkflowRows().map(row=>[row.id,row]));
+  if(selected&&!rows.has(selected))rows.set(selected,{id:selected,label:'指定训练任务 '+selected.slice(0,12),status:'已选择'});
   nextOptions('curveWorkflowPicker',[...rows.values()].map(row=>[row.id,row.label+' · '+statusLabel(row.status)]),'选择训练任务');
   if(selected&&rows.has(selected))select.value=selected;
+  updateCurveTaskState();
+}
+function updateCurveTaskState(){
+  if(!nextUI.curvePanelReady)return;
+  const select=$('curveWorkflowPicker'),rows=trainingWorkflowRows(),loading=!!nextUI.curveChoicesLoading,error=nextUI.curveChoicesError;
+  select.disabled=!rows.length&&!nextUI.curve;select.setAttribute('aria-busy',String(loading));
+  lockResearchAction('curveRefreshTasks',loading);
+  const empty=nextUI.curveChoicesReady&&!rows.length&&!nextUI.curve&&!error;
+  $('curveOpenTrain').hidden=!empty;
+  const state=loading?'loading':error?'error':empty?'empty':'ready';
+  const label=loading?'正在读取训练任务…':error?'训练任务列表读取失败':empty?'暂无训练任务。请先到「训练任务」配置并提交。':'';
+  showCurveState($('curveTaskState'),state,label,curveErrorDetail(error));
+}
+function autoSelectTrainingCurve(){
+  if(!curvePaneActive()||nextUI.curveSelectionMade||nextUI.curve||new URLSearchParams(location.search).get('workflow'))return null;
+  const latest=trainingWorkflowRows()[0];
+  return latest?selectTrainingCurve(latest.id,{show:false}):null;
+}
+async function loadTrainingWorkflowChoices(){
+  const serial=nextUI.curveChoicesSerial=(nextUI.curveChoicesSerial||0)+1,navigation=platform.serial;
+  const current=()=>serial===nextUI.curveChoicesSerial&&navigation===platform.serial;
+  nextUI.curveChoicesLoading=true;nextUI.curveChoicesError=null;updateCurveTaskState();
+  try{
+    const value=await api('api/comparison/workspace?kind=workflow&source=train&limit=200');
+    if(!current())return null;
+    nextUI.researchTasks=value.tasks||[];nextUI.curveChoicesReady=true;syncTrainingWorkflowPicker();
+    if(nextUI.curvePanelReady)autoSelectTrainingCurve();
+    return value;
+  }catch(error){if(current())nextUI.curveChoicesError=error;return null;}
+  finally{if(serial===nextUI.curveChoicesSerial){nextUI.curveChoicesLoading=false;updateCurveTaskState();}}
 }
 function preserveResearchChoices(id,choices,empty){const select=$(id),old=selectedListValues(id);nextOptions(id,choices,empty);for(const value of old)if(value&&!Array.from(select.options).some(option=>option.value===value)){const missing=el('option','此前选择已不可用 · '+value.slice(0,12));missing.value=value;missing.disabled=true;select.append(missing);}for(const option of select.options)option.selected=old.includes(option.value);if(!select.multiple&&old.length)select.value=old[0];}
 async function refreshResearchRecordPickers(){
   const serial=nextUI.researchPickersSerial=(nextUI.researchPickersSerial||0)+1;
-  let records;try{records=await Promise.all([api('api/comparisons?limit=200'),api('api/comparison/workspace?limit=200&query=train'),api('api/comparison/registry/model?limit=200')]);}catch(error){if(serial===nextUI.researchPickersSerial){const select=$('workflowInitPicker');if(!select.value)nextOptions('workflowInitPicker',[],'模型列表读取失败；可使用配置权重或高级路径');}throw error;}finally{if(serial===nextUI.researchPickersSerial)$('workflowInitPicker').disabled=false;}const [history,workspace,models]=records;if(serial!==nextUI.researchPickersSerial)return null;nextUI.researchComparisons=history.comparisons;nextUI.researchTasks=workspace.tasks;nextUI.researchModels=models.records;
+  let records;try{records=await Promise.all([api('api/comparisons?limit=200'),loadTrainingWorkflowChoices(),api('api/comparison/registry/model?limit=200')]);}catch(error){if(serial===nextUI.researchPickersSerial){const select=$('workflowInitPicker');if(!select.value)nextOptions('workflowInitPicker',[],'模型列表读取失败；可使用配置权重或高级路径');}throw error;}finally{if(serial===nextUI.researchPickersSerial)$('workflowInitPicker').disabled=false;}const [history,workspace,models]=records;if(serial!==nextUI.researchPickersSerial)return null;nextUI.researchComparisons=history.comparisons;nextUI.researchModels=models.records;
   for(const id of ['suiteComparisonPicker','productionComparisonPicker'])preserveResearchChoices(id,history.comparisons.map(row=>[row.id,(row.title||row.id.slice(0,8))+' · '+statusLabel(row.status||'completed')]),id==='suiteComparisonPicker'?'留空使用当前比较':'留空使用比较工作区，或选择其他已有比较');
   syncTrainingWorkflowPicker();preserveResearchChoices('workflowInitPicker',models.records.filter(registryRecordAvailable).map(row=>[row.id,(row.name||row.id.slice(0,8))+' · '+row.path.split('/').pop()]),'使用训练配置中的初始化权重');for(const option of $('workflowInitPicker').options){const model=models.records.find(row=>row.id===option.value);if(model&&!registryRecordAvailable(model)){option.disabled=true;option.dataset.unavailableReason=registryUnavailableReason(model);option.textContent=(model.name||model.id.slice(0,8))+' · '+option.dataset.unavailableReason;option.title=option.dataset.unavailableReason;}}lockResearchAction('workflowPreflight',!!workflowRegistryUnavailableReason());if(workflowRegistryUnavailableReason())invalidateWorkflowReadiness();
   if(nextUI.curve&&Array.from($('curveWorkflowPicker').options).some(option=>option.value===nextUI.curve))$('curveWorkflowPicker').value=nextUI.curve;await refreshProductionRunChoices();return {history,workspace,models};
@@ -441,7 +636,6 @@ async function refreshProductionRunChoices(){
 function initializeResearchUsability(){
   const draftReturn=researchButton('二维修正未提交',returnToAnnotation);draftReturn.id='annotationDraftReturn';draftReturn.hidden=true;draftReturn.className='quiet-button annotation-draft-return';draftReturn.setAttribute('aria-live','polite');document.querySelector('.masthead-actions').prepend(draftReturn);
   const suite=$('suiteComparisons').closest('label');addRecordPicker(suite,'suiteComparisonPicker','选择要冻结的比较（可多选；留空使用当前比较）',{multiple:true,onchange:()=>{$('suiteComparisons').value=selectedListValues('suiteComparisonPicker').join('\n');}});advancedResearchFields(['suiteComparisons'],'高级：直接输入比较 ID');
-  const curve=$('curveWorkflow').closest('label');addRecordPicker(curve,'curveWorkflowPicker','选择训练任务',{onchange:()=>selectTrainingCurve($('curveWorkflowPicker').value||null)});advancedResearchFields(['curveWorkflow'],'高级：直接输入训练任务 ID');
   const production=$('productionRuns').closest('label');addRecordPicker(production,'productionComparisonPicker','生产来源比较',{onchange:()=>{$('productionRuns').value='';invalidateProductionReadiness();return refreshProductionRunChoices();}});const picker=addRecordPicker(production,'productionRunPicker','完整原生 MINT 结果（可多选）',{multiple:true,onchange:()=>{$('productionRuns').value=selectedListValues('productionRunPicker').join('\n');invalidateProductionReadiness();}});const hint=nextText('productionPickerHint');picker.closest('label').after(hint);advancedResearchFields(['productionRuns'],'高级：直接输入原生 MINT Run ID');
   const init=$('workflowInit').closest('label');const initPicker=addRecordPicker(init,'workflowInitPicker','初始化模型版本',{onchange:()=>{const model=nextUI.researchModels?.find(row=>row.id===$('workflowInitPicker').value);$('workflowInit').value=model?.path||'';invalidateWorkflowReadiness();}});initPicker.closest('label').dataset.workflowKinds='train';const loadingModel=el('option','正在读取模型版本…');loadingModel.value='';initPicker.append(loadingModel);initPicker.disabled=true;
   const config=$('workflowConfig').closest('label');const recipe=addRecordPicker(config,'workflowRecipePicker','训练配置模板（需要数据与初始化权重预检）',{onchange:()=>{if($('workflowRecipePicker').value)$('workflowConfig').value=$('workflowRecipePicker').value;invalidateWorkflowReadiness();}});for(const [path,label]of [['/data1/lizhen_algo/mint/configs/training/mint_step2.yaml','Stage 2 · 相机微调'],['/data1/lizhen_algo/mint/configs/training/mint_step1.yaml','Stage 1 · 预训练'],['','自定义配置（展开高级路径）']]){const option=el('option',label);option.value=path;recipe.append(option);}recipe.value=$('workflowConfig').value;recipe.closest('label').dataset.workflowKinds='train';

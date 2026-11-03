@@ -301,7 +301,7 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
     @blueprint.get('/api/comparison/workflows/<workflow_id>/curves')
     def workflow_curves(workflow_id):
         from .training_curves import read_curves
-        return jsonify(read_curves(workflows(), workflow_id, maximum=request.args.get('maximum', 800)))
+        return jsonify(json_values(read_curves(workflows(), workflow_id, maximum=request.args.get('maximum', 800))))
 
     @blueprint.post('/api/comparison/studies')
     def create_study():
@@ -396,7 +396,8 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
     def workspace_index():
         workflows()
         return jsonify(json_values(workspace().tasks(limit=request.args.get('limit', 100),
-            offset=request.args.get('offset', 0), query=request.args.get('query', ''), status=request.args.get('status', 'all'), kind=request.args.get('kind', 'all'))))
+            offset=request.args.get('offset', 0), query=request.args.get('query', ''), status=request.args.get('status', 'all'),
+            kind=request.args.get('kind', 'all'), source=request.args.get('source', ''))))
 
     @blueprint.get('/api/comparison/capabilities')
     def workspace_capabilities():

@@ -554,7 +554,7 @@ async function workspaceTaskAction(task,action){
   finally{platform.taskActions.delete(key);update();}
 }
 function platformPrimaryAction(tab){
-  if(tab==='research'){const view=$('hub-research')?.dataset.researchTab||'train',action=({models:['登记检查点','modelName'],curves:['选择训练任务','curveWorkflowPicker'],regression:['配置回归','suiteProtocol'],protocol:['配置固定评测','offlineProtocol'],production:['配置伪标签生产','productionComparisonPicker']})[view];if(action)return {label:action[0],kind:'research-view',view,target:action[1]};return {label:'新建训练',kind:'train'};}
+  if(tab==='research'){const view=$('hub-research')?.dataset.researchTab||'train';if(view==='curves')return null;const action=({models:['登记检查点','modelName'],regression:['配置回归','suiteProtocol'],protocol:['配置固定评测','offlineProtocol'],production:['配置伪标签生产','productionComparisonPicker']})[view];if(action)return {label:action[0],kind:'research-view',view,target:action[1]};return {label:'新建训练',kind:'train'};}
   return ({data:{label:'选择输入',kind:'data'},catalog:{label:'准备数据',kind:'data'},batch:{label:'新建批次',kind:'batch'},evaluation:{label:'新建评测',kind:'evaluation'},quality:{label:'选择比较',kind:'quality'}})[tab]||null;
 }
 function syncPlatformPrimaryAction(tab){const button=$('newComparison'),action=platformPrimaryAction(tab);button.hidden=!!tab&&!action;const label=tab?action?.label:'新建比较';if(label){button.replaceChildren(icon('plus'),document.createTextNode(label));button.setAttribute('aria-label',label);button.title=tab?'配置当前模块，不会立即提交计算任务':'配置算法与输入';}}
@@ -568,7 +568,7 @@ function activatePlatformPrimaryAction(){
   else if(kind==='quality'){revealPlatformTarget($('qualityComparison'));$('qualityComparison').focus({preventScroll:true});}
 }
 function findHubSection(tab,title){
-  const ids={'开源数据集原生接入':'nativeDataPanel','固定集回归与性能对照':'suiteProtocol','训练曲线与完整检查点':'trainingCurve','原生后端伪标签生产':'nativeProductionSection','模型版本与发布门槛':'modelName','数据生产与训练任务':'workflowKind','冻结协议与离线评测':'offlineProtocol'};
+  const ids={'开源数据集原生接入':'nativeDataPanel','固定集回归与性能对照':'suiteProtocol','训练曲线与完整检查点':'research-pane-curves','训练曲线与检查点':'research-pane-curves','原生后端伪标签生产':'nativeProductionSection','模型版本与发布门槛':'modelName','数据生产与训练任务':'workflowKind','冻结协议与离线评测':'offlineProtocol'};
   const node=ids[title]?$(ids[title]):null;return node?.closest('section')||[...$('hub-'+tab).querySelectorAll('section')].find(row=>row.querySelector('h3')?.textContent.includes(title));
 }
 function revealPlatformTarget(target,{scroll=true}={}){

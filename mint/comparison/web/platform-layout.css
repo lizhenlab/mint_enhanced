@@ -409,3 +409,35 @@
   .tools-workspace table{font-size:11px}
   .tools-workspace th,.tools-workspace td{padding:7px 8px}
 }
+
+/* Training observations stay compact until a task has results. */
+.training-curve-panel [hidden]{display:none!important}
+.training-curve-panel>.hint{margin:0 0 16px}
+.training-curve-controls{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:end;gap:8px;margin-bottom:8px}
+.training-curve-controls label,.training-curve-metrics label,.training-curve-advanced label{min-width:0;margin:0}
+.training-curve-controls select,.training-curve-metrics select{width:100%;min-width:0;text-overflow:ellipsis}
+.training-curve-controls button{white-space:nowrap;min-height:36px}
+.training-curve-state{margin:8px 0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--muted);line-height:1.5;overflow-wrap:anywhere}
+.training-curve-state[data-state=error]{color:#ffb0a2;border-color:#a55d5180}
+.training-curve-state small,.training-curve-checkpoints td small{display:block;margin-top:4px;color:var(--muted)}
+.training-curve-advanced{margin:10px 0 14px;color:var(--muted);font-size:12px}
+.training-curve-advanced summary{width:fit-content;cursor:pointer;color:var(--cyan)}
+.training-curve-advanced[open] label{max-width:560px;margin:8px 0}
+.training-curve-panel #curveSummary{font-size:13px;color:var(--text);overflow-wrap:anywhere;margin:14px 0 10px}
+.training-curve-panel #curveSummary:empty{display:none}
+.training-curve-metrics{margin-top:12px}
+.training-curve-metrics label{max-width:300px}
+.training-curve-metrics .hint{font-size:12px;line-height:1.5;margin:6px 0 9px}
+.training-curve-metrics .next-chart{display:block;width:100%;height:clamp(150px,23vw,290px)}
+.training-curve-checkpoints{margin-top:20px;padding-top:14px;border-top:1px solid var(--line)}
+.training-curve-checkpoints h4{margin:0 0 6px;font-size:14px}
+.training-curve-checkpoints p{margin:0 0 8px;color:var(--muted);font-size:12px;line-height:1.6}
+.training-curve-checkpoints #curveCheckpoints{overflow-x:auto}
+.training-curve-checkpoints td:first-child{white-space:nowrap}
+.training-curve-checkpoints td .button-row{flex-wrap:wrap;gap:6px}
+@media(max-width:640px){
+  .training-curve-controls{grid-template-columns:repeat(2,minmax(0,1fr));align-items:stretch}
+  .training-curve-controls label{grid-column:1/-1}
+  .training-curve-controls button{white-space:normal}
+  .training-curve-checkpoints td .button-row button{white-space:normal}
+}

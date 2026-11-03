@@ -140,6 +140,8 @@ def test_workspace_task_read_forwards_the_complete_filter_contract(task_store):
     assert page['total'] == 1 and page['tasks'][0]['kind'] == 'mint_batch'
     assert page['resources'] == {'source': 'cached resources'}
     assert page['cached_predictions'] == []
+    index.sync([{'id': 'training', 'kind': 'workflow', 'source': 'train', 'status': 'completed'}])
+    assert [row['id'] for row in service.tasks(kind='workflow', source='train')['tasks']] == ['training']
 
 
 def test_workspace_api_passes_kind_status_query_and_paging_without_starting_workers(task_store, monkeypatch):
@@ -153,6 +155,8 @@ def test_workspace_api_passes_kind_status_query_and_paging_without_starting_work
 
     index = TaskIndex(task_store)
     seed(index)
+    index.sync([{'id': 'training', 'kind': 'workflow', 'source': 'train', 'status': 'completed', 'updated': 1},
+                {'id': 'conversion', 'kind': 'workflow', 'source': 'prepare_training', 'status': 'completed', 'updated': 50}])
     observed = []
 
     class FakeWorkspace:
@@ -175,7 +179,11 @@ def test_workspace_api_passes_kind_status_query_and_paging_without_starting_work
     response = client.get('/api/comparison/workspace?kind=diagnostic&status=active&query=batch&offset=0&limit=1')
     assert response.status_code == 200 and response.json['total'] == 1
     assert response.json['tasks'][0]['kind'] == 'mint_batch'
-    assert observed[-1] == {'kind': 'diagnostic', 'status': 'active', 'query': 'batch', 'offset': '0', 'limit': '1'}
+    assert observed[-1] == {'kind': 'diagnostic', 'status': 'active', 'query': 'batch', 'offset': '0', 'limit': '1', 'source': ''}
+    response = client.get('/api/comparison/workspace?kind=workflow&source=train&limit=1')
+    assert response.status_code == 200 and response.json['total'] == 1
+    assert [row['id'] for row in response.json['tasks']] == ['training']
+    assert observed[-1]['source'] == 'train'
     invalid = client.get('/api/comparison/workspace?kind=not-a-category')
     assert invalid.status_code == 400 and 'known task category' in invalid.json['error']
     assert task_store.executor_state['running']['status'] == 'running'

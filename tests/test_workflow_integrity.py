@@ -7,15 +7,15 @@ import numpy as np
 import pytest
 
 from mint.runtime import atomic_json, file_identity
-from mint.comparison.training_curves import checkpoint_summary, latest_checkpoint, read_curves
+from mint.comparison.training_curves import append_metrics, checkpoint_summary, latest_checkpoint, read_curves
 from mint.comparison.research import ResearchRegistry
 from mint.comparison.workflows import WorkflowManager
 from tests.test_platform_lifecycle import manager
 from tests.test_comparison_platform import annotated_episode
 
 
-def full_checkpoint(root, step=1):
-    folder = root / f'step_{step:08d}'
+def full_checkpoint(root, step=1, *, name=None):
+    folder = root / (name or f'step_{step:08d}')
     folder.mkdir(parents=True)
     for name in ('model.safetensors', 'optimizer.bin', 'scheduler.bin', 'random_states_0.pkl'):
         (folder / name).write_bytes(name.encode())
@@ -53,10 +53,40 @@ def test_checkpoint_identity_and_step_are_required_for_recovery(tmp_path):
     assert not checkpoint_summary(first)['complete']
 
 
+def test_curve_checkpoints_are_sorted_by_numeric_step_for_legacy_directories(tmp_path):
+    training = tmp_path / 'job' / 'training'
+    full_checkpoint(training, 9, name='step_9')
+    full_checkpoint(training, 10, name='step_10')
+    result = read_curves(SimpleNamespace(root=tmp_path, get=lambda _: {'status': 'completed'}), 'job')
+    assert [(row['step'], row['complete']) for row in result['checkpoints']] == [(9, True), (10, True)]
+
+
+def test_curve_resume_replaces_previous_attempt_tail_and_preserves_audit_log(tmp_path):
+    path = tmp_path / 'job' / 'metrics.jsonl'
+    append_metrics(path, 500, {'loss': 3}, attempt='1')
+    append_metrics(path, 501, {'loss': 2}, attempt='1')
+    append_metrics(path, 502, {'loss': 1}, attempt='1')
+    append_metrics(path, 501, {'loss': 5}, attempt='2')
+    original = path.read_bytes()
+    state = {'status': 'interrupted', 'request': {'kind': 'train'},
+             'progress': {'stage': 'training', 'done': 501}, 'error': 'Training worker stopped'}
+    result = read_curves(SimpleNamespace(root=tmp_path, get=lambda _: state), 'job')
+    assert [(row['step'], row['attempt'], row['metrics']['loss']) for row in result['points']] == [(500, '1', 3), (501, '2', 5)]
+    assert result['available_points'] == 2 and result['attempts'] == ['1', '2']
+    assert result['progress'] == state['progress'] and result['error'] == state['error']
+    assert path.read_bytes() == original
+
+
+def test_curves_reject_an_explicit_nontraining_workflow(tmp_path):
+    workflows = SimpleNamespace(root=tmp_path, get=lambda _: {'status': 'completed', 'request': {'kind': 'prepare_training'}})
+    with pytest.raises(ValueError, match='only for training workflows'):
+        read_curves(workflows, 'conversion')
+
+
 def test_curve_reader_ignores_structurally_invalid_rows_and_nonfinite_metrics(tmp_path):
     folder = tmp_path / 'job'; folder.mkdir()
     rows = [
-        {'step': 1, 'attempt': '1', 'metrics': {'loss': 3}},
+        {'step': 1, 'metrics': {'loss': 3}},  # Older logs may omit the attempt ID.
         {'step': '2', 'attempt': '1', 'metrics': {'loss': 2}},
         {'step': True, 'attempt': '1', 'metrics': {'loss': 2}},
         {'step': 2, 'attempt': ['broken'], 'metrics': {}},
@@ -65,7 +95,20 @@ def test_curve_reader_ignores_structurally_invalid_rows_and_nonfinite_metrics(tm
     (folder / 'metrics.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in rows))
     result = read_curves(SimpleNamespace(root=tmp_path, get=lambda _: {'status': 'running'}), 'job')
     assert [v['step'] for v in result['points']] == [1, 2]
+    assert result['points'][0]['attempt'] == 'standalone' and result['progress'] == {} and result['error'] is None
     assert result['points'][1]['metrics'] == {'loss': 1}
+
+
+def test_anonymous_legacy_workflow_keeps_its_training_category(manager):
+    workflows = WorkflowManager(manager, ResearchRegistry(manager), autostart=False)
+    try:
+        with manager.db() as db:
+            db.execute('INSERT INTO workflows(id,payload,status,created,updated) VALUES(?,?,?,?,?)',
+                       ('legacy', json.dumps({'kind': 'train'}), 'completed', 1, 1))
+        row = workflows.task_rows()[0]
+        assert row['id'] == 'legacy' and row['source'] == 'train' and row['label']
+    finally:
+        workflows.close()
 
 
 @pytest.mark.parametrize('parameters', [

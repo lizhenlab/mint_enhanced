@@ -411,7 +411,9 @@ class WorkflowManager:
         rows = []
         for key in ids:
             state = self.get(key)
-            rows.append({'id': key, 'kind': 'workflow', 'label': state['request']['name'], 'source': state['request']['kind'],
+            request = state['request']
+            kind = request.get('kind')
+            rows.append({'id': key, 'kind': 'workflow', 'label': request.get('name') or kind or key[:12], 'source': kind,
                 'status': state['status'], 'updated': state['updated'], 'owner_pid': state.get('owner_pid'),
                 'worker_pid': state.get('worker_pid'), 'progress': state['progress'], 'error': state.get('error'),
                 'url': '/compare?workflow=' + key, 'recovery_policy': 'explicit_checkpoint_resume'})

@@ -188,6 +188,38 @@
     '无法读取比较，请检查服务或访问通道。':'Comparison could not be loaded. Check the service or connection.',
     '可加入结果列表读取失败，可在“结果管理”刷新列表重试。':'Available results could not be loaded. Refresh the list in Manage results to retry.'
   });
+  Object.assign(phrases,{
+    '训练曲线与完整检查点':'Training curves & checkpoints',
+    '训练曲线与检查点':'Training curves & checkpoints',
+    '选一条已有训练任务查看指标。检查点可用于续训、固定集回归或模型登记。':'Select an existing training task to see its metrics. Use a checkpoint to resume, run fixed-set regression or register a model.',
+    '刷新任务列表':'Refresh task list','刷新当前任务':'Refresh selected task',
+    '正在读取训练任务…':'Loading training tasks…','训练任务列表读取失败':'Could not load training tasks',
+    '暂无训练任务。请先到「训练任务」配置并提交。':'No training tasks yet. Configure and submit one in Training tasks.',
+    '前往训练任务':'Go to training tasks','按训练任务 ID 打开':'Open by training task ID',
+    '训练任务 ID':'Training task ID','打开任务':'Open task','曲线指标':'Curve metric','选择指标':'Choose metric',
+    '选择任务后自动读取曲线与检查点。':'Select a training task to load its curves and checkpoints.',
+    '正在读取训练曲线与检查点…':'Loading training curves and checkpoints…',
+    '训练曲线读取失败，请刷新当前任务。':'Could not load the curves. Refresh the selected task to retry.',
+    '训练任务报告了错误':'The training task reported an error',
+    '训练曲线响应格式无效':'The training curve response was invalid',
+    '训练任务响应与当前选择不一致':'The response did not match the selected training task',
+    '检查点状态已变化，请刷新当前任务':'The checkpoint state changed. Refresh the selected task.',
+    '尚无优化器步骤记录':'No optimizer steps have been logged yet',
+    '训练损失':'Training loss','学习率':'Learning rate','单步耗时（秒）':'Step duration (s)',
+    '数据读取耗时（秒）':'Data loading time (s)','GPU 峰值显存（MiB）':'Peak GPU memory (MiB)',
+    '本地训练目标的总损失，用于观察同一训练配置的变化趋势。':'Total loss on the training data. Use it to track a single training configuration.',
+    '每个优化器步骤记录的学习率。':'Learning rate recorded at each optimizer step.',
+    '一次优化器步骤的耗时，包含该步骤内的数据与计算。':'Time for one optimizer step, including data loading and computation.',
+    '该步骤等待数据的耗时。':'Time spent waiting for data in the step.',
+    '记录进程的 PyTorch 峰值已分配显存。':'Peak GPU memory allocated by PyTorch in the logging process.',
+    '此指标来自训练日志。横轴为优化器步骤。':'This metric comes from the training log. The horizontal axis shows optimizer steps.',
+    '完整检查点包含权重、优化器、学习率调度器和随机状态，可用于续训。固定集回归和模型登记使用权重及训练配置。':'A complete checkpoint contains weights, optimizer, scheduler and random state for resuming. Regression and model registration use weights and training configuration.',
+    '此训练任务没有完整检查点':'This training task has no complete checkpoints',
+    '完整，可续训':'Complete · can resume','检查点':'Checkpoint','完整性':'Integrity','操作':'Actions',
+    '用此检查点配置续训':'Configure resume','设为固定集回归候选':'Use as regression candidate','填入模型登记':'Prefill model registration',
+    '已填入续训检查点。请核对原训练 GPU 数与续训步数，再预检。':'Resume checkpoint selected. Review the original GPU count and target steps, then validate.',
+    '候选已填入回归表单；请选择冻结协议后运行。':'Regression candidate selected. Choose a frozen protocol before running.'
+  });
   function recoveryTranslation(text){
     for(const prefix of ['参考标注已撤销','产物暂不可用','文件缺失或变化'])if(text.startsWith(prefix+'：'))return phrases[prefix]+': '+text.slice(prefix.length+1);
     const retry=text.match(/^连接中断，([\d.]+) 秒后自动重试；已有结果保留。([\s\S]*)$/);

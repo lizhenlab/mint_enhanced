@@ -111,7 +111,7 @@ class TaskIndex:
                     'error': 'Original in-memory executor exited; saved parameters remain available for explicit resubmission'})
         self.sync(recovered)
 
-    def page(self, *, limit=100, offset=0, query='', status='all', kind='all'):
+    def page(self, *, limit=100, offset=0, query='', status='all', kind='all', source=''):
         offset, limit = max(0, int(offset)), max(1, min(200, int(limit)))
         clauses, args = [], []
         groups = {'diagnostic': ('mint_workspace', 'mint_batch', 'mint_benchmark', 'code_diff', 'dataset_analysis')}
@@ -121,6 +121,9 @@ class TaskIndex:
                 raise ValueError('Choose a known task category')
             kinds = groups.get(kind, (kind,))
             clauses.append('kind IN (' + ','.join('?' for _ in kinds) + ')'); args.extend(kinds)
+        if source:
+            clauses.append("(CASE WHEN json_valid(payload) THEN json_extract(payload,'$.source') END)=?")
+            args.append(str(source))
         if query:
             # instr avoids wildcard interpretation of user input.
             clauses.append('instr(search,?)>0'); args.append(str(query).strip().lower())

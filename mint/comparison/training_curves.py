@@ -76,6 +76,8 @@ def append_metrics(path, step, metrics, *, epoch=0, attempt='standalone'):
 
 def read_curves(workflows, key, *, maximum=800):
     state = workflows.get(key)
+    if (state.get('request') or {}).get('kind') not in {None, 'train'}:
+        raise ValueError('Training curves are available only for training workflows')
     folder = workflows.root / key
     path = folder / 'metrics.jsonl'
     points, attempts = {}, set()
@@ -91,12 +93,21 @@ def read_curves(workflows, key, *, maximum=800):
                     row = json.loads(line)
                     if (not isinstance(row, dict) or isinstance(row.get('step'), bool) or
                         not isinstance(row.get('step'), int) or row['step'] < 0 or
-                        not isinstance(row.get('attempt'), str) or not isinstance(row.get('metrics'), dict)):
+                        not isinstance(row.get('metrics'), dict)):
+                        continue
+                    attempt = row.setdefault('attempt', 'standalone')
+                    if not isinstance(attempt, str):
                         continue
                     row['metrics'] = {key: value for key, value in row['metrics'].items()
                                       if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)}
-                    attempts.add(row['attempt'])
-                    points[row['step']] = row
+                    step = row['step']
+                    if attempt not in attempts:
+                        # A resumed attempt can start before the previous one
+                        # stopped. Keep the shared prefix and drop its old tail
+                        # from the plotted series while retaining the log.
+                        points = {index: point for index, point in points.items() if index < step}
+                        attempts.add(attempt)
+                    points[step] = row
                 except (ValueError, KeyError, TypeError):
                     continue  # A killed writer can leave its final line incomplete.
     rows = [points[s] for s in sorted(points)]
@@ -115,9 +126,10 @@ def read_curves(workflows, key, *, maximum=800):
         if len(chosen) > maximum:
             chosen = [chosen[int(i)] for i in np.linspace(0, len(chosen) - 1, maximum)]
         rows = [rows[i] for i in chosen]
-    checkpoints = []
-    for marker in sorted((folder / 'training').glob('step_*/checkpoint.json')):
-        checkpoints.append(checkpoint_summary(marker.parent))
+    checkpoints = [checkpoint_summary(marker.parent) for marker in (folder / 'training').glob('step_*/checkpoint.json')]
+    checkpoints.sort(key=lambda row: (row['step'] is None, row['step'] or 0, row['path']))
+    progress = state.get('progress')
     return {'workflow_id': key, 'status': state['status'], 'points': rows, 'available_points': total,
+            'progress': progress if isinstance(progress, dict) else {}, 'error': state.get('error'),
             'attempts': sorted(attempts), 'tail_limited': truncated, 'checkpoints': checkpoints,
-            'policy': 'Latest attempt per optimizer step; durable rank-0 scalar metrics; no partial accumulation steps'}
+            'policy': 'Latest attempt replaces the previous curve from its first optimizer step; durable rank-0 scalar metrics'}

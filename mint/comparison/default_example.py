@@ -51,6 +51,8 @@ def _identity(record, path):
 def _checked_native(manager, record):
     if not isinstance(record, dict) or record.get('kind') != 'dataset' or record.get('status') != 'native_prepared':
         raise ValueError('Choose a prepared native dataset')
+    if record.get('availability', 'available') != 'available':
+        raise ValueError('Choose an available prepared native dataset')
     if not isinstance(record.get('id'), str) or not re.fullmatch(r'[0-9a-f]{64}', record['id']):
         raise ValueError('Invalid dataset record identity')
     native = record['native']

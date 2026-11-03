@@ -529,6 +529,64 @@ def _prepare_native(plan, directory, *, cancelled=lambda: False, progress=lambda
     return value
 
 
+def _validate_native_artifacts(value, plan, directory, *, check_sources=False):
+    """Validate the immutable outputs of a completed native preparation."""
+    if plan.get('dataset') == 'arctic' and value.get('details', {}).get('mano_convention') != ARCTIC_MANO_CONVENTION:
+        raise ValueError('旧版 ARCTIC 参考姿态转换有误，请重新准备数据版本')
+    if plan.get('dataset') == 'arctic' and plan.get('training'):
+        raise ValueError(ARCTIC_TRAINING_ISSUE)
+    if value['plan'] != plan or check_sources and any(file_identity(row['path']) != row for row in plan['files']):
+        raise ValueError('Native dataset version changed')
+    for key, filename in (('video_identity', 'video.mp4'), ('reference_identity', 'reference.npz')):
+        if file_identity(directory / filename) != value[key]:
+            raise ValueError('Published native artifact changed')
+    frame_map = directory / 'native-frame-map.npz'
+    if value.get('frame_map_identity'):
+        if file_identity(frame_map) != value['frame_map_identity']:
+            raise ValueError('Published native frame map changed')
+    else:
+        # Earlier versions did not freeze this file's identity. Validate
+        # their explicit map without rewriting the immutable version.
+        try:
+            with np.load(frame_map, allow_pickle=False) as mapping:
+                ids = np.asarray(value['native_frame_indices'])
+                expected = {'native_frame_indices': ids, 'original_timestamps_s': ids / value['fps'],
+                            'sample_timestamps_s': np.arange(value['frames']) / value['fps']}
+                if set(mapping.files) != set(expected) or any(not np.array_equal(mapping[k], v) for k, v in expected.items()):
+                    raise ValueError('Published native frame map changed')
+        except (OSError, KeyError, ValueError) as error:
+            raise ValueError('Published native frame map changed or is unavailable') from error
+    if value.get('training'):
+        trained = value['training']
+        records = [trained['identity'], trained['provenance']['data'], trained['provenance']['episodes'],
+                   *trained['provenance']['videos']]
+        if any(file_identity(r['path']) != r for r in records):
+            raise ValueError('Published native training artifact changed')
+    return value
+
+
+def reuse_native(record):
+    """Read a registered snapshot for comparison, including when its source is offline."""
+    if record.get('availability', 'available') != 'available':
+        raise ValueError(record.get('reason') or '此数据版本不可用，请选择有效版本')
+    native = record.get('native')
+    if record.get('status') != 'native_prepared' or not isinstance(native, dict):
+        raise ValueError('请选择已准备的数据版本')
+    try:
+        directory = Path(native['reference']).parent
+        marker = directory / 'native.json'
+        if not marker.is_file() or file_identity(marker) != record.get('identity'):
+            raise ValueError('Published native manifest changed or is unavailable')
+        value = json.loads(marker.read_text())
+        if value != native or value['id'] != digest(value['plan']):
+            raise ValueError('Published native manifest does not match the registered version')
+        if value['source'] != str(directory / 'video.mp4') or value['reference'] != str(directory / 'reference.npz'):
+            raise ValueError('Published native paths do not match the registered version')
+        return _validate_native_artifacts(value, native['plan'], directory)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ValueError('已发布的视频或参考标注校验失败，请重新选择或准备数据版本。' + str(error)) from error
+
+
 def prepare_native(plan, directory, *, cancelled=lambda: False, progress=lambda **_: None):
     from .storage import DurableRunBudget
     directory = Path(directory)
@@ -541,38 +599,7 @@ def prepare_native(plan, directory, *, cancelled=lambda: False, progress=lambda 
         marker = directory / 'native.json'
         if marker.is_file():
             value = json.loads(marker.read_text())
-            if plan.get('dataset') == 'arctic' and value.get('details', {}).get('mano_convention') != ARCTIC_MANO_CONVENTION:
-                raise ValueError('旧版 ARCTIC 参考姿态转换有误，请重新准备数据版本')
-            if plan.get('dataset') == 'arctic' and plan.get('training'):
-                raise ValueError(ARCTIC_TRAINING_ISSUE)
-            if value['plan'] != plan or any(file_identity(r['path']) != r for r in plan['files']):
-                raise ValueError('Native dataset version changed')
-            for key in ('video_identity', 'reference_identity'):
-                if file_identity(value[key]['path']) != value[key]:
-                    raise ValueError('Published native artifact changed')
-            frame_map = directory / 'native-frame-map.npz'
-            if value.get('frame_map_identity'):
-                if file_identity(frame_map) != value['frame_map_identity']:
-                    raise ValueError('Published native frame map changed')
-            else:
-                # Earlier versions did not freeze this file's identity. Validate
-                # their explicit map without rewriting the immutable version.
-                try:
-                    with np.load(frame_map, allow_pickle=False) as mapping:
-                        ids = np.asarray(value['native_frame_indices'])
-                        expected = {'native_frame_indices': ids, 'original_timestamps_s': ids / value['fps'],
-                                    'sample_timestamps_s': np.arange(value['frames']) / value['fps']}
-                        if set(mapping.files) != set(expected) or any(not np.array_equal(mapping[k], v) for k, v in expected.items()):
-                            raise ValueError('Published native frame map changed')
-                except (OSError, KeyError, ValueError) as error:
-                    raise ValueError('Published native frame map changed or is unavailable') from error
-            if value.get('training'):
-                trained = value['training']
-                records = [trained['identity'], trained['provenance']['data'], trained['provenance']['episodes'],
-                           *trained['provenance']['videos']]
-                if any(file_identity(r['path']) != r for r in records):
-                    raise ValueError('Published native training artifact changed')
-            return value
+            return _validate_native_artifacts(value, plan, directory, check_sources=True)
         if directory.exists() and any(directory.iterdir()):
             directory.rename(directory.with_name('.interrupted-' + directory.name + '-' + str(time.time_ns())))
         directory.mkdir(parents=True, exist_ok=True)

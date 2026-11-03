@@ -268,24 +268,26 @@ def comparison_blueprint(legacy_store=None, dataset_analysis=None):
         if not isinstance(calibration, bool):
             raise ValueError('Calibration must be an explicit boolean')
         record = research().get(dataset_id, 'dataset')
-        native = record.get('native')
-        if not native:
-            raise ValueError('Select a prepared native dataset version')
-        from .native_sources import prepare_native
-        native = prepare_native(native['plan'], Path(native['reference']).parent)
+        from .native_sources import reuse_native
+        native = reuse_native(record)
         shared = {'source': native['source'], 'view': 'full', 'target_fps': 0,
                   'camera': native['camera'] if calibration else None}
         from .preflight import inspect_request
         check = inspect_request(manager(), **shared, selections=data['selections'], execution=data.get('execution'))
         if not check['ready']:
             return jsonify(error='；'.join(check['errors']), preflight=check), 400
+        from .reference_validity import assert_reference_import_current
+        assert_reference_import_current(manager(), {'path': native['reference'], 'identity': native['reference_identity']})
+        reference_backend = backend_spec('reference')
+        if not reference_backend['ready']:
+            raise ValueError('参考标注导入环境不可用，请检查 MINT 服务配置')
         comparison = manager().create(**shared, selections=data['selections'], execution=data.get('execution'),
             title=data.get('title') or record['name'])
         reference = manager().create(**shared, selections=[{'algorithm': 'reference'}],
             import_entry={'path': native['reference'], 'format': 'normalized_npz', 'frame_map': list(range(native['frames'])),
                           'declared_source': json.dumps({'native_dataset': native['plan']['dataset'], 'split': native['plan']['split'],
                               'label_role': native['details']['label_role'], 'version': native['id'], 'units': 'm'})},
-            comparison_key='native-reference:' + native['id'] + ':' + str(calibration))
+            comparison_key=f"native-reference:{native['id']}:{calibration}:{reference_backend['version']}")
         return jsonify(manager().attach(comparison['id'], reference['runs'][0]['id'])), 201
 
     @blueprint.post('/api/comparison/workflows')

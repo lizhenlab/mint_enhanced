@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from mint.comparison import native_sources as native
-from tests.test_comparison import arrays
+from tests.test_comparison import arrays, fake_backend
 
 
 def write(path, text='fixture'):
@@ -121,20 +121,23 @@ def test_native_comparison_rejects_truthiness_before_accessing_a_version(monkeyp
 def test_native_comparison_only_passes_declared_calibration(monkeypatch, calibration):
     from flask import Flask
     from mint.comparison.api import comparison_blueprint
-    sample = {'id': 'version', 'plan': {}, 'source': '/prepared/video.mp4',
+    sample = {'id': 'version', 'plan': {'dataset': 'egodex', 'split': 'test'}, 'source': '/prepared/video.mp4',
               'reference': '/prepared/reference.npz', 'frames': 2,
+              'reference_identity': {'path': '/prepared/reference.npz'},
               'camera': {'K': np.eye(3).tolist(), 'width': 640, 'height': 480},
               'details': {'label_role': 'official_reference'}}
-    sample['plan'] = {'dataset': 'egodex', 'split': 'test'}
-    calls = []
+    calls, validated_references = [], []
     def create(**values):
         calls.append(values)
         return {'id': 'comparison', 'runs': [{'id': 'reference-run'}]}
     manager = SimpleNamespace(create=create, attach=lambda *_: {'id': 'comparison'})
     monkeypatch.setattr('mint.comparison.api.ComparisonManager', lambda: manager)
+    monkeypatch.setattr('mint.comparison.api.backend_spec', fake_backend)
     monkeypatch.setattr('mint.comparison.research.ResearchRegistry',
                         lambda _: SimpleNamespace(get=lambda *_: {'name': 'sample', 'native': sample}))
-    monkeypatch.setattr(native, 'prepare_native', lambda *_: sample)
+    monkeypatch.setattr(native, 'reuse_native', lambda record: record['native'])
+    monkeypatch.setattr('mint.comparison.reference_validity.assert_reference_import_current',
+                        lambda _manager, entry: validated_references.append(entry))
     monkeypatch.setattr('mint.comparison.preflight.inspect_request', lambda *_, **__: {'ready': True})
     app = Flask(__name__); app.register_blueprint(comparison_blueprint())
     body = {'selections': [{'algorithm': 'mint'}]}
@@ -143,6 +146,7 @@ def test_native_comparison_only_passes_declared_calibration(monkeypatch, calibra
     response = app.test_client().post('/api/comparison/native/version/compare', json=body)
     assert response.status_code == 201
     assert len(calls) == 2
+    assert validated_references == [{'path': sample['reference'], 'identity': sample['reference_identity']}]
     assert all(call['camera'] == (sample['camera'] if calibration is True else None) for call in calls)
 
 

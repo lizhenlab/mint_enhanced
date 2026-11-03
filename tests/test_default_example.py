@@ -28,8 +28,13 @@ def store(tmp_path):
         return copy.deepcopy(row)
 
     def create(*, frames=677, maximum=None, sequence='s05/box_grab_01', revision=0, mutate=None):
-        plan = {'dataset': 'arctic', 'split': 'val', 'sequence': sequence, 'root': str(tmp_path / 'raw'),
-                'start_frame': 0, 'max_frames': maximum, 'training': False, 'adapter_revision': str(revision)}
+        raw = tmp_path / 'raw' / 'sample.mano.npy'
+        raw.parent.mkdir(exist_ok=True)
+        if not raw.exists():
+            raw.write_bytes(b'original annotation fixture')
+        plan = {'dataset': 'arctic', 'split': 'val', 'sequence': sequence, 'root': str(raw.parent),
+                'start_frame': 0, 'max_frames': maximum, 'training': False, 'adapter_revision': str(revision),
+                'files': [file_identity(raw)]}
         native_id = digest(plan)
         folder = tmp_path / 'native-sources' / native_id
         folder.mkdir(parents=True)
@@ -66,6 +71,125 @@ def store(tmp_path):
 
 def inspect(store):
     return get_default_example(store.manager, store.registry)
+
+
+@pytest.fixture
+def native_client(store, monkeypatch):
+    from flask import Flask
+    from mint.comparison.api import comparison_blueprint
+
+    store.connection.row_factory = sqlite3.Row
+    store.connection.execute('CREATE TABLE runs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)')
+    created, attachments, preflights = [], [], []
+    reference_version = 'current-reference-fixture'
+
+    def create(**request):
+        created.append(request)
+        if request.get('import_entry'):
+            return {'id': 'reference-comparison', 'runs': [{'id': 'official-gt'}]}
+        return {'id': 'comparison', 'runs': [{'id': 'prediction'}]}
+
+    def attach(comparison_id, run_id):
+        attachments.append((comparison_id, run_id))
+        return {'id': comparison_id, 'run_ids': ['prediction', run_id]}
+
+    def preflight(_manager, **request):
+        preflights.append(request)
+        return {'ready': True}
+
+    def forbidden_prepare(*_args, **_kwargs):
+        pytest.fail('Reusing a published native sample must not prepare or rebuild it')
+
+    store.manager.create, store.manager.attach = create, attach
+    monkeypatch.setattr('mint.comparison.api.ComparisonManager', lambda: store.manager)
+    monkeypatch.setattr('mint.comparison.api.backend_spec', lambda _algorithm: {
+        'ready': True, 'version': reference_version,
+    })
+    monkeypatch.setattr('mint.comparison.research.ResearchRegistry', lambda _manager: store.registry)
+    monkeypatch.setattr('mint.comparison.preflight.inspect_request', preflight)
+    monkeypatch.setattr('mint.comparison.native_sources.prepare_native', forbidden_prepare)
+    monkeypatch.setattr('mint.comparison.native_sources._prepare_native', forbidden_prepare)
+    app = Flask(__name__)
+    app.testing = True
+    app.register_blueprint(comparison_blueprint())
+    return SimpleNamespace(client=app.test_client(), created=created, attachments=attachments,
+                           preflights=preflights, reference_version=reference_version)
+
+
+def submit_example(client, example):
+    return client.post(f"/api/comparison/native/{example['dataset_id']}/compare", json={
+        'selections': example['selections'], 'calibration': example['calibration'],
+        'execution': example['execution'], 'title': example['name'],
+    })
+
+
+def reuse_video_alias(native, target):
+    alias = Path(native['source'])
+    alias.unlink()
+    alias.symlink_to(target)
+    native['video_identity'] = file_identity(alias)
+
+
+@pytest.mark.parametrize('corrected_video_alias', [False, True])
+def test_default_get_and_native_submit_reuse_published_sample_after_raw_source_is_archived(store, native_client, corrected_video_alias):
+    record = store.create()
+    if corrected_video_alias:
+        original = Path(record['native']['source'])
+        record = store.create(revision=1, mutate=lambda native: reuse_video_alias(native, original))
+    native = record['native']
+    Path(native['plan']['files'][0]['path']).unlink()
+    folder = Path(native['reference']).parent
+    before = {file.name: file_identity(file) for file in folder.iterdir()}
+
+    response = native_client.client.get('/api/comparison/default-example')
+    assert response.status_code == 200
+    example = response.json
+    assert example['available'] and example['dataset_id'] == record['id']
+    assert not native_client.created
+
+    response = submit_example(native_client.client, example)
+    assert response.status_code == 201, response.json
+    assert response.json['run_ids'] == ['prediction', 'official-gt']
+    prediction, reference = native_client.created
+    assert prediction['selections'] == example['selections']
+    assert prediction['execution'] == example['execution']
+    assert all(request['source'] == native['source'] and request['camera'] == native['camera']
+               for request in (prediction, reference))
+    entry = reference['import_entry']
+    assert reference['selections'] == [{'algorithm': 'reference'}]
+    assert entry['path'] == native['reference'] and entry['frame_map'] == list(range(677))
+    assert json.loads(entry['declared_source'])['version'] == native['id']
+    assert native_client.reference_version in reference['comparison_key']
+    assert native_client.attachments == [('comparison', 'official-gt')]
+    assert {file.name: file_identity(file) for file in folder.iterdir()} == before
+
+
+@pytest.mark.parametrize('filename', ['native.json', 'video.mp4', 'reference.npz', 'native-frame-map.npz'])
+def test_native_submit_rechecks_published_artifact_changes_after_default_selection(store, native_client, filename):
+    record = store.create()
+    example = native_client.client.get('/api/comparison/default-example').json
+    assert example['available']
+    folder = Path(record['native']['reference']).parent
+    (folder / filename).write_bytes(b'changed after selecting the example')
+
+    response = submit_example(native_client.client, example)
+    assert response.status_code == 400 and response.json['error']
+    assert not native_client.preflights
+    assert not native_client.created and not native_client.attachments
+
+
+def test_native_submit_rejects_withdrawn_reference_before_creating_predictions(store, native_client):
+    from mint.comparison.reference_validity import register_reference_withdrawal
+
+    record = store.create()
+    example = native_client.client.get('/api/comparison/default-example').json
+    assert example['available']
+    register_reference_withdrawal(store.manager, record['native']['reference'], reason='Known wrong annotation')
+
+    response = submit_example(native_client.client, example)
+    assert response.status_code == 400
+    assert 'Known wrong annotation' in response.json['error']
+    assert not native_client.created and not native_client.attachments
 
 
 def test_complete_published_example_yields_explicit_draft_without_jobs(store):
@@ -178,13 +302,7 @@ def test_corrected_reference_can_reuse_immutable_native_video_without_changing_s
     original = store.create(revision=0)
     target = Path(original['native']['source'])
 
-    def reuse_video(native):
-        alias = Path(native['source'])
-        alias.unlink()
-        alias.symlink_to(target)
-        native['video_identity'] = file_identity(alias)
-
-    corrected = store.create(revision=1, mutate=reuse_video)
+    corrected = store.create(revision=1, mutate=lambda native: reuse_video_alias(native, target))
     value = inspect(store)
     assert value['available'] and value['dataset_id'] == corrected['id']
     assert source_request(value['source'], camera=value['camera'])['id'] == source_request(
